@@ -2,15 +2,275 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhoneDrop</title>
+
+    <style>
+        body {
+            max-width: 800px;
+            margin: 30px auto;
+            padding: 0 16px;
+            font-family: sans-serif;
+        }
+
+        section {
+            margin-bottom: 40px;
+        }
+
+        #dropZone {
+            margin-top: 15px;
+            padding: 30px;
+            border: 2px dashed #888;
+            text-align: center;
+        }
+
+        li {
+            margin: 10px 0;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 100px;
+        }
+
+        button {
+            margin-left: 5px;
+        }
+
+        .textItem {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #aaa;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+    </style>
 </head>
+
 <body>
     <h1>PhoneDrop</h1>
-    <p>휴대폰 파일 전송 프로그램</p>
 
-    <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" required>
-        <button type="submit">업로드(50MB)</button>
-    </form>
+    <section>
+        <h2>파일 업로드</h2>
+
+        <form id="uploadForm">
+            <input id="fileInput" type="file" multiple required>
+            <button type="submit">업로드</button>
+        </form>
+
+        <div id="dropZone">
+            컴퓨터에서는 여러 파일을 여기에 함께 끌어 놓을 수 있습니다.
+        </div>
+
+        <p id="uploadResult"></p>
+    </section>
+
+    <section>
+        <h2>파일 목록</h2>
+
+        <button type="button" onclick="loadFiles()">
+            새로고침
+        </button>
+
+        <ul id="fileList"></ul>
+    </section>
+
+    <section>
+        <h2>텍스트 전송</h2>
+
+        <textarea
+            id="textInput"
+            placeholder="다른 기기로 보낼 텍스트를 입력하세요."
+        ></textarea>
+
+        <br>
+
+        <button type="button" onclick="sendText()">
+            텍스트 전송
+        </button>
+
+        <button type="button" onclick="deleteTexts()">
+            텍스트 전체 삭제
+        </button>
+
+        <div id="textList"></div>
+    </section>
+
+    <script>
+        const uploadForm = document.getElementById("uploadForm");
+        const fileInput = document.getElementById("fileInput");
+        const dropZone = document.getElementById("dropZone");
+        const uploadResult = document.getElementById("uploadResult");
+
+        uploadForm.addEventListener("submit", async event => {
+            event.preventDefault();
+
+            const files = fileInput.files;
+
+            if (files.length === 0) {
+                return;
+            }
+
+            await uploadFiles(files);
+        });
+
+        dropZone.addEventListener("dragover", event => {
+            event.preventDefault();
+        });
+
+        dropZone.addEventListener("drop", async event => {
+            event.preventDefault();
+
+            const files = event.dataTransfer.files;
+
+            if (files.length === 0) {
+                return;
+            }
+
+            await uploadFiles(files);
+        });
+
+        async function uploadFiles(files) {
+            const formData = new FormData();
+
+            for (const file of files) {
+                formData.append("files", file);
+            }
+
+            const response = await fetch("/files", {
+                method: "POST",
+                body: formData
+            });
+
+            const message = await response.text();
+            uploadResult.textContent = message;
+
+            if (response.ok) {
+                fileInput.value = "";
+                await loadFiles();
+            }
+        }
+
+        async function loadFiles() {
+            const response = await fetch("/files");
+            const files = await response.json();
+
+            const fileList = document.getElementById("fileList");
+            fileList.innerHTML = "";
+
+            for (const fileName of files) {
+                const item = document.createElement("li");
+
+                const name = document.createElement("span");
+                name.textContent = fileName + " ";
+
+                const download = document.createElement("a");
+                download.textContent = "다운로드";
+                download.href =
+                    "/files/download?name=" +
+                    encodeURIComponent(fileName);
+
+                const deleteButton = document.createElement("button");
+                deleteButton.textContent = "삭제";
+                deleteButton.addEventListener("click", async () => {
+                    await deleteFile(fileName);
+                });
+
+                item.append(name, download, deleteButton);
+                fileList.appendChild(item);
+            }
+        }
+
+        async function deleteFile(fileName) {
+            const confirmed = confirm(
+                fileName + " 파일을 삭제할까요?"
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            const response = await fetch(
+                "/files?name=" + encodeURIComponent(fileName),
+                {
+                    method: "DELETE"
+                }
+            );
+
+            const message = await response.text();
+            alert(message);
+
+            if (response.ok) {
+                await loadFiles();
+            }
+        }
+
+        async function sendText() {
+            const textInput = document.getElementById("textInput");
+            const text = textInput.value;
+
+            const response = await fetch("/texts", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "text/plain; charset=UTF-8"
+                },
+                body: text
+            });
+
+            const message = await response.text();
+
+            if (!response.ok) {
+                alert(message);
+                return;
+            }
+
+            textInput.value = "";
+            await loadTexts();
+        }
+
+        async function loadTexts() {
+            const response = await fetch("/texts");
+            const texts = await response.json();
+
+            const textList = document.getElementById("textList");
+            textList.innerHTML = "";
+
+            texts.forEach(text => {
+                const item = document.createElement("div");
+                item.className = "textItem";
+
+                const content = document.createElement("div");
+                content.textContent = text;
+
+                const copyButton = document.createElement("button");
+                copyButton.textContent = "복사";
+                copyButton.addEventListener("click", async () => {
+                    await navigator.clipboard.writeText(text);
+                    alert("복사했습니다.");
+                });
+
+                item.append(content, copyButton);
+                textList.appendChild(item);
+            });
+        }
+
+        async function deleteTexts() {
+            const response = await fetch("/texts", {
+                method: "DELETE"
+            });
+
+            if (response.ok) {
+                await loadTexts();
+            }
+        }
+
+        loadFiles();
+        loadTexts();
+
+        setInterval(() => {
+            loadFiles();
+            loadTexts();
+        }, 3000);
+    </script>
 </body>
 </html>
