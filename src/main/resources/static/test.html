@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>현재 시간</title>
+
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: sans-serif;
+            background-color: pink;
+        }
+
+        #date {
+            font-size: 1.4rem;
+        }
+
+        #time {
+            font-size: 4rem;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
+</head>
+<body>
+    <div id="date"></div>
+    <div id="time"></div>
+
+    <script>
+        const dateEl = document.getElementById("date");
+        const timeEl = document.getElementById("time");
+
+        function render() {
+            const now = new Date();
+            dateEl.textContent = now.toLocaleDateString("ko-KR", {
+                timeZone: "Asia/Seoul",
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                weekday: "long"
+            });
+            timeEl.textContent = now.toLocaleTimeString("ko-KR", {
+                timeZone: "Asia/Seoul",
+                hour12: false
+            });
+        }
+
+        render();
+        setInterval(render, 1000);
+    </script>
+</body>
+</html>
