@@ -15,7 +15,8 @@
 - `.github/workflows/deploy.yml`: master push → 빌드 → 서버 jar 교체(.bak 백업) → `systemctl restart phonedrop` → 상태·HTTP 확인
 - 빌드가 실패하면 서버는 바뀌지 않는다. 배포 단계가 실패하면 워크플로가 빨간색이 된다.
 - 다음은 사용자 승인 없이 바꾸지 않는다: `deploy.yml`, `pom.xml`의 `artifactId`/`version`(jar 이름이 바뀌면 배포가 깨짐), GitHub Secrets.
-- 서버: DigitalOcean, root, WorkingDirectory `/root`. Claude는 서버에 직접 접속하지 않는다.
+- 서버: DigitalOcean, root, WorkingDirectory `/root`. 서버 명령은 `ops` 브랜치 워크플로로 실행할 수 있다.
+- 서버·도메인·인증서·서브도메인 현황과 서버 명령 실행 방법은 **`docs/server-ops.md`를 먼저 읽는다.** 서버나 도메인 관련 작업을 하면 그 문서도 갱신한다.
 
 ## 새 기능("○○ 프로그램을 서버에 올려")을 만들 때
 1. **기존 앱 안에 추가**한다. 새 포트·새 서비스·nginx 변경이 필요한 설계는 하지 말고, 필요하면 사용자에게 먼저 보고한다.
@@ -35,7 +36,7 @@
 1. 요구사항을 3~5줄 설계로 정리한다(경로, 파일, API). 모호해도 합리적으로 정하고 진행하며, 가정은 보고에 적는다.
 2. 구현한다. 가능하면 `./mvnw -B -q package -DskipTests`로 컴파일을 확인한다(네트워크가 막혀 있으면 생략 가능 — CI가 빌드를 검증한다).
 3. master에 직접 commit하고 push한다. 커밋 메시지는 무엇을 했는지 한 줄 영어로.
-4. GitHub Actions 실행 결과를 확인한다(`gh run list --branch master -L 1`, `gh run watch`, 실패 시 `gh run view --log-failed`).
+4. GitHub Actions 실행 결과를 확인한다(`gh run list --branch master -L 1`, `gh run watch`, 실패 시 `gh run view --log-failed`). 사용자 PC에는 `gh`가 없으므로 `docs/server-ops.md`의 GitHub API `curl` 방법을 쓴다.
 5. 성공하면 https://seobin.page/ 와 새 페이지가 응답하는지 확인한다.
 6. 실패하면 원인을 고쳐 다시 push한다. 두 번 고쳐도 실패하면 멈추고 보고한다.
 7. 보고: 바뀐 것, 확인할 URL, 사용법, 가정한 점.
