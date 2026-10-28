@@ -64,7 +64,7 @@ object Sync {
     /** Firebase 가 설정되지 않았으면(google-services.json 없음) 기기별 임시 토큰을 쓴다. */
     private suspend fun fcmToken(context: Context): String {
         val token = try {
-            suspendCancellableCoroutine { cont ->
+            suspendCancellableCoroutine<String?> { cont ->
                 FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                     cont.resume(if (task.isSuccessful) task.result else null)
                 }
