@@ -34,7 +34,7 @@
 
 ## 작업 순서 (매번)
 1. 요구사항을 3~5줄 설계로 정리한다(경로, 파일, API). 모호해도 합리적으로 정하고 진행하며, 가정은 보고에 적는다.
-2. 구현한다. 가능하면 `./mvnw -B -q package -DskipTests`로 컴파일을 확인한다(네트워크가 막혀 있으면 생략 가능 — CI가 빌드를 검증한다).
+2. 구현한다. `./mvnw -B -q package -DskipTests`로 빌드하고, 로컬에서 앱을 실행해 새 페이지·API를 확인한 뒤 push한다(방법은 `docs/server-ops.md`의 "로컬 검증 순서").
 3. master에 직접 commit하고 push한다. 커밋 메시지는 무엇을 했는지 한 줄 영어로.
 4. GitHub Actions 실행 결과를 확인한다(`gh run list --branch master -L 1`, `gh run watch`, 실패 시 `gh run view --log-failed`). 사용자 PC에는 `gh`가 없으므로 `docs/server-ops.md`의 GitHub API `curl` 방법을 쓴다.
 5. 성공하면 https://seobin.page/ 와 새 페이지가 응답하는지 확인한다.

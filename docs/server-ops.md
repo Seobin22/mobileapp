@@ -71,7 +71,17 @@
 
 ## 로컬 PC 제약 (Windows, 사용자 PC)
 
-- JDK 없음 → `./mvnw` 로컬 빌드 불가. CI 빌드로 검증한다.
+- JDK: Temurin 21 설치됨 (2026-10-28), `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\`, 시스템 `JAVA_HOME`·`PATH` 등록.
+  Claude 앱을 재시작하기 전 세션에서는 환경변수가 안 보이므로 `export JAVA_HOME="/c/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot"` 후 사용.
+- 로컬 검증 순서 (push 전):
+  ```bash
+  ./mvnw -B -q package -DskipTests
+  # 임시 폴더(스크래치패드)에서 실행해 uploads/ data/ 가 프로젝트에 생기지 않게 한다. 127.0.0.1로 띄우면 방화벽 창이 안 뜬다.
+  java -jar <프로젝트>/target/phonedrop-0.0.1-SNAPSHOT.jar --server.address=127.0.0.1
+  curl http://127.0.0.1:8080/
+  curl -H "Host: test.seobin.page" http://127.0.0.1:8080/   # 서브도메인 연결 확인
+  ```
+  확인이 끝나면 앱을 종료한다. HTTPS·nginx·인증서는 로컬에서 재현되지 않으므로 배포 후 운영 확인은 계속 한다.
 - `gh` 없음 → CLAUDE.md의 `gh run ...` 대신 위의 GitHub API `curl`을 쓴다.
 - 현재 네트워크가 **바깥으로 나가는 22번 포트를 차단**한다(GitHub 22번도 거부, 443·2222는 통과). 서버 sshd는 22번에서 정상 동작.
 - 이 PC용 SSH 키 `~/.ssh/seobin_page`(ed25519)를 만들었지만, 서버 `authorized_keys` 등록 여부는 확인되지 않았다.
