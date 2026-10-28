@@ -1,0 +1,49 @@
+package kr.ssbin.assistant.intervention
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import kr.ssbin.assistant.data.AppDatabase
+import kr.ssbin.assistant.schedule.Alarms
+
+/** 화면을 닫았을 때 reshow_minutes 뒤 다시 띄우는 로컬 타이머. 서버 reshow 푸시가 먼저 오면 그걸로 대체된다. */
+object Reshow {
+
+    private const val REQUEST_CODE = 2000
+
+    fun schedule(context: Context, interventionId: String, minutes: Int) {
+        val at = System.currentTimeMillis() + minutes * 60_000L
+        Alarms.setExact(context, at, pending(context, interventionId))
+    }
+
+    fun cancel(context: Context) {
+        context.getSystemService(AlarmManager::class.java).cancel(pending(context, ""))
+    }
+
+    private fun pending(context: Context, interventionId: String): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE,
+            Intent(context, ReshowReceiver::class.java).putExtra(InterventionActivity.EXTRA_ID, interventionId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+}
+
+class ReshowReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val id = intent.getStringExtra(InterventionActivity.EXTRA_ID) ?: return
+        val pending = goAsync()
+        Thread {
+            try {
+                val entity = AppDatabase.dao(context).intervention(id)
+                if (entity != null && entity.status == "running" && InterventionState.visibleId == null) {
+                    Notifier.showFullScreen(context, entity)
+                }
+            } finally {
+                pending.finish()
+            }
+        }.start()
+    }
+}

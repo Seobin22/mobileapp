@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# Firebase 설정은 커밋하지 않는다(사용자가 직접 넣는다).
+app/google-services.json
