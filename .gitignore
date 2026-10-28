@@ -34,3 +34,5 @@ build/
 
 uploads/
 data/
+# 안드로이드 소스 패키지 kr.ssbin.assistant.data 는 위 data/ 규칙에서 뺀다
+!android/app/src/main/java/kr/ssbin/assistant/data/
