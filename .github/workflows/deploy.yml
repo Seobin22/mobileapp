@@ -80,6 +80,16 @@ jobs:
             fi
           done
           echo "Service $SERVICE is active"
+          for i in \$(seq 1 12); do
+            if curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8080/; then
+              echo "HTTP check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "HTTP check failed: http://127.0.0.1:8080/ did not respond"
+          journalctl -u "$SERVICE" -n 50 --no-pager
+          exit 1
           EOF
 
       - name: Clean up SSH key
