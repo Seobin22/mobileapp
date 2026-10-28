@@ -3,56 +3,252 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>현재 시간</title>
-
+    <title>실행 비서 관리</title>
     <style>
-        body {
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            font-family: sans-serif;
-            background-color: pink;
-        }
-
-        #date {
-            font-size: 1.4rem;
-        }
-
-        #time {
-            font-size: 4rem;
-            font-weight: bold;
-            font-variant-numeric: tabular-nums;
-        }
+        :root { --bg: #fff4f7; --card: #fff; --line: #f0d3dc; --text: #2b2024; --muted: #8a7178; --accent: #d6336c; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); }
+        main { max-width: 880px; margin: 0 auto; padding: 16px; }
+        h1 { font-size: 1.4rem; margin: 8px 0 16px; }
+        h2 { font-size: 1.05rem; margin: 0 0 10px; }
+        section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+        label { display: block; font-size: .85rem; color: var(--muted); margin: 6px 0 2px; }
+        input, textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+        textarea { min-height: 70px; font-family: monospace; font-size: .85rem; }
+        button { padding: 8px 12px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+        button.ghost { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+        .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+        .muted { color: var(--muted); font-size: .85rem; }
+        .error { color: #c92a2a; margin-top: 6px; min-height: 1.2em; }
+        table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+        td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; background: #f8e1e8; font-size: .8rem; }
+        .running { background: #ffe3e3; border-color: #ff8787; }
+        pre { white-space: pre-wrap; word-break: break-all; font-size: .8rem; margin: 0; }
+        .actions button { margin: 0 4px 4px 0; padding: 4px 8px; font-size: .8rem; }
     </style>
 </head>
 <body>
-    <div id="date"></div>
-    <div id="time"></div>
+<main>
+    <h1>실행 비서 관리 <span class="muted">v1 · 강제 화면 확인</span></h1>
 
-    <script>
-        const dateEl = document.getElementById("date");
-        const timeEl = document.getElementById("time");
+    <section id="tokenBox">
+        <h2>API 토큰</h2>
+        <p class="muted">서버의 <code>/root/data/assistant/api_token</code> 값. 이 브라우저에만 저장됩니다.</p>
+        <div class="row">
+            <input id="token" type="password" placeholder="API 토큰" autocomplete="off">
+            <button id="saveToken">저장</button>
+        </div>
+        <div class="error" id="tokenError"></div>
+    </section>
 
-        function render() {
-            const now = new Date();
-            dateEl.textContent = now.toLocaleDateString("ko-KR", {
-                timeZone: "Asia/Seoul",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-                weekday: "long"
-            });
-            timeEl.textContent = now.toLocaleTimeString("ko-KR", {
-                timeZone: "Asia/Seoul",
-                hour12: false
-            });
+    <section id="statusBox">
+        <h2>지금 상태 <button class="ghost" id="refresh" style="float:right">새로고침</button></h2>
+        <div id="status" class="muted">토큰을 저장하면 표시됩니다.</div>
+    </section>
+
+    <section>
+        <h2>할 일 추가</h2>
+        <div class="row">
+            <div><label>제목</label><input id="title" placeholder="보고서 초안"></div>
+            <div><label>첫 행동</label><input id="firstAction" placeholder="문서 파일만 열기"></div>
+        </div>
+        <div class="row">
+            <div><label>시작</label><input id="start" type="datetime-local"></div>
+            <div><label>길이(분)</label><input id="duration" type="number" value="30" min="5"></div>
+        </div>
+        <p><button id="add">추가</button> <button class="ghost" id="inTwo">2분 뒤로 채우기</button></p>
+        <div class="error" id="addError"></div>
+    </section>
+
+    <section>
+        <h2>오늘부터 7일</h2>
+        <div id="tasks" class="muted">-</div>
+        <div class="error" id="taskError"></div>
+    </section>
+
+    <section>
+        <h2>생활 설정</h2>
+        <div class="row">
+            <div><label>기상</label><input id="wake" placeholder="07:30"></div>
+            <div><label>취침</label><input id="sleep" placeholder="23:30"></div>
+        </div>
+        <label>방해 금지(JSON, 요일 월=1)</label>
+        <textarea id="dnd">[]</textarea>
+        <p><button id="saveSettings">설정 저장</button></p>
+        <div class="error" id="settingsError"></div>
+    </section>
+
+    <section>
+        <h2>최근 푸시 <span class="muted" id="pushMode"></span></h2>
+        <div id="pushes" class="muted">-</div>
+    </section>
+</main>
+
+<script>
+    const BASE = '/api/assistant';
+    const $ = id => document.getElementById(id);
+
+    function getToken() {
+        try { return localStorage.getItem('assistantToken') || ''; } catch (e) { return ''; }
+    }
+
+    async function api(method, path, body) {
+        const res = await fetch(BASE + path, {
+            method,
+            headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body)
+        });
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        return data;
+    }
+
+    function esc(s) {
+        return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    }
+
+    function hm(iso) {
+        return iso ? iso.substring(5, 16).replace('T', ' ') : '';
+    }
+
+    function localInputToIso(value) {
+        // datetime-local 은 브라우저 시간대. 오프셋을 붙여 보낸다.
+        const d = new Date(value);
+        const off = -d.getTimezoneOffset();
+        const sign = off >= 0 ? '+' : '-';
+        const pad = n => String(Math.abs(n)).padStart(2, '0');
+        return value + ':00' + sign + pad(Math.trunc(off / 60)) + ':' + pad(off % 60);
+    }
+
+    function toLocalInput(date) {
+        const pad = n => String(n).padStart(2, '0');
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+            + 'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+    }
+
+    async function loadStatus() {
+        const s = await api('GET', '/v1/admin/status');
+        const running = s.running_interventions.map(i =>
+            `<div class="running" style="border:1px solid;padding:8px;border-radius:6px;margin:6px 0">
+                개입 #${i.id} (블록 #${i.block_id}, L${i.level}) ${hm(i.started_at)} 시작
+                <button data-start="${i.id}" data-block="${i.block_id}">휴대폰 대신 [시작] 보내기</button>
+             </div>`).join('');
+        const devices = s.devices.length ? s.devices.map(d =>
+            `기기 #${d.id} ${esc(d.app_version)} · 마지막 하트비트 ${hm(d.last_heartbeat)} · <code>${esc(JSON.stringify(d.capabilities))}</code>`
+        ).join('<br>') : '등록된 기기 없음';
+        const jobs = s.scheduled_jobs.map(j => `${hm(j.fire_at)} ${j.type} #${j.target_id}`).join('<br>') || '없음';
+        $('status').innerHTML = `
+            <div>서버 시각 ${hm(s.now)} · plan_version ${s.plan_version} · ${s.quiet_now ? '조용한 시간' : '활동 시간'}</div>
+            ${running || '<div>진행 중 개입 없음</div>'}
+            <div style="margin-top:6px">${devices}</div>
+            <details style="margin-top:6px"><summary>예약 작업</summary><div>${jobs}</div></details>`;
+        $('pushMode').textContent = s.push_mode === 'fake'
+            ? '(FCM 미설정: 실제로 보내지 않고 기록만 함)' : '(Firebase 발송)';
+        $('pushes').innerHTML = s.recent_pushes.length ? '<table>' + s.recent_pushes.map(p => {
+            const { at, delivered, type, ...rest } = p;
+            return `<tr><td>${hm(at)}</td><td><span class="badge">${esc(type)}</span></td><td>${esc(delivered)}</td>
+                    <td><pre>${esc(JSON.stringify(rest))}</pre></td></tr>`;
+        }).join('') + '</table>' : '아직 없음 (서버 재시작 시 비워짐)';
+    }
+
+    async function loadTasks() {
+        const data = await api('GET', '/v1/admin/tasks');
+        if (!data.tasks.length) { $('tasks').textContent = '없음'; return; }
+        $('tasks').innerHTML = '<table><tr><th>시각</th><th>할 일</th><th>상태</th><th></th></tr>' + data.tasks.map(t => {
+            const b = t.blocks.filter(x => x.status !== 'cancelled').at(-1) || t.blocks.at(-1) || {};
+            return `<tr><td>${hm(b.start)}–${(b.end || '').substring(11, 16)}</td>
+                <td><b>${esc(t.title)}</b><br><span class="muted">${esc(t.first_action)}</span></td>
+                <td><span class="badge">${esc(t.status)}</span> <span class="badge">${esc(b.status)}</span></td>
+                <td class="actions">${t.status === 'active'
+                    ? `<button class="ghost" data-edit="${t.id}" data-start-at="${esc(b.start)}" data-duration="${t.est_minutes}">시각 변경</button>
+                       <button class="ghost" data-delete="${t.id}">삭제</button>` : ''}</td></tr>`;
+        }).join('') + '</table>';
+    }
+
+    async function loadSettings() {
+        const s = (await api('GET', '/v1/settings')).settings;
+        $('wake').value = s['life.wake'];
+        $('sleep').value = s['life.sleep'];
+        $('dnd').value = JSON.stringify(s['dnd.windows']);
+    }
+
+    async function refreshAll() {
+        $('tokenError').textContent = '';
+        try {
+            await Promise.all([loadStatus(), loadTasks()]);
+        } catch (e) {
+            $('tokenError').textContent = e.message;
         }
+    }
 
-        render();
-        setInterval(render, 1000);
-    </script>
+    $('saveToken').onclick = async () => {
+        try { localStorage.setItem('assistantToken', $('token').value.trim()); } catch (e) { /* 저장 불가 */ }
+        await refreshAll();
+        try { await loadSettings(); } catch (e) { /* refreshAll 이 오류를 보여준다 */ }
+    };
+    $('refresh').onclick = refreshAll;
+
+    $('inTwo').onclick = () => {
+        $('start').value = toLocalInput(new Date(Date.now() + 2 * 60000 + 60000 - Date.now() % 60000));
+        if (!$('title').value) $('title').value = '테스트 블록';
+        if (!$('firstAction').value) $('firstAction').value = '휴대폰 화면 확인하기';
+    };
+
+    $('add').onclick = async () => {
+        $('addError').textContent = '';
+        try {
+            await api('POST', '/v1/admin/tasks', {
+                title: $('title').value, first_action: $('firstAction').value,
+                start: localInputToIso($('start').value), duration_min: Number($('duration').value)
+            });
+            $('title').value = ''; $('firstAction').value = '';
+            await refreshAll();
+        } catch (e) { $('addError').textContent = e.message; }
+    };
+
+    document.addEventListener('click', async ev => {
+        const el = ev.target;
+        $('taskError').textContent = '';
+        try {
+            if (el.dataset.delete) {
+                if (!confirm('이 할 일을 삭제할까요?')) return;
+                await api('DELETE', '/v1/admin/tasks/' + el.dataset.delete);
+            } else if (el.dataset.edit) {
+                const current = (el.dataset.startAt || '').substring(0, 16);
+                const start = prompt('새 시작 시각 (YYYY-MM-DDTHH:MM)', current);
+                if (!start) return;
+                const duration = prompt('길이(분)', el.dataset.duration);
+                await api('PATCH', '/v1/admin/tasks/' + el.dataset.edit,
+                    { start: localInputToIso(start), duration_min: Number(duration) });
+            } else if (el.dataset.start) {
+                await api('POST', '/v1/actions', {
+                    idempotency_key: crypto.randomUUID(), type: 'start',
+                    intervention_id: Number(el.dataset.start), block_id: Number(el.dataset.block),
+                    client_at: new Date().toISOString()
+                });
+            } else {
+                return;
+            }
+            await refreshAll();
+        } catch (e) { $('taskError').textContent = e.message; }
+    });
+
+    $('saveSettings').onclick = async () => {
+        $('settingsError').textContent = '';
+        try {
+            await api('PUT', '/v1/settings', { key: 'life.wake', value: $('wake').value.trim() });
+            await api('PUT', '/v1/settings', { key: 'life.sleep', value: $('sleep').value.trim() });
+            await api('PUT', '/v1/settings', { key: 'dnd.windows', value: JSON.parse($('dnd').value || '[]') });
+            await refreshAll();
+            $('settingsError').textContent = '저장했습니다';
+        } catch (e) { $('settingsError').textContent = e.message; }
+    };
+
+    $('token').value = getToken();
+    if (getToken()) { refreshAll(); loadSettings().catch(() => {}); }
+    setInterval(() => { if (getToken()) loadStatus().catch(() => {}); }, 15000);
+</script>
 </body>
 </html>

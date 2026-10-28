@@ -1,7 +1,7 @@
 # 서버·도메인 운영 노트
 
 다른 채팅(세션)에서 이어서 작업할 수 있도록, 서버·도메인·인증서 관련해 지금까지 확인하고 바꾼 내용을 정리한다.
-마지막 갱신: 2026-10-28
+마지막 갱신: 2026-10-29
 
 ## 현재 상태 요약
 
@@ -11,7 +11,8 @@
 | DNS | `seobin.page`, 와일드카드 `*.seobin.page` 모두 서버 IP로 연결됨 (사용자가 등록) |
 | 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, 만료 2027-01-26 |
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
-| 서브도메인 | `test.seobin.page` → 현재 시간 페이지 (운영 중) |
+| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지) |
+| 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`). 자세한 내용은 [assistant.md](assistant.md) |
 
 ## 서브도메인 페이지 구조
 

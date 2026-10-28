@@ -1,0 +1,108 @@
+-- 실행 비서 v1 스키마. 시각은 전부 TIMESTAMP WITH TIME ZONE(UTC로 저장).
+-- 단일 사용자라 user_id 컬럼은 두지 않는다.
+
+CREATE TABLE settings(
+    key VARCHAR(200) PRIMARY KEY,
+    value VARCHAR(20000) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE tasks(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    first_action VARCHAR(1000) NOT NULL,
+    est_minutes INT NOT NULL,
+    status VARCHAR(20) DEFAULT 'active' NOT NULL,
+    version INT DEFAULT 1 NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- start/end 는 H2 예약어(END)와 겹쳐 start_at/end_at 으로 둔다. API에서는 start/end.
+CREATE TABLE blocks(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id),
+    start_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    status VARCHAR(20) DEFAULT 'planned' NOT NULL,
+    screen_text VARCHAR(2000) NOT NULL,
+    actual_start TIMESTAMP WITH TIME ZONE,
+    actual_end TIMESTAMP WITH TIME ZONE,
+    version INT DEFAULT 1 NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX blocks_status_start ON blocks(status, start_at);
+
+CREATE TABLE interventions(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    block_id BIGINT NOT NULL REFERENCES blocks(id),
+    status VARCHAR(20) NOT NULL,
+    level INT NOT NULL,
+    block_version INT NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    ended_at TIMESTAMP WITH TIME ZONE,
+    end_reason VARCHAR(50),
+    version INT DEFAULT 1 NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- local_fired 는 서버 개입이 생기기 전에 올 수 있어 intervention_id 는 null 허용, block_id 를 함께 둔다.
+CREATE TABLE intervention_logs(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    intervention_id BIGINT REFERENCES interventions(id),
+    block_id BIGINT,
+    level INT,
+    at TIMESTAMP WITH TIME ZONE NOT NULL,
+    reaction VARCHAR(30) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE jobs(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    type VARCHAR(50) NOT NULL,
+    target_id BIGINT,
+    fire_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    expected_version INT,
+    payload VARCHAR(20000) DEFAULT '{}' NOT NULL,
+    status VARCHAR(20) DEFAULT 'scheduled' NOT NULL,
+    attempts INT DEFAULT 0 NOT NULL,
+    last_error VARCHAR(2000),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX jobs_status_fire ON jobs(status, fire_at);
+
+CREATE TABLE devices(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    fcm_token VARCHAR(1000) NOT NULL UNIQUE,
+    app_version VARCHAR(50),
+    capabilities VARCHAR(5000) DEFAULT '{}' NOT NULL,
+    last_heartbeat TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- heartbeat events. v1 에서는 저장만 한다.
+CREATE TABLE device_events(
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    device_id BIGINT NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE processed_actions(
+    idempotency_key VARCHAR(200) PRIMARY KEY,
+    result VARCHAR(5000) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE plan_state(
+    id INT DEFAULT 1 PRIMARY KEY,
+    plan_version INT DEFAULT 0 NOT NULL
+);
+INSERT INTO plan_state(id, plan_version) VALUES (1, 0);
