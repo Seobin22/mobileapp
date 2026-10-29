@@ -26,8 +26,14 @@ public interface LlmClient {
     record ToolResult(String toolUseId, String content, boolean isError) {
     }
 
+    /** inputTokens 는 캐시되지 않은 입력만. 캐시 읽기·쓰기는 따로 센다(비용이 다르다). */
     record LlmResponse(List<ToolCall> toolCalls, String text, String stopReason, long inputTokens,
-                       long outputTokens) {
+                       long outputTokens, long cacheReadTokens, long cacheWriteTokens) {
+
+        public LlmResponse(List<ToolCall> toolCalls, String text, String stopReason, long inputTokens,
+                           long outputTokens) {
+            this(toolCalls, text, stopReason, inputTokens, outputTokens, 0, 0);
+        }
     }
 
     class LlmException extends RuntimeException {

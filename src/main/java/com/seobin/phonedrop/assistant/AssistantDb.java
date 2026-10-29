@@ -26,7 +26,8 @@ public class AssistantDb {
     /** 적용할 스크립트. 새 버전은 끝에 추가만 한다. */
     private static final List<String> MIGRATIONS = List.of(
             "assistant/db/V1__init.sql",
-            "assistant/db/V2__chat_agent.sql"
+            "assistant/db/V2__chat_agent.sql",
+            "assistant/db/V3__turn_cache_tokens.sql"
     );
 
     private final JdbcClient jdbc;

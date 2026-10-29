@@ -106,6 +106,7 @@ public class AgentRunner {
         int maxCalls = settings.getInt("agent.max_tool_calls");
         long inTokens = 0;
         long outTokens = 0;
+        long[] cache = {0, 0}; // 캐시 읽기, 캐시 쓰기
         int toolCalls = 0;
         String lastText = "";
         String status = "partial";
@@ -116,6 +117,8 @@ public class AgentRunner {
                 LlmClient.LlmResponse resp = conv.next();
                 inTokens += resp.inputTokens();
                 outTokens += resp.outputTokens();
+                cache[0] += resp.cacheReadTokens();
+                cache[1] += resp.cacheWriteTokens();
                 lastText = resp.text() == null ? "" : resp.text();
                 if (resp.toolCalls().isEmpty()) {
                     status = "ok";
@@ -150,6 +153,7 @@ public class AgentRunner {
                     chat.sendAssistant(LLM_DOWN, "reply", "normal", null, null);
                 }
                 endTurn(turnId, retry ? "queued" : "failed", calls, in, out, e.getMessage());
+                recordCache(turnId, cache);
             });
             return retry ? "retry" : "failed";
         }
@@ -165,6 +169,7 @@ public class AgentRunner {
                 chat.sendAssistant(finalText.trim(), "reply", "normal", null, null);
             }
             endTurn(turnId, finalStatus, calls, in, out, null);
+            recordCache(turnId, cache);
         });
         return finalStatus;
     }
@@ -179,6 +184,11 @@ public class AgentRunner {
             log.error("tool {} failed in turn {}", call.name(), ctx.turnId, e);
             return new LlmClient.ToolResult(call.id(), Json.write(Tools.error("내부 오류")), true);
         }
+    }
+
+    private void recordCache(long turnId, long[] cache) {
+        db.update("UPDATE turns SET cache_read_tokens = ?, cache_write_tokens = ? WHERE id = ?",
+                (int) cache[0], (int) cache[1], turnId);
     }
 
     private void endTurn(long turnId, String status, int toolCalls, long in, long out, String error) {

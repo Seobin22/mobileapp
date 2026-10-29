@@ -285,6 +285,16 @@ class AgentFlowTest extends AssistantTestBase {
     }
 
     @Test
+    void askUserCountsAsReplySoFinalTextIsNotResent() {
+        // 평가에서 발견: ask_user 뒤 마지막 텍스트가 reply 로 한 번 더 나가던 문제
+        llm.then(tools(call("ask_user", "{\"text\":\"운동, 시작해볼까요?\",\"options\":[\"네\",\"메모만\"]}")))
+                .then(text("메모해 뒀어요. 운동, 시작해볼까요?"));
+        say("운동 좀 해야 하는데");
+        runAgent();
+        assertThat(assistantMessages()).containsExactly("운동, 시작해볼까요?");
+    }
+
+    @Test
     void duplicateClientMessageIdReturnsSameTurn() {
         ObjectNode req = Json.object();
         req.put("client_msg_id", "same-uuid");

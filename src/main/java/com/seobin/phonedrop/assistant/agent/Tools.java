@@ -123,7 +123,7 @@ public class Tools {
                 case "set_schedule" -> setSchedule(ctx, input);
                 case "move_block" -> moveBlock(ctx, input);
                 case "send_message" -> sendMessage(ctx, input);
-                case "ask_user" -> askUser(input);
+                case "ask_user" -> askUser(ctx, input);
                 default -> error("알 수 없는 도구입니다: " + name);
             };
         } catch (ApiException | IllegalArgumentException e) {
@@ -647,7 +647,7 @@ public class Tools {
         return r;
     }
 
-    private ObjectNode askUser(JsonNode in) {
+    private ObjectNode askUser(Context ctx, JsonNode in) {
         String text = in.path("text").asString("").trim();
         if (text.isEmpty()) {
             return error("text 가 비었습니다");
@@ -659,6 +659,7 @@ public class Tools {
             }
         }
         long questionId = chat.askUser(text, options);
+        ctx.sentReply = true; // 질문도 사용자에게 한 답이다(텍스트를 다시 reply 로 보내지 않는다)
         ObjectNode r = Json.object();
         r.put("ok", true);
         r.put("question_id", questionId);

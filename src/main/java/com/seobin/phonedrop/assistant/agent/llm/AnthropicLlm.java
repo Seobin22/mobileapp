@@ -88,7 +88,9 @@ public class AnthropicLlm implements LlmClient {
                 }
                 String stop = message.stopReason().map(StopReason::asString).orElse("");
                 return new LlmResponse(calls, text.toString(), stop,
-                        message.usage().inputTokens(), message.usage().outputTokens());
+                        message.usage().inputTokens(), message.usage().outputTokens(),
+                        message.usage().cacheReadInputTokens().orElse(0L),
+                        message.usage().cacheCreationInputTokens().orElse(0L));
             }
 
             @Override

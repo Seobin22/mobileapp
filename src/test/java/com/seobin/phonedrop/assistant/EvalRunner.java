@@ -80,6 +80,16 @@ class EvalRunner {
         }
 
         StringBuilder report = new StringBuilder("# 평가 결과 (v2)\n\n모델: `" + llm.model() + "` · 채점도 같은 모델\n\n");
+        StringBuilder usage = new StringBuilder("""
+                ## 토큰 사용량
+                토큰 = 입력(캐시 안 됨) / 출력 / 캐시 읽기 / 캐시 쓰기. 비용은 Sonnet 5.5 표준 단가 추정
+                (입력 $2, 출력 $10, 캐시 읽기 $0.20, 캐시 쓰기 $2.50 — 백만 토큰당).
+
+                | 케이스 | turn | 도구 호출 | 비서 토큰 | 채점 토큰 | 추정 비용 |
+                |---|---|---|---|---|---|
+                """);
+        long[] total = new long[4];
+        long[] totalJudge = new long[4];
         for (Path file : cases) {
             Map<String, Object> spec = new Yaml().load(Files.readString(file, StandardCharsets.UTF_8));
             reset((String) spec.getOrDefault("now", "2026-11-02T09:00"));
@@ -94,22 +104,53 @@ class EvalRunner {
             }
 
             String state = tx.run(this::stateSummary);
+            long[] agentTokens = tx.run(() -> db.jdbc().sql("""
+                            SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                            COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), COUNT(*),
+                            COALESCE(SUM(tool_calls),0) FROM turns WHERE status <> 'queued'""")
+                    .query((rs, n) -> new long[]{rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4),
+                            rs.getLong(5), rs.getLong(6)}).single());
             List<String> criteria = (List<String>) spec.get("criteria");
-            String verdict = judge.start(
+            var judgeResponse = judge.start(
                             "너는 AI 비서의 판단을 채점하는 평가자다. 결과를 보고 각 조건을 통과(PASS)/실패(FAIL)로 판정하고 한 줄 이유를 쓴다. "
                                     + "형식: 조건마다 한 줄 '- PASS|FAIL: 조건 — 이유'. 마지막 줄에 '총평: ...'.",
                             Json.array(),
                             "## 사용자 입력\n" + spec.get("input") + "\n\n## 결과\n" + state + "\n\n## 조건\n"
                                     + String.join("\n", criteria.stream().map(c -> "- " + c).toList()))
-                    .next().text();
+                    .next();
+            String verdict = judgeResponse.text();
+            long[] judgeTokens = {judgeResponse.inputTokens(), judgeResponse.outputTokens(),
+                    judgeResponse.cacheReadTokens(), judgeResponse.cacheWriteTokens()};
+            for (int i = 0; i < 4; i++) {
+                total[i] += agentTokens[i];
+                totalJudge[i] += judgeTokens[i];
+            }
+            usage.append("| ").append(spec.get("name")).append(" | ").append(agentTokens[4]).append(" | ")
+                    .append(agentTokens[5]).append(" | ").append(tokens(agentTokens)).append(" | ")
+                    .append(tokens(judgeTokens)).append(" | $").append(String.format("%.4f", cost(agentTokens) + cost(judgeTokens)))
+                    .append(" |\n");
 
             report.append("## ").append(spec.get("name")).append(" (`").append(file.getFileName()).append("`)\n\n")
                     .append("**입력:** ").append(spec.get("input")).append("\n\n")
                     .append("### 채점\n").append(verdict.trim()).append("\n\n")
                     .append("<details><summary>결과 상태</summary>\n\n```\n").append(state).append("```\n</details>\n\n");
         }
+        usage.append("| **합계** | | | ").append(tokens(total)).append(" | ").append(tokens(totalJudge))
+                .append(" | **$").append(String.format("%.4f", cost(total) + cost(totalJudge))).append("** |\n\n");
+        report.insert(report.indexOf("\n\n") + 2, usage);
         Files.writeString(Path.of("evals", "report.md"), report.toString(), StandardCharsets.UTF_8);
+        System.out.println("EVAL_TOKENS agent=" + tokens(total) + " judge=" + tokens(totalJudge)
+                + " cost=$" + String.format("%.4f", cost(total) + cost(totalJudge)));
         System.out.println("evals/report.md 작성됨");
+    }
+
+    private static String tokens(long[] t) {
+        return t[0] + " / " + t[1] + " / " + t[2] + " / " + t[3];
+    }
+
+    /** Sonnet 5.5 표준 단가(백만 토큰당): 입력 $2, 출력 $10, 캐시 읽기 $0.20, 캐시 쓰기(5분) $2.50. */
+    private static double cost(long[] t) {
+        return (t[0] * 2.0 + t[1] * 10.0 + t[2] * 0.20 + t[3] * 2.50) / 1_000_000;
     }
 
     private void reset(String now) {
