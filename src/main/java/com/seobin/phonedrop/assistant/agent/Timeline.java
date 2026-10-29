@@ -89,6 +89,9 @@ public class Timeline {
                 item.put("id", b.id());
                 item.put("status", b.status());
                 item.put("task_id", b.taskId());
+                if (b.workProductId() != null) {
+                    item.put("work_product_id", b.workProductId());
+                }
                 store.task(b.taskId()).ifPresent(t -> item.put("title", mask ? taskTitle(t) : t.title()));
                 items.add(item);
                 if (List.of("planned", "nudging", "started").contains(b.status())) {
@@ -125,6 +128,11 @@ public class Timeline {
 
     /** now~until 의 빈 시간(분). */
     public long freeMinutes(Instant from, Instant until) {
+        return freeMinutes(from, until, null);
+    }
+
+    /** 빈 시간(분). ownTaskId 의 블록은 그 할 일을 할 시간이므로 빈 시간으로 센다(get_facts). */
+    public long freeMinutes(Instant from, Instant until, Long ownTaskId) {
         if (!until.isAfter(from)) {
             return 0;
         }
@@ -139,6 +147,7 @@ public class Timeline {
             List<TimeUtil.Window> busy = new ArrayList<>();
             store.activeEventsOverlapping(s, e).forEach(ev -> busy.add(new TimeUtil.Window(ev.blockedStart(), ev.blockedEnd())));
             store.activeBlocks().stream().filter(b -> b.start().isBefore(e) && s.isBefore(b.end()))
+                    .filter(b -> ownTaskId == null || b.taskId() != ownTaskId)
                     .forEach(b -> busy.add(new TimeUtil.Window(b.start(), b.end())));
             busy.addAll(time.quietWindows(s, e));
             busy.addAll(time.dailyWindows("life.meals", s, e));

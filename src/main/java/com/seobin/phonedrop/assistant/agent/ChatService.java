@@ -12,7 +12,8 @@ import org.springframework.stereotype.Service;
 import com.seobin.phonedrop.assistant.ApiException;
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
-import com.seobin.phonedrop.assistant.Jobs;
+import com.seobin.phonedrop.assistant.InterventionService;
+import com.seobin.phonedrop.assistant.TurnQueue;
 import com.seobin.phonedrop.assistant.Json;
 import com.seobin.phonedrop.assistant.TimeUtil;
 import com.seobin.phonedrop.assistant.push.PushService;
@@ -25,30 +26,32 @@ import tools.jackson.databind.node.ObjectNode;
 @Service
 public class ChatService {
 
-    public static final String TURN_JOB = "turn";
-    public static final int PRIORITY_USER = 10;
-    public static final int PRIORITY_DEFAULT = 5;
+    public static final int PRIORITY_USER = TurnQueue.PRIORITY_USER;
+    public static final int PRIORITY_DEFAULT = TurnQueue.PRIORITY_DEFAULT;
+
+    /** 비서가 먼저 보내는 메시지 종류(예산 대상, 빌드문서 v3 §4.5). */
+    public static final List<String> PROACTIVE_KINDS = List.of("proactive", "briefing", "checkin");
 
     private final AssistantDb db;
     private final AssistantClock clock;
-    private final Jobs jobs;
+    private final TurnQueue turns;
     private final PushService push;
     private final TimeUtil time;
+    private final InterventionService interventions;
 
-    public ChatService(AssistantDb db, AssistantClock clock, Jobs jobs, PushService push, TimeUtil time) {
+    public ChatService(AssistantDb db, AssistantClock clock, TurnQueue turns, PushService push, TimeUtil time,
+                       InterventionService interventions) {
         this.db = db;
         this.clock = clock;
-        this.jobs = jobs;
+        this.turns = turns;
         this.push = push;
         this.time = time;
+        this.interventions = interventions;
     }
 
     /** turns 행(queued)을 만들고 turn 작업을 예약한다. */
     public long enqueueTurn(String trigger, JsonNode ref, int priority) {
-        long turnId = db.insert("INSERT INTO turns(trigger, trigger_ref, status, started_at) VALUES (?, ?, 'queued', ?)",
-                trigger, Json.write(ref), clock.now());
-        jobs.schedule(TURN_JOB, turnId, clock.now(), null, Json.object(), priority);
-        return turnId;
+        return turns.enqueue(trigger, ref, priority);
     }
 
     /** POST /v1/messages. 같은 client_msg_id 면 처음 결과를 돌려준다. */
@@ -86,6 +89,8 @@ public class ChatService {
         }
         ObjectNode ref = Json.object();
         ref.put("message_id", messageId);
+        // v3 §3.2: 미루기 협상 중이면 협상 시간을 연장한다.
+        interventions.extendNegotiation();
         long turnId = enqueueTurn("user_message", ref, PRIORITY_USER);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("message_id", messageId);
@@ -93,16 +98,25 @@ public class ChatService {
         return result;
     }
 
-    /** 비서 메시지 저장 + chat.message 푸시. v2 는 silent 가 항상 false. */
+    /** 비서 메시지 저장 + chat.message 푸시(알림 있음). */
     public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId) {
+        return sendAssistant(text, kind, importance, questionId, confirmationId, false);
+    }
+
+    /**
+     * silent 여도 저장·푸시한다(앱이 채팅에만 쌓고 알림을 띄우지 않는다). channel 은 앱 알림 채널(chat·checkin, v3 §8.3).
+     */
+    public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
+                              boolean silent) {
         long id = db.insert("""
                         INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id, created_at)
-                        VALUES ('assistant', ?, ?, ?, FALSE, ?, ?, ?)""",
-                text, kind, importance, questionId, confirmationId, clock.now());
+                        VALUES ('assistant', ?, ?, ?, ?, ?, ?, ?)""",
+                text, kind, importance, silent, questionId, confirmationId, clock.now());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "chat.message");
         data.put("message_id", String.valueOf(id));
-        data.put("silent", "false");
+        data.put("silent", String.valueOf(silent));
+        data.put("channel", "checkin".equals(kind) ? "checkin" : "chat");
         data.put("preview", text.length() > 60 ? text.substring(0, 60) : text);
         push.pushAll(data);
         return id;
@@ -132,6 +146,7 @@ public class ChatService {
             m.put("content", rs.getString("content"));
             m.put("kind", rs.getString("kind"));
             m.put("importance", rs.getString("importance"));
+            m.put("silent", rs.getBoolean("silent"));
             Long q = AssistantDb.nullableLong(rs, "question_id");
             Long c = AssistantDb.nullableLong(rs, "confirmation_id");
             if (q != null) {
@@ -165,6 +180,17 @@ public class ChatService {
 
     public void markRead(long id) {
         db.update("UPDATE messages SET read_at = ? WHERE id = ? AND read_at IS NULL", clock.now(), id);
+    }
+
+    /** 오늘(logical day) 보낸 먼저 말 걸기 메시지 수와 그중 알림이 간 high 수. [count, high] */
+    public int[] proactiveToday() {
+        Instant dayStart = time.activeWindow(time.logicalDay(clock.now())).start();
+        return db.jdbc().sql("""
+                        SELECT COUNT(*), COALESCE(SUM(CASE WHEN importance = 'high' AND silent = FALSE THEN 1 ELSE 0 END), 0)
+                        FROM messages WHERE role = 'assistant' AND kind IN ('proactive', 'briefing', 'checkin')
+                        AND created_at >= ?""")
+                .param(AssistantDb.ts(dayStart))
+                .query((rs, n) -> new int[]{rs.getInt(1), rs.getInt(2)}).single();
     }
 
     /** 오늘(logical day) 시작된 turn 수. */

@@ -29,11 +29,18 @@ import com.seobin.phonedrop.assistant.agent.llm.ConfiguredLlm;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 평가 세트 실행기(빌드문서 v2 §12.3). 실제 Claude API 를 부르므로 돈이 든다. 평소 테스트에서는 건너뛴다.
+ * 평가 세트 실행기(빌드문서 v2 §12.3, v3 §9.2). 실제 Claude API 를 부르므로 돈이 든다. 평소 테스트에서는 건너뛴다.
  *   ANTHROPIC_API_KEY=... make eval     (= ./mvnw test -Deval=true -Dtest=EvalRunner)
- * evals/v2/*.yaml 마다 메모리 DB 를 비우고 setup 을 넣은 뒤 input 을 사용자 메시지로 보내고,
- * 결과(목표·할 일·블록·일정·메모·대화)를 다른 Claude 호출로 criteria 대로 채점해 evals/report.md 를 만든다.
- * 점수 기준은 없다. 사용자가 읽고 판단한다.
+ *   폴더 고르기: -Deval.dirs=v3 (기본 v2,v3)
+ * evals/{dir}/*.yaml 마다 메모리 DB 를 비우고 setup 을 넣은 뒤 trigger(기본: input 을 사용자 메시지로)를 실행하고,
+ * inputs 가 있으면 이어서 사용자 메시지로 보낸다. 결과(목표·할 일·블록·일정·메모·wakeup·작업물·대화)를
+ * 다른 Claude 호출로 criteria 대로 채점해 evals/report.md 를 만든다. 점수 기준은 없다. 사용자가 읽고 판단한다.
+ *
+ * v3 yaml 확장:
+ *   trigger: {type: snooze_request|pulse|wakeup|block_missed|block_ended|morning|evening, ...ref 필드}
+ *            snooze_request 는 block(setup.blocks 순번)의 진행 중 개입에 [미루기 요청] 액션을 보낸다.
+ *            그 외는 ref(task·block 은 setup 순번 → 실제 id)로 turn 을 바로 만든다.
+ *   setup.blocks[].status, setup.blocks[].intervention(true 면 running 개입), setup.sql(그대로 실행할 SQL)
  */
 @EnabledIfSystemProperty(named = "eval", matches = "true")
 @SpringBootTest(properties = "assistant.worker.enabled=false")
@@ -65,6 +72,8 @@ class EvalRunner {
     AgentWorker agent;
     @Autowired
     ConfiguredLlm llm;
+    @Autowired
+    InterventionService interventions;
 
     @Test
     @SuppressWarnings("unchecked")
@@ -74,12 +83,15 @@ class EvalRunner {
             throw new IllegalStateException("ANTHROPIC_API_KEY 환경변수가 필요합니다");
         }
         AnthropicLlm judge = new AnthropicLlm(key, llm.model());
-        List<Path> cases;
-        try (Stream<Path> files = Files.list(Path.of("evals", "v2"))) {
-            cases = files.filter(p -> p.toString().endsWith(".yaml")).sorted().toList();
+        String dirs = System.getProperty("eval.dirs", "v2,v3");
+        List<Path> cases = new ArrayList<>();
+        for (String dir : dirs.split(",")) {
+            try (Stream<Path> files = Files.list(Path.of("evals", dir.trim()))) {
+                cases.addAll(files.filter(p -> p.toString().endsWith(".yaml")).sorted().toList());
+            }
         }
 
-        StringBuilder report = new StringBuilder("# 평가 결과 (v2)\n\n모델: `" + llm.model() + "` · 채점도 같은 모델\n\n");
+        StringBuilder report = new StringBuilder("# 평가 결과 (" + dirs + ")\n\n모델: `" + llm.model() + "` · 채점도 같은 모델\n\n");
         StringBuilder usage = new StringBuilder("""
                 ## 토큰 사용량
                 토큰 = 입력(캐시 안 됨) / 출력 / 캐시 읽기 / 캐시 쓰기. 비용은 Sonnet 5.5 표준 단가 추정
@@ -93,14 +105,18 @@ class EvalRunner {
         for (Path file : cases) {
             Map<String, Object> spec = new Yaml().load(Files.readString(file, StandardCharsets.UTF_8));
             reset((String) spec.getOrDefault("now", "2026-11-02T09:00"));
-            applySetup((Map<String, Object>) spec.get("setup"));
+            Ids ids = applySetup((Map<String, Object>) spec.get("setup"));
 
-            ObjectNode req = Json.object();
-            req.put("client_msg_id", java.util.UUID.randomUUID().toString());
-            req.put("text", (String) spec.get("input"));
-            tx.run(() -> chat.receive(req));
-            while (agent.runOnce()) {
-                // 대기열이 빌 때까지(확인 카드 등으로 이어지는 turn 포함)
+            Map<String, Object> trigger = (Map<String, Object>) spec.get("trigger");
+            if (trigger == null) {
+                say((String) spec.get("input"));
+            } else {
+                fire(trigger, ids);
+            }
+            runAgent();
+            for (String text : (List<String>) spec.getOrDefault("inputs", List.of())) {
+                say(text);
+                runAgent();
             }
 
             String state = tx.run(this::stateSummary);
@@ -115,7 +131,7 @@ class EvalRunner {
                             "너는 AI 비서의 판단을 채점하는 평가자다. 결과를 보고 각 조건을 통과(PASS)/실패(FAIL)로 판정하고 한 줄 이유를 쓴다. "
                                     + "형식: 조건마다 한 줄 '- PASS|FAIL: 조건 — 이유'. 마지막 줄에 '총평: ...'.",
                             Json.array(),
-                            "## 사용자 입력\n" + spec.get("input") + "\n\n## 결과\n" + state + "\n\n## 조건\n"
+                            "## 상황\n" + describe(spec) + "\n\n## 결과\n" + state + "\n\n## 조건\n"
                                     + String.join("\n", criteria.stream().map(c -> "- " + c).toList()))
                     .next();
             String verdict = judgeResponse.text();
@@ -131,7 +147,7 @@ class EvalRunner {
                     .append(" |\n");
 
             report.append("## ").append(spec.get("name")).append(" (`").append(file.getFileName()).append("`)\n\n")
-                    .append("**입력:** ").append(spec.get("input")).append("\n\n")
+                    .append("**상황:** ").append(describe(spec).replace("\n", " / ")).append("\n\n")
                     .append("### 채점\n").append(verdict.trim()).append("\n\n")
                     .append("<details><summary>결과 상태</summary>\n\n```\n").append(state).append("```\n</details>\n\n");
         }
@@ -142,6 +158,66 @@ class EvalRunner {
         System.out.println("EVAL_TOKENS agent=" + tokens(total) + " judge=" + tokens(totalJudge)
                 + " cost=$" + String.format("%.4f", cost(total) + cost(totalJudge)));
         System.out.println("evals/report.md 작성됨");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String describe(Map<String, Object> spec) {
+        StringBuilder sb = new StringBuilder();
+        if (spec.get("situation") != null) {
+            sb.append(spec.get("situation")).append('\n');
+        }
+        if (spec.get("trigger") != null) {
+            sb.append("trigger: ").append(spec.get("trigger")).append('\n');
+        }
+        if (spec.get("input") != null) {
+            sb.append("사용자: ").append(spec.get("input")).append('\n');
+        }
+        for (String text : (List<String>) spec.getOrDefault("inputs", List.of())) {
+            sb.append("이어서 사용자: ").append(text).append('\n');
+        }
+        return sb.toString().trim();
+    }
+
+    private void say(String text) {
+        ObjectNode req = Json.object();
+        req.put("client_msg_id", java.util.UUID.randomUUID().toString());
+        req.put("text", text);
+        tx.run(() -> chat.receive(req));
+    }
+
+    private void runAgent() {
+        while (agent.runOnce()) {
+            // 대기열이 빌 때까지(확인 카드 등으로 이어지는 turn 포함)
+        }
+    }
+
+    /** setup 순번 → 실제 id */
+    record Ids(List<Long> goals, List<Long> tasks, List<Long> blocks, Map<Integer, Long> interventions) {
+    }
+
+    private void fire(Map<String, Object> trigger, Ids ids) {
+        String type = (String) trigger.get("type");
+        if ("snooze_request".equals(type)) {
+            int block = ((Number) trigger.getOrDefault("block", 0)).intValue();
+            ObjectNode req = Json.object();
+            req.put("idempotency_key", java.util.UUID.randomUUID().toString());
+            req.put("type", "snooze_request");
+            req.put("intervention_id", ids.interventions().get(block));
+            req.put("block_id", ids.blocks().get(block));
+            tx.run(() -> interventions.action(req));
+            return;
+        }
+        ObjectNode ref = Json.object();
+        trigger.forEach((k, v) -> {
+            switch (k) {
+                case "type" -> {
+                }
+                case "task" -> ref.put("task_id", ids.tasks().get(((Number) v).intValue()));
+                case "block" -> ref.put("block_id", ids.blocks().get(((Number) v).intValue()));
+                default -> ref.put(k, String.valueOf(v));
+            }
+        });
+        tx.run(() -> chat.enqueueTurn(type, ref, 5));
     }
 
     private static String tokens(long[] t) {
@@ -156,8 +232,8 @@ class EvalRunner {
     private void reset(String now) {
         tx.exec(() -> {
             for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
-                    "intervention_logs", "interventions", "jobs", "blocks", "tasks", "goals", "events", "notes",
-                    "device_events", "devices", "processed_actions", "settings"}) {
+                    "intervention_logs", "interventions", "jobs", "blocks", "work_products", "wakeups", "daily_flags",
+                    "tasks", "goals", "events", "notes", "device_events", "devices", "processed_actions", "settings"}) {
                 db.update("DELETE FROM " + table);
             }
             db.update("UPDATE memory SET content = '' WHERE id = 1");
@@ -167,16 +243,18 @@ class EvalRunner {
     }
 
     @SuppressWarnings("unchecked")
-    private void applySetup(Map<String, Object> setup) {
+    private Ids applySetup(Map<String, Object> setup) {
+        Ids ids = new Ids(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new java.util.HashMap<>());
         if (setup == null) {
-            return;
+            return ids;
         }
         tx.exec(() -> {
-            List<Long> goalIds = new ArrayList<>();
+            List<Long> goalIds = ids.goals();
             for (Map<String, Object> g : (List<Map<String, Object>>) setup.getOrDefault("goals", List.of())) {
-                goalIds.add(db.insert("INSERT INTO goals(title, deadline) VALUES (?, ?)", g.get("title"), time(g.get("deadline"))));
+                goalIds.add(db.insert("INSERT INTO goals(title, deadline, reason, strategy) VALUES (?, ?, ?, ?)",
+                        g.get("title"), time(g.get("deadline")), g.getOrDefault("reason", ""), g.getOrDefault("strategy", "")));
             }
-            List<Long> taskIds = new ArrayList<>();
+            List<Long> taskIds = ids.tasks();
             for (Map<String, Object> t : (List<Map<String, Object>>) setup.getOrDefault("tasks", List.of())) {
                 int est = ((Number) t.get("est_minutes")).intValue();
                 Object goal = t.get("goal");
@@ -190,11 +268,32 @@ class EvalRunner {
                 db.insert("INSERT INTO events(title, start_at, end_at) VALUES (?, ?, ?)",
                         e.get("title"), time(e.get("start")), time(e.get("end")));
             }
-            for (Map<String, Object> b : (List<Map<String, Object>>) setup.getOrDefault("blocks", List.of())) {
-                db.insert("INSERT INTO blocks(task_id, start_at, end_at, screen_text) VALUES (?, ?, ?, '지금 할 건 하나예요.')",
-                        taskIds.get(((Number) b.get("task")).intValue()), time(b.get("start")), time(b.get("end")));
+            List<Map<String, Object>> blocks = (List<Map<String, Object>>) setup.getOrDefault("blocks", List.of());
+            for (int i = 0; i < blocks.size(); i++) {
+                Map<String, Object> b = blocks.get(i);
+                String status = (String) b.getOrDefault("status", "planned");
+                long blockId = db.insert("""
+                                INSERT INTO blocks(task_id, start_at, end_at, status, screen_text, actual_start)
+                                VALUES (?, ?, ?, ?, '지금 할 건 하나예요.', ?)""",
+                        taskIds.get(((Number) b.get("task")).intValue()), time(b.get("start")), time(b.get("end")),
+                        status, "started".equals(status) ? time(b.get("start")) : null);
+                ids.blocks().add(blockId);
+                if (Boolean.TRUE.equals(b.get("intervention"))) {
+                    db.update("UPDATE blocks SET status = 'nudging' WHERE id = ?", blockId);
+                    ids.interventions().put(i, db.insert("""
+                                    INSERT INTO interventions(block_id, status, level, block_version, started_at)
+                                    VALUES (?, 'running', 3, 1, ?)""",
+                            blockId, time(b.get("start"))));
+                }
+            }
+            if (setup.get("memory") != null) {
+                db.update("UPDATE memory SET content = ? WHERE id = 1", setup.get("memory"));
+            }
+            for (String sql : (List<String>) setup.getOrDefault("sql", List.of())) {
+                db.update(sql);
             }
         });
+        return ids;
     }
 
     private static java.time.Instant time(Object local) {
@@ -239,9 +338,35 @@ class EvalRunner {
             sb.append("메모#").append(rs.getLong(1)).append(' ').append(rs.getString(2)).append(' ').append(rs.getString(3)).append('\n');
             return null;
         }).list();
+        sb.append("[wakeup]\n");
+        db.jdbc().sql("SELECT id, fire_at, reason, task_id, status FROM wakeups ORDER BY id").query((rs, n) -> {
+            sb.append("wakeup#").append(rs.getLong(1)).append(' ').append(rs.getObject(2)).append(" 할일#")
+                    .append(rs.getObject(4)).append(' ').append(rs.getString(5)).append(" \"").append(rs.getString(3)).append("\"\n");
+            return null;
+        }).list();
+        sb.append("[작업물]\n");
+        db.jdbc().sql("SELECT id, task_id, title, kind, content_md, sources FROM work_products ORDER BY id").query((rs, n) -> {
+            sb.append("작업물#").append(rs.getLong(1)).append(" 할일#").append(rs.getLong(2)).append(' ').append(rs.getString(3))
+                    .append(" (").append(rs.getString(4)).append(")\n  출처: ").append(rs.getString(6))
+                    .append("\n  본문:\n").append(rs.getString(5)).append('\n');
+            return null;
+        }).list();
+        db.jdbc().sql("SELECT id, work_product_id FROM blocks WHERE work_product_id IS NOT NULL").query((rs, n) -> {
+            sb.append("블록#").append(rs.getLong(1)).append("에 작업물#").append(rs.getLong(2)).append(" 첨부\n");
+            return null;
+        }).list();
+        sb.append("[개입]\n");
+        db.jdbc().sql("SELECT id, block_id, status, end_reason FROM interventions ORDER BY id").query((rs, n) -> {
+            sb.append("개입#").append(rs.getLong(1)).append(" 블록#").append(rs.getLong(2)).append(' ')
+                    .append(rs.getString(3)).append(' ').append(rs.getString(4)).append('\n');
+            return null;
+        }).list();
+        sb.append("[memory]\n").append(db.jdbc().sql("SELECT content FROM memory WHERE id = 1").query(String.class).single())
+                .append('\n');
         sb.append("[대화]\n");
-        db.jdbc().sql("SELECT role, kind, content FROM messages ORDER BY id").query((rs, n) -> {
-            sb.append(rs.getString(1)).append('(').append(rs.getString(2)).append("): ").append(rs.getString(3)).append('\n');
+        db.jdbc().sql("SELECT role, kind, silent, content FROM messages ORDER BY id").query((rs, n) -> {
+            sb.append(rs.getString(1)).append('(').append(rs.getString(2)).append(rs.getBoolean(3) ? ", 알림 없음" : "")
+                    .append("): ").append(rs.getString(4)).append('\n');
             return null;
         }).list();
         db.jdbc().sql("SELECT q.text, q.options FROM questions q ORDER BY id").query((rs, n) -> {

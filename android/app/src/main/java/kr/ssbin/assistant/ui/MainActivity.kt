@@ -19,6 +19,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,12 +44,21 @@ enum class Screen { Setup, Home, Permissions, Settings }
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /** 개입 화면 [미루기 요청] 뒤 채팅 탭을 연다(v3 §8.1). */
+        const val EXTRA_OPEN_CHAT = "open_chat"
+    }
+
     /** onResume 마다 증가. 권한 상태·목록을 다시 읽는 신호. */
     private val resumeTick = mutableIntStateOf(0)
+
+    /** 채팅 탭으로 가라는 신호. */
+    private val openChat = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = Prefs.get(this)
+        if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -59,12 +69,16 @@ class MainActivity : ComponentActivity() {
             ) {
                 var screen by remember { mutableStateOf(if (prefs.configured) Screen.Home else Screen.Setup) }
                 val tick = resumeTick.intValue
+                val chatSignal = openChat.intValue
+                LaunchedEffect(chatSignal) {
+                    if (chatSignal > 0 && prefs.configured) screen = Screen.Home
+                }
                 when (screen) {
                     Screen.Setup -> SetupScreen(onDone = {
                         syncNow()
                         screen = Screen.Permissions
                     })
-                    Screen.Home -> HomeScreen(tick = tick, navigate = { screen = it })
+                    Screen.Home -> HomeScreen(tick = tick, openChat = chatSignal, navigate = { screen = it })
                     Screen.Permissions -> PermissionScreen(tick = tick, onBack = { screen = Screen.Home })
                     Screen.Settings -> SettingsScreen(
                         onBack = { screen = Screen.Home },
@@ -73,6 +87,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
     }
 
     override fun onResume() {
@@ -92,7 +112,7 @@ class MainActivity : ComponentActivity() {
 /** 채팅(메인) · 시간표 두 탭. 시간표의 [+] 는 v1 수동 추가 화면. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(tick: Int, navigate: (Screen) -> Unit) {
+fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableIntStateOf(0) }
@@ -100,6 +120,7 @@ fun HomeScreen(tick: Int, navigate: (Screen) -> Unit) {
     var editing by remember { mutableStateOf<TaskDto?>(null) }
     var localTick by remember { mutableIntStateOf(0) }
     val allGranted = remember(tick) { Capabilities.allGranted(context) }
+    LaunchedEffect(openChat) { if (openChat > 0) tab = 0 }
 
     Scaffold(
         topBar = {

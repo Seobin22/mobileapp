@@ -29,7 +29,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 에이전트 도구(빌드문서 v2 §5). 결과는 모두 JSON, 실패는 {"ok":false,"error":"..."}.
+ * 에이전트 도구(빌드문서 v2 §5, v3 §4). 결과는 모두 JSON, 실패는 {"ok":false,"error":"..."}.
  * 엔티티 변경은 모두 changes 에 기록한다. 호출하는 쪽이 도구마다 트랜잭션을 연다.
  */
 @Component
@@ -67,11 +67,14 @@ public class Tools {
     private final PlanService plan;
     private final PushService push;
     private final Jobs jobs;
+    private final Facts facts;
+    private final ProactiveService proactive;
     private final JsonNode definitions;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
-                 InterventionService interventions, PlanService plan, PushService push, Jobs jobs) {
+                 InterventionService interventions, PlanService plan, PushService push, Jobs jobs, Facts facts,
+                 ProactiveService proactive) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -86,6 +89,8 @@ public class Tools {
         this.plan = plan;
         this.push = push;
         this.jobs = jobs;
+        this.facts = facts;
+        this.proactive = proactive;
         try (InputStream in = new ClassPathResource("assistant/agent/tools.json").getInputStream()) {
             this.definitions = Json.parse(new String(in.readAllBytes(), StandardCharsets.UTF_8));
         } catch (IOException e) {
@@ -124,6 +129,15 @@ public class Tools {
                 case "move_block" -> moveBlock(ctx, input);
                 case "send_message" -> sendMessage(ctx, input);
                 case "ask_user" -> askUser(ctx, input);
+                case "get_facts" -> getFacts(input);
+                case "start_now" -> startNow(ctx, input);
+                case "extend_block" -> extendBlock(ctx, input);
+                case "end_block" -> endBlock(ctx, input);
+                case "schedule_wakeup" -> scheduleWakeup(ctx, input);
+                case "cancel_wakeup" -> cancelWakeup(input);
+                case "create_work_product" -> createWorkProduct(input);
+                case "attach_work_product" -> attachWorkProduct(ctx, input);
+                case "get_work_products" -> getWorkProducts(input);
                 default -> error("알 수 없는 도구입니다: " + name);
             };
         } catch (ApiException | IllegalArgumentException e) {
@@ -608,8 +622,8 @@ public class Tools {
         }
         JsonNode before = changes.snapshot("block", id);
         if ("nudging".equals(b.status())) {
-            // v2: 진행 중 개입은 cancelled (v3 에서 snoozed 로 바뀐다)
-            interventions.cancelRunningForBlock(id);
+            // v3 §3.4: 진행 중 개입은 snoozed(end_reason=moved). 새 시각에 다시 개입한다.
+            interventions.snoozeForMove(id, Duration.between(b.start(), start).toMinutes());
         }
         db.update("""
                         UPDATE blocks SET start_at = ?, end_at = ?, status = 'planned', version = version + 1,
@@ -629,22 +643,42 @@ public class Tools {
             return error("text 가 비었습니다");
         }
         String kind = in.path("kind").asString("reply");
-        if (!List.of("reply", "proactive").contains(kind)) {
+        if (!List.of("reply", "proactive", "briefing", "checkin", "intervention").contains(kind)) {
             kind = "reply";
         }
         String importance = in.path("importance").asString("normal");
         if (!List.of("low", "normal", "high").contains(importance)) {
             importance = "normal";
         }
-        long id = chat.sendAssistant(text, kind, importance, null, null);
+        boolean silent = silentFor(kind, importance);
+        long id = chat.sendAssistant(text, kind, importance, null, null, silent);
         if ("reply".equals(kind)) {
             ctx.sentReply = true;
         }
         ObjectNode r = Json.object();
         r.put("ok", true);
         r.put("message_id", id);
-        r.put("silent", false);
+        r.put("silent", silent);
         return r;
+    }
+
+    /** v3 §4.5: 알림 여부는 코드가 정한다. silent 여도 메시지는 저장되고 채팅에 보인다. */
+    boolean silentFor(String kind, String importance) {
+        if ("reply".equals(kind) || "intervention".equals(kind)) {
+            return false;
+        }
+        Instant now = clock.now();
+        if (time.isQuiet(now) || proactive.eventInProgress(now)) {
+            return true;
+        }
+        if (!"checkin".equals(kind) && !store.startedBlocks().isEmpty()) {
+            return true;
+        }
+        int[] today = chat.proactiveToday();
+        if (today[0] >= settings.getInt("messages.daily_budget")) {
+            return !("high".equals(importance) && today[1] < settings.getInt("messages.high_per_day"));
+        }
+        return false;
     }
 
     private ObjectNode askUser(Context ctx, JsonNode in) {
@@ -663,6 +697,265 @@ public class Tools {
         ObjectNode r = Json.object();
         r.put("ok", true);
         r.put("question_id", questionId);
+        return r;
+    }
+
+    // ------------------------------------------------------------------ v3: 사실·블록 조작 (§4.1~4.2)
+
+    private ObjectNode getFacts(JsonNode in) {
+        Map<String, Object> f = facts.of(in.path("task_id").asLong(-1));
+        if (f == null) {
+            return error("할일#" + in.path("task_id").asLong(-1) + "이 없습니다");
+        }
+        return ok(Json.MAPPER.valueToTree(f));
+    }
+
+    private ObjectNode startNow(Context ctx, JsonNode in) {
+        long taskId = in.path("task_id").asLong(-1);
+        Store.Task t = store.task(taskId).orElse(null);
+        if (t == null) {
+            return error("할일#" + taskId + "이 없습니다");
+        }
+        if (!"active".equals(t.status())) {
+            return error("할일#" + taskId + "은 " + t.status() + " 상태입니다");
+        }
+        // 진행 중 개입이 이 할 일 블록이면 그 개입을 acked 로
+        for (Store.Intervention i : store.runningInterventions()) {
+            Store.Block b = store.block(i.blockId()).orElseThrow();
+            if (b.taskId() == taskId) {
+                JsonNode before = changes.snapshot("block", b.id());
+                interventions.ack(i);
+                changes.record(ctx.turnId, "block", b.id(), before, changes.snapshot("block", b.id()));
+                plan.bumpAndSync();
+                ObjectNode r = okWithId(b.id());
+                r.put("block_id", b.id());
+                r.put("acked_intervention_id", i.id());
+                return r;
+            }
+        }
+
+        Instant now = clock.now();
+        int nextLength = store.blocksOfTask(taskId).stream()
+                .filter(b -> "planned".equals(b.status()) && b.start().isAfter(now))
+                .map(b -> (int) Duration.between(b.start(), b.end()).toMinutes())
+                .findFirst().orElse(60);
+        int minutes = Math.max(5, t.remainingMinutes() > 0 ? Math.min(t.remainingMinutes(), nextLength) : nextLength);
+        Instant end = now.plus(Duration.ofMinutes(minutes));
+
+        List<Store.Event> events = store.activeEventsOverlapping(now, end);
+        if (!events.isEmpty()) {
+            return error("지금부터 " + minutes + "분은 일정 '" + timeline.eventTitle(events.getFirst()) + "'(일정#"
+                    + events.getFirst().id() + ")과 겹칩니다");
+        }
+        if (time.firstQuietOverlap(now, end).isPresent()) {
+            return error("지금부터 " + minutes + "분은 수면·방해 금지 시간과 겹칩니다");
+        }
+        List<Store.Block> overlapping = store.activeBlocksOverlapping(now, end);
+        for (Store.Block b : overlapping) {
+            if ("started".equals(b.status())) {
+                return error("블록#" + b.id() + "이 진행 중입니다. end_block 으로 먼저 끝내세요");
+            }
+        }
+        List<Long> displaced = new ArrayList<>();
+        for (Store.Block b : overlapping) {
+            cancelBlock(ctx, b);
+            displaced.add(b.id());
+        }
+        long id = db.insert("""
+                        INSERT INTO blocks(task_id, start_at, end_at, status, screen_text, actual_start)
+                        VALUES (?, ?, ?, 'started', ?, ?)""",
+                taskId, now, end, SCREEN_PREFIX + t.firstAction(), now);
+        jobs.schedule(InterventionService.BLOCK_END, id, end, null);
+        changes.record(ctx.turnId, "block", id, null, changes.snapshot("block", id));
+        plan.bumpAndSync();
+        ObjectNode r = okWithId(id);
+        r.put("block_id", id);
+        r.put("end", time.iso(end));
+        r.set("displaced", Json.MAPPER.valueToTree(displaced));
+        if (!displaced.isEmpty()) {
+            r.put("note", "displaced 블록은 취소됐습니다. 남은 일을 다시 배치하세요");
+        }
+        return r;
+    }
+
+    private ObjectNode extendBlock(Context ctx, JsonNode in) {
+        long id = in.path("block_id").asLong(-1);
+        Store.Block b = store.block(id).orElse(null);
+        if (b == null) {
+            return error("블록#" + id + "이 없습니다");
+        }
+        if (!"started".equals(b.status())) {
+            return error("블록#" + id + "은 " + b.status() + " 상태라 늘릴 수 없습니다(started 만)");
+        }
+        Instant newEnd = TimeUtil.parse(in.path("new_end").asString(null));
+        Instant now = clock.now();
+        if (!newEnd.isAfter(b.end()) || !newEnd.isAfter(now)) {
+            return error("new_end 는 지금 끝 시각(" + time.hm(b.end()) + ")과 현재 시각보다 뒤여야 합니다");
+        }
+        Instant from = b.end().isAfter(now) ? b.end() : now;
+        List<Store.Block> keep = store.activeBlocks().stream().filter(k -> k.id() != id).toList();
+        List<String> violations = validator.validateRange(b.taskId(), from, newEnd, keep);
+        if (!violations.isEmpty()) {
+            ObjectNode r = Json.object();
+            r.put("ok", false);
+            r.set("violations", Json.MAPPER.valueToTree(violations));
+            return r;
+        }
+        JsonNode before = changes.snapshot("block", id);
+        db.update("UPDATE blocks SET end_at = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                newEnd, id);
+        // 끝 시각만 바뀌므로 block_end 작업만 다시 예약한다.
+        jobs.cancelForTarget(InterventionService.BLOCK_END, id);
+        jobs.schedule(InterventionService.BLOCK_END, id, newEnd, null);
+        changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        plan.bumpAndSync();
+        return okWithId(id);
+    }
+
+    private ObjectNode endBlock(Context ctx, JsonNode in) {
+        long id = in.path("block_id").asLong(-1);
+        Store.Block b = store.block(id).orElse(null);
+        if (b == null) {
+            return error("블록#" + id + "이 없습니다");
+        }
+        if (!"started".equals(b.status())) {
+            return error("블록#" + id + "은 " + b.status() + " 상태라 끝낼 수 없습니다(started 만)");
+        }
+        String outcome = enumValue(in, "outcome", "done", "partial");
+        JsonNode before = changes.snapshot("block", id);
+        db.update("UPDATE blocks SET status = ?, actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                outcome, clock.now(), id);
+        interventions.cancelBlockJobs(id);
+        changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        if (in.hasNonNull("remaining_minutes")) {
+            JsonNode taskBefore = changes.snapshot("task", b.taskId());
+            db.update("UPDATE tasks SET remaining_minutes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    Math.max(0, in.get("remaining_minutes").asInt()), b.taskId());
+            changes.record(ctx.turnId, "task", b.taskId(), taskBefore, changes.snapshot("task", b.taskId()));
+        }
+        plan.bumpAndSync();
+        return okWithId(id);
+    }
+
+    // ------------------------------------------------------------------ v3: 예약 (§4.3)
+
+    private ObjectNode scheduleWakeup(Context ctx, JsonNode in) {
+        Instant at = TimeUtil.parse(in.path("at").asString(null));
+        if (!at.isAfter(clock.now())) {
+            return error("at 은 지금보다 미래여야 합니다");
+        }
+        String reason = text(in, "reason");
+        if (reason.isEmpty()) {
+            return error("reason 이 필요합니다");
+        }
+        Long taskId = in.hasNonNull("task_id") ? in.get("task_id").asLong() : null;
+        if (taskId != null) {
+            if (store.task(taskId).isEmpty()) {
+                return error("할일#" + taskId + "이 없습니다");
+            }
+            int max = settings.getInt("wakeup.max_per_task");
+            int scheduled = db.jdbc().sql("SELECT COUNT(*) FROM wakeups WHERE task_id = ? AND status = 'scheduled'")
+                    .param(taskId).query(Integer.class).single();
+            if (scheduled >= max) {
+                return error("할일#" + taskId + "에는 이미 예약된 wakeup 이 " + scheduled + "개입니다(최대 " + max
+                        + "). 필요 없는 것을 cancel_wakeup 하세요");
+            }
+        }
+        Instant now = clock.now();
+        long id = db.insert("""
+                        INSERT INTO wakeups(fire_at, reason, task_id, created_by_turn, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)""",
+                at, reason, taskId, ctx.turnId, now, now);
+        jobs.schedule(ProactiveService.WAKEUP_FIRE, id, at, null);
+        return okWithId(id);
+    }
+
+    private ObjectNode cancelWakeup(JsonNode in) {
+        long id = in.path("id").asLong(-1);
+        int updated = db.update("""
+                        UPDATE wakeups SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'scheduled'""",
+                clock.now(), id);
+        if (updated == 0) {
+            return error("예약된 wakeup#" + id + "이 없습니다");
+        }
+        jobs.cancelForTarget(ProactiveService.WAKEUP_FIRE, id);
+        return okWithId(id);
+    }
+
+    // ------------------------------------------------------------------ v3: 대신 처리 (§4.4)
+
+    private ObjectNode createWorkProduct(JsonNode in) {
+        if (proactive.overSoftLimit()) {
+            return error("오늘 처리량이 많아 작업물 생성을 멈췄습니다(agent.daily_turn_soft)");
+        }
+        long taskId = in.path("task_id").asLong(-1);
+        if (store.task(taskId).isEmpty()) {
+            return error("할일#" + taskId + "이 없습니다");
+        }
+        String title = text(in, "title");
+        String content = in.path("content_md").asString("").trim();
+        if (title.isEmpty() || content.isEmpty()) {
+            return error("title 과 content_md 가 필요합니다");
+        }
+        String kind = enumValue(in, "kind", "checklist", "research", "draft", "study_plan", "other");
+        tools.jackson.databind.node.ArrayNode sources = Json.array();
+        for (JsonNode s : in.path("sources")) {
+            String url = s.path("url").asString("").trim();
+            if (!url.isEmpty()) {
+                ObjectNode o = sources.addObject();
+                o.put("title", s.path("title").asString(url).trim());
+                o.put("url", url);
+            }
+        }
+        Instant now = clock.now();
+        long id = db.insert("""
+                        INSERT INTO work_products(task_id, title, kind, content_md, sources, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                taskId, title, kind, content, Json.write(sources), now, now);
+        return okWithId(id);
+    }
+
+    private ObjectNode attachWorkProduct(Context ctx, JsonNode in) {
+        long blockId = in.path("block_id").asLong(-1);
+        long wpId = in.path("work_product_id").asLong(-1);
+        Store.Block b = store.block(blockId).orElse(null);
+        if (b == null) {
+            return error("블록#" + blockId + "이 없습니다");
+        }
+        if (!List.of("planned", "nudging").contains(b.status())) {
+            return error("블록#" + blockId + "은 " + b.status() + " 상태라 붙일 수 없습니다(planned·nudging 만)");
+        }
+        int exists = db.jdbc().sql("SELECT COUNT(*) FROM work_products WHERE id = ?").param(wpId)
+                .query(Integer.class).single();
+        if (exists == 0) {
+            return error("작업물#" + wpId + "이 없습니다");
+        }
+        JsonNode before = changes.snapshot("block", blockId);
+        db.update("UPDATE blocks SET work_product_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", wpId, blockId);
+        changes.record(ctx.turnId, "block", blockId, before, changes.snapshot("block", blockId));
+        plan.bumpAndSync();
+        return okWithId(blockId);
+    }
+
+    private ObjectNode getWorkProducts(JsonNode in) {
+        long taskId = in.path("task_id").asLong(-1);
+        List<Map<String, Object>> rows = db.jdbc().sql("""
+                        SELECT id, title, kind, content_md, sources, created_at FROM work_products
+                        WHERE task_id = ? ORDER BY id DESC LIMIT 20""")
+                .param(taskId)
+                .query((rs, n) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", rs.getLong("id"));
+                    m.put("title", rs.getString("title"));
+                    m.put("kind", rs.getString("kind"));
+                    m.put("content_md", rs.getString("content_md"));
+                    m.put("sources", Json.parse(rs.getString("sources")));
+                    m.put("created_at", time.iso(AssistantDb.instant(rs, "created_at")));
+                    return m;
+                }).list();
+        ObjectNode r = Json.object();
+        r.put("ok", true);
+        r.set("work_products", Json.MAPPER.valueToTree(rows));
         return r;
     }
 

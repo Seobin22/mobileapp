@@ -20,6 +20,8 @@ import kr.ssbin.assistant.data.HeartbeatRequest
 import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.RegisterRequest
 import kr.ssbin.assistant.intervention.InterventionController
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -39,7 +41,12 @@ object Sync {
             val api = ApiClient.get(context)
             if (prefs.deviceId < 0) register(context)
             try {
-                api.heartbeat(HeartbeatRequest(prefs.deviceId, Capabilities.all(context)))
+                val unlock = prefs.pendingFirstUnlock
+                val events = if (unlock == null) emptyList() else listOf(
+                    JsonObject(mapOf("type" to JsonPrimitive("first_unlock"), "at" to JsonPrimitive(unlock)))
+                )
+                api.heartbeat(HeartbeatRequest(prefs.deviceId, Capabilities.all(context), events))
+                if (unlock != null && prefs.pendingFirstUnlock == unlock) prefs.pendingFirstUnlock = null
             } catch (e: retrofit2.HttpException) {
                 if (e.code() != 404) throw e
                 register(context) // 서버가 기기를 모르면 다시 등록한다.
@@ -90,6 +97,20 @@ object Sync {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("sync-now", ExistingWorkPolicy.REPLACE, request)
+    }
+}
+
+/** 하루 첫 잠금 해제를 기록해 하트비트로 보낸다(서버가 아침 브리핑 여부를 판단). */
+object FirstUnlock {
+    fun onUserPresent(context: Context) {
+        val prefs = Prefs.get(context)
+        if (!prefs.configured) return
+        val today = java.time.LocalDate.now().toString()
+        if (prefs.firstUnlockDay == today) return
+        // 기상 전(새벽) 확인은 서버가 무시한다. 그 경우 그날 다음 잠금 해제를 다시 보낼 수 있도록 날짜만 기록하지 않는다.
+        prefs.pendingFirstUnlock = java.time.OffsetDateTime.now().withNano(0).toString()
+        if (java.time.LocalTime.now().hour >= 5) prefs.firstUnlockDay = today
+        Sync.runSoon(context)
     }
 }
 

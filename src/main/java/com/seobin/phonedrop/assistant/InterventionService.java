@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import com.seobin.phonedrop.assistant.push.PushService;
 
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 개입 상태 머신(빌드문서 v1 §6).
@@ -26,6 +27,7 @@ public class InterventionService {
     public static final String EXPIRE = "expire";
     public static final String SUSPEND = "suspend_check";
     public static final String BLOCK_END = "block_end";
+    public static final String NEGOTIATION_TIMEOUT = "negotiation_timeout";
 
     public static final int LEVEL = 3;
 
@@ -37,9 +39,10 @@ public class InterventionService {
     private final SettingsService settings;
     private final PlanService plan;
     private final PushService push;
+    private final TurnQueue turns;
 
     public InterventionService(AssistantDb db, AssistantClock clock, Jobs jobs, Store store, TimeUtil time,
-                               SettingsService settings, PlanService plan, PushService push) {
+                               SettingsService settings, PlanService plan, PushService push, TurnQueue turns) {
         this.db = db;
         this.clock = clock;
         this.jobs = jobs;
@@ -48,11 +51,13 @@ public class InterventionService {
         this.settings = settings;
         this.plan = plan;
         this.push = push;
+        this.turns = turns;
         jobs.register(START, this::onStartIntervention);
         jobs.register(RESHOW, this::onReshow);
         jobs.register(EXPIRE, this::onExpire);
         jobs.register(SUSPEND, this::onSuspendCheck);
         jobs.register(BLOCK_END, this::onBlockEnd);
+        jobs.register(NEGOTIATION_TIMEOUT, this::onNegotiationTimeout);
     }
 
     // ---------------------------------------------------------------- 블록 예약 (§6.1)
@@ -93,6 +98,16 @@ public class InterventionService {
             end(running, "expired", "superseded", "superseded");
             markMissedIfNudging(running.blockId());
         }
+        // v3 §3.5: 이전 블록이 아직 started 면 partial 로 끝낸다(할 일 remaining 은 그대로).
+        for (Store.Block started : store.startedBlocks()) {
+            if (started.id() != b.id()) {
+                db.update("""
+                                UPDATE blocks SET status = 'partial', actual_end = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ?""",
+                        now, started.id());
+                cancelBlockJobs(started.id());
+            }
+        }
 
         long id = db.insert("""
                         INSERT INTO interventions(block_id, status, level, block_version, started_at)
@@ -124,22 +139,39 @@ public class InterventionService {
 
     private boolean onExpire(Jobs.Job job) {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
-        if (i == null || !i.running()) {
+        if (i == null || !i.active()) {
             return false;
         }
         end(i, "expired", "no_response", "expired");
         store.setBlockStatus(i.blockId(), "missed");
+        enqueueMissed(i.blockId(), "no_response");
         return true;
     }
 
     private boolean onSuspendCheck(Jobs.Job job) {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
-        if (i == null || !i.running() || !time.isQuiet(clock.now())) {
+        if (i == null || !i.active() || !time.isQuiet(clock.now())) {
             return false;
         }
         end(i, "suspended", "quiet", "suspended");
         store.setBlockStatus(i.blockId(), "missed");
+        enqueueMissed(i.blockId(), "quiet");
         return true;
+    }
+
+    /** [시작]으로 작업이 시작되면 비서가 체크인을 예약하도록 block_started turn (v3 §6 작업 중 동행, DECISIONS 참고). */
+    private void enqueueStarted(long blockId) {
+        ObjectNode ref = Json.object();
+        ref.put("block_id", blockId);
+        turns.enqueue("block_started", ref, TurnQueue.PRIORITY_DEFAULT);
+    }
+
+    /** v3 §3.6: 블록이 missed 가 되면 block_missed turn. */
+    private void enqueueMissed(long blockId, String reason) {
+        ObjectNode ref = Json.object();
+        ref.put("block_id", blockId);
+        ref.put("reason", reason);
+        turns.enqueue("block_missed", ref, TurnQueue.PRIORITY_DEFAULT);
     }
 
     private boolean onBlockEnd(Jobs.Job job) {
@@ -148,11 +180,16 @@ public class InterventionService {
             return false;
         }
         switch (b.status()) {
-            case "planned" -> store.setBlockStatus(b.id(), "missed");
-            case "started" -> db.update("""
-                            UPDATE blocks SET status = 'done', actual_end = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?""",
-                    clock.now(), b.id());
+            case "planned" -> {
+                store.setBlockStatus(b.id(), "missed");
+                enqueueMissed(b.id(), "never_started");
+            }
+            case "started" -> {
+                // v3 §3.5(변경): 자동 done 을 없앴다. 상태는 그대로 두고 비서가 진행을 묻는다.
+                ObjectNode ref = Json.object();
+                ref.put("block_id", b.id());
+                turns.enqueue("block_ended", ref, TurnQueue.PRIORITY_DEFAULT);
+            }
             default -> {
                 // nudging 은 expire 가 처리한다. 끝난 블록은 그대로.
             }
@@ -171,6 +208,7 @@ public class InterventionService {
         jobs.cancelForTarget(RESHOW, i.id());
         jobs.cancelForTarget(EXPIRE, i.id());
         jobs.cancelForTarget(SUSPEND, i.id());
+        jobs.cancelForTarget(NEGOTIATION_TIMEOUT, i.id());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "intervention.end");
         data.put("intervention_id", String.valueOf(i.id()));
@@ -182,6 +220,74 @@ public class InterventionService {
     /** 블록이 취소·이동될 때. 진행 중 개입을 cancelled 로 끝낸다. */
     public void cancelRunningForBlock(long blockId) {
         store.runningForBlock(blockId).ifPresent(i -> end(i, "cancelled", "cancelled", "cancelled"));
+    }
+
+    /**
+     * v3 §3.4(변경): move_block 이 nudging 블록을 옮길 때 진행 중 개입을 snoozed(end_reason=moved)로 끝낸다.
+     * movedMinutes = 새 start − 기존 start (get_facts 의 미룬 분 합).
+     */
+    public void snoozeForMove(long blockId, long movedMinutes) {
+        store.runningForBlock(blockId).ifPresent(i -> {
+            end(i, "snoozed", "moved", "snoozed");
+            db.update("UPDATE interventions SET snoozed_minutes = ? WHERE id = ?", (int) movedMinutes, i.id());
+        });
+    }
+
+    // ---------------------------------------------------------------- 미루기 협상 (v3 §3.1~3.3)
+
+    private boolean onNegotiationTimeout(Jobs.Job job) {
+        Store.Intervention i = store.intervention(job.targetId()).orElse(null);
+        if (i == null || !"negotiating".equals(i.status()) || job.expectedVersion() == null
+                || i.version() != job.expectedVersion()) {
+            return false;
+        }
+        db.update("""
+                        UPDATE interventions SET status = 'running', negotiate_until = NULL, version = version + 1,
+                        updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                i.id());
+        sendLevel(store.intervention(i.id()).orElseThrow());
+        jobs.schedule(RESHOW, i.id(),
+                clock.now().plus(Duration.ofMinutes(settings.getInt("fullscreen.reshow_minutes"))), null);
+        return true;
+    }
+
+    /** 협상 중 사용자 메시지가 오면 협상 시간을 연장한다(v3 §3.2). */
+    public void extendNegotiation() {
+        for (Store.Intervention i : store.runningInterventions()) {
+            if ("negotiating".equals(i.status())) {
+                startNegotiation(i);
+            }
+        }
+    }
+
+    /** negotiate_until = now + timeout, version +1, reshow 중단, timeout 작업 (재)예약. */
+    private Store.Intervention startNegotiation(Store.Intervention i) {
+        Instant until = clock.now().plus(Duration.ofMinutes(settings.getInt("negotiation.timeout_minutes")));
+        db.update("""
+                        UPDATE interventions SET status = 'negotiating', negotiate_until = ?, version = version + 1,
+                        updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                until, i.id());
+        Store.Intervention updated = store.intervention(i.id()).orElseThrow();
+        jobs.cancelForTarget(RESHOW, i.id());
+        jobs.cancelForTarget(NEGOTIATION_TIMEOUT, i.id());
+        jobs.schedule(NEGOTIATION_TIMEOUT, i.id(), until, updated.version());
+        return updated;
+    }
+
+    private String snoozeRequest(Long interventionId, Long blockId) {
+        Optional<Store.Intervention> found = resolve(interventionId, blockId);
+        store.log(found.map(Store.Intervention::id).orElse(null),
+                found.map(Store.Intervention::blockId).orElse(blockId),
+                found.map(Store.Intervention::level).orElse(null), clock.now(), "snooze_request");
+        if (found.isEmpty() || !found.get().running()) {
+            return "ok";
+        }
+        Store.Intervention i = startNegotiation(found.get());
+        ObjectNode ref = Json.object();
+        ref.put("intervention_id", i.id());
+        ref.put("block_id", i.blockId());
+        turns.enqueue("snooze_request", ref, TurnQueue.PRIORITY_USER);
+        return "ok";
     }
 
     private void markMissedIfNudging(long blockId) {
@@ -207,6 +313,9 @@ public class InterventionService {
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
         data.put("block_end", time.iso(b.end()));
         data.put("expire_at", time.iso(expireAt(b)));
+        if (b.workProductId() != null) {
+            data.put("work_product_id", String.valueOf(b.workProductId()));
+        }
         data.put("plan_version", String.valueOf(plan.version()));
         push.pushAll(data);
         store.log(i.id(), b.id(), i.level(), clock.now(), "sent");
@@ -243,7 +352,8 @@ public class InterventionService {
         Long blockId = numericId(req.path("block_id"));
         String status = switch (type) {
             case "start" -> start(interventionId, blockId);
-            case "dismiss", "snooze_request" -> dismiss(interventionId, blockId);
+            case "dismiss" -> dismiss(interventionId, blockId);
+            case "snooze_request" -> snoozeRequest(interventionId, blockId);
             case "local_fired" -> localFired(blockId);
             default -> throw ApiException.badRequest("알 수 없는 액션입니다: " + type);
         };
@@ -267,7 +377,7 @@ public class InterventionService {
     private Optional<Store.Intervention> resolve(Long interventionId, Long blockId) {
         Optional<Store.Intervention> byId = interventionId == null ? Optional.empty()
                 : store.intervention(interventionId);
-        if (byId.isPresent() && byId.get().running()) {
+        if (byId.isPresent() && byId.get().active()) {
             return byId;
         }
         if (blockId != null) {
@@ -282,14 +392,9 @@ public class InterventionService {
     private String start(Long interventionId, Long blockId) {
         Instant now = clock.now();
         Optional<Store.Intervention> found = resolve(interventionId, blockId);
-        if (found.isPresent() && found.get().running()) {
-            Store.Intervention i = found.get();
-            end(i, "acked", "acked", "acked");
-            store.log(i.id(), i.blockId(), i.level(), now, "acked");
-            db.update("""
-                            UPDATE blocks SET status = 'started', actual_start = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?""",
-                    now, i.blockId());
+        if (found.isPresent() && found.get().active()) {
+            ack(found.get());
+            enqueueStarted(found.get().blockId());
             return "ok";
         }
 
@@ -307,7 +412,19 @@ public class InterventionService {
             return "ok";
         }
         startBlockNow(b, t, now);
+        enqueueStarted(b.id());
         return "accepted_as_start_now";
+    }
+
+    /** 진행 중 개입을 acked 로 끝내고 블록을 started 로. [시작] 액션과 start_now 도구가 쓴다. */
+    public void ack(Store.Intervention i) {
+        Instant now = clock.now();
+        end(i, "acked", "acked", "acked");
+        store.log(i.id(), i.blockId(), i.level(), now, "acked");
+        db.update("""
+                        UPDATE blocks SET status = 'started', actual_start = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?""",
+                now, i.blockId());
     }
 
     private void startBlockNow(Store.Block b, Store.Task t, Instant now) {

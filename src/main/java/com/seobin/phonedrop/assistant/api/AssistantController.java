@@ -27,6 +27,7 @@ import com.seobin.phonedrop.assistant.Store;
 import com.seobin.phonedrop.assistant.TaskAdminService;
 import com.seobin.phonedrop.assistant.TimeUtil;
 import com.seobin.phonedrop.assistant.Tx;
+import com.seobin.phonedrop.assistant.agent.ProactiveService;
 import com.seobin.phonedrop.assistant.push.PushService;
 
 import tools.jackson.databind.JsonNode;
@@ -50,10 +51,11 @@ public class AssistantController {
     private final Store store;
     private final Jobs jobs;
     private final PushService push;
+    private final ProactiveService proactive;
 
     public AssistantController(Tx tx, AssistantClock clock, TimeUtil time, DeviceService devices,
                                InterventionService interventions, TaskAdminService tasks, SettingsService settings,
-                               PlanService plan, Store store, Jobs jobs, PushService push) {
+                               PlanService plan, Store store, Jobs jobs, PushService push, ProactiveService proactive) {
         this.tx = tx;
         this.clock = clock;
         this.time = time;
@@ -65,6 +67,7 @@ public class AssistantController {
         this.store = store;
         this.jobs = jobs;
         this.push = push;
+        this.proactive = proactive;
     }
 
     @GetMapping("/health")
@@ -127,6 +130,7 @@ public class AssistantController {
         int version = tx.run(() -> {
             settings.put(key, body.get("value"));
             interventions.onSettingsChanged();
+            proactive.ensureJobs(); // 기상·취침·pulse 간격이 바뀌었을 수 있다
             return plan.bumpAndSync();
         });
         return Map.of("ok", true, "plan_version", version);
@@ -145,6 +149,8 @@ public class AssistantController {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", i.id());
                 m.put("block_id", i.blockId());
+                m.put("status", i.status());
+                m.put("negotiate_until", time.iso(i.negotiateUntil()));
                 m.put("level", i.level());
                 m.put("started_at", time.iso(i.startedAt()));
                 return m;

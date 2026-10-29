@@ -1,4 +1,4 @@
-# 실행 비서 평가 세트(빌드문서 v2 §12.3). 실제 Claude API 를 부르므로 비용이 든다.
+# 실행 비서 평가 세트(빌드문서 v2 §12.3, v3 §9.2, 폴더 선택 -Deval.dirs=v3). 실제 Claude API 를 부르므로 비용이 든다.
 #   ANTHROPIC_API_KEY=sk-ant-... make eval   → evals/report.md
 .PHONY: eval test
 eval:

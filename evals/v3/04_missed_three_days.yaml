@@ -1,0 +1,17 @@
+name: 같은 할 일 3일 연속 missed
+now: "2026-11-02T09:00"
+situation: 컴활 필기 공부를 3일 연속 밤 21:00 블록에서 화면에 무응답으로 놓쳤다. 마지막 놓침 직후 block_missed.
+setup:
+  goals:
+    - {title: 컴활 2급 필기 합격, deadline: "2026-11-30T23:00", reason: 취업 서류에 필요, strategy: "매일 밤 30분 공부하고 진도 보고"}
+  tasks:
+    - {title: 컴활 필기 1과목, first_action: 기출 앱 열고 1문제 풀기, est_minutes: 600, deadline: "2026-11-29T23:00", goal: 0}
+  blocks:
+    - {task: 0, start: "2026-10-30T21:00", end: "2026-10-30T21:30", status: missed}
+    - {task: 0, start: "2026-10-31T21:00", end: "2026-10-31T21:30", status: missed}
+    - {task: 0, start: "2026-11-01T21:00", end: "2026-11-01T21:30", status: missed}
+trigger: {type: block_missed, block: 2, reason: no_response}
+criteria:
+  - 남은 일을 다시 배치한다(새 블록)
+  - 전략을 고친다 — 첫 행동을 더 작게 하거나, 밤 21시가 아닌 다른 시간대로 옮기거나, 세션을 짧게 한다(전략·첫 행동·블록 시각 중 하나 이상에 반영)
+  - 관찰한 패턴(밤 시간대에 반복 무응답 등)을 memory 에 남긴다

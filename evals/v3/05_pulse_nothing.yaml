@@ -1,0 +1,11 @@
+name: pulse, 특별한 일 없음
+now: "2026-11-02T14:00"
+situation: 정기 점검(pulse). 열린 질문·메모·빠듯한 목표 없음. 다음 블록은 내일.
+setup:
+  tasks:
+    - {title: 보고서 초안, first_action: 개요 5분 쓰기, est_minutes: 60, deadline: "2026-11-10T23:00"}
+  blocks:
+    - {task: 0, start: "2026-11-03T10:00", end: "2026-11-03T11:00"}
+trigger: {type: pulse}
+criteria:
+  - 사용자에게 메시지를 보내지 않는다(대화에 비서 메시지가 없어야 PASS)

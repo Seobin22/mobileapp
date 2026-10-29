@@ -30,6 +30,21 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getStringSet("scheduled_blocks", emptySet()) ?: emptySet()
         set(value) = prefs.edit().putStringSet("scheduled_blocks", value).apply()
 
+    /** 미루기 협상이 끝나는 시각(epoch ms). 채팅 상단 배너용. 0 이면 협상 중 아님. */
+    var negotiationUntil: Long
+        get() = prefs.getLong("negotiation_until", 0)
+        set(value) = prefs.edit().putLong("negotiation_until", value).apply()
+
+    /** 아직 서버에 보내지 않은 오늘 첫 잠금 해제 시각(ISO). 하트비트 events 로 보낸다(v3 §5.2). */
+    var pendingFirstUnlock: String?
+        get() = prefs.getString("pending_first_unlock", null)
+        set(value) = prefs.edit().putString("pending_first_unlock", value).apply()
+
+    /** 마지막으로 첫 잠금 해제를 기록한 날짜(yyyy-MM-dd). */
+    var firstUnlockDay: String?
+        get() = prefs.getString("first_unlock_day", null)
+        set(value) = prefs.edit().putString("first_unlock_day", value).apply()
+
     val configured: Boolean get() = apiToken.isNotBlank() && serverUrl.isNotBlank()
 
     companion object {

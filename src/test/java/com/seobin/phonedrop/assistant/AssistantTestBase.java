@@ -82,7 +82,8 @@ abstract class AssistantTestBase {
     void resetState() {
         push = (FakePush) pushBean;
         for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
-                "intervention_logs", "interventions", "jobs", "blocks", "tasks", "goals", "events", "notes",
+                "intervention_logs", "interventions", "jobs", "blocks", "work_products", "wakeups", "daily_flags", "tasks",
+                "goals", "events", "notes",
                 "device_events", "devices", "processed_actions", "settings"}) {
             db.update("DELETE FROM " + table);
         }

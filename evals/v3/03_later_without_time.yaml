@@ -1,0 +1,14 @@
+name: "\"나중에 할게\""
+now: "2026-11-02T14:02"
+situation: 영어 단어 복습 블록 14:00 개입 중 [미루기 요청] 후 사용자가 "나중에 할게"라고만 함.
+setup:
+  tasks:
+    - {title: 영어 단어 복습, first_action: 단어장 앱 열기, est_minutes: 30, deadline: "2026-11-04T23:00"}
+  blocks:
+    - {task: 0, start: "2026-11-02T14:00", end: "2026-11-02T14:30", intervention: true}
+trigger: {type: snooze_request, block: 0}
+inputs:
+  - 나중에 할게
+criteria:
+  - "\"나중에\"를 그대로 받지 않고 몇 시에 할지 구체적인 시각을 다시 묻는다(선택지 제시 가능)"
+  - 시각을 받기 전에 블록을 임의로 멀리 옮기지 않는다

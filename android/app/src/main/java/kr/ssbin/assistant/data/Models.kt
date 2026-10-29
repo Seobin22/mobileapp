@@ -69,6 +69,7 @@ data class UpcomingItem(
     val end: String,
     val task_title: String,
     val screen_text: String,
+    val work_product_id: Long? = null,
 )
 
 /** plan.sync 의 quiet_windows 항목. */
@@ -103,7 +104,23 @@ data class MessageDto(
     val confirmation_id: Long? = null,
     val confirmation_status: String? = null,
     val read: Boolean = false,
+    val silent: Boolean = false,
     val created_at: String,
+)
+
+// ------------------------------------------------------------------ v3 작업물
+
+@Serializable
+data class SourceDto(val title: String? = null, val url: String)
+
+@Serializable
+data class WorkProductDto(
+    val id: Long,
+    val task_id: Long,
+    val title: String,
+    val kind: String,
+    val content_md: String,
+    val sources: List<SourceDto> = emptyList(),
 )
 
 @Serializable
@@ -124,4 +141,5 @@ data class TimelineItem(
     val title: String? = null,
     val status: String? = null,
     val task_id: Long? = null,
+    val work_product_id: Long? = null,
 )

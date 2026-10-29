@@ -24,7 +24,9 @@ import java.util.UUID
 object Chat {
 
     const val CHANNEL_CHAT = "chat"
+    const val CHANNEL_CHECKIN = "checkin"
     private const val NOTIFICATION_ID = 3001
+    private const val CHECKIN_NOTIFICATION_ID = 3002
 
     private val _refresh = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
 
@@ -36,8 +38,15 @@ object Chat {
     }
 
     fun createChannel(context: Context) {
-        val channel = NotificationChannel(CHANNEL_CHAT, "비서 메시지", NotificationManager.IMPORTANCE_DEFAULT)
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_CHAT, "비서 메시지", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_CHECKIN, "작업 중 체크인", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "작업 중에 진행을 묻는 메시지"
+            }
+        )
     }
 
     /** source: chat | voice | widget */
@@ -54,12 +63,16 @@ object Chat {
         return response
     }
 
-    /** chat.message 푸시. silent=true 면 알림 없이 채팅에만 쌓인다(v2 는 항상 false). */
+    /** chat.message 푸시. silent=true 면 알림 없이 채팅에만 쌓인다(서버가 정함, v3 §4.5). */
     fun onChatPush(context: Context, data: Map<String, String>) {
         requestRefresh()
         if (data["silent"] == "true") return
         if (ChatVisibility.visible) return // 채팅 화면을 보고 있으면 알림을 띄우지 않는다
-        notify(context, "실행 비서", data["preview"].orEmpty())
+        if (data["channel"] == CHANNEL_CHECKIN) {
+            notify(context, "진행 확인", data["preview"].orEmpty(), CHANNEL_CHECKIN, CHECKIN_NOTIFICATION_ID)
+        } else {
+            notify(context, "실행 비서", data["preview"].orEmpty())
+        }
     }
 
     fun onConfirmationPush(context: Context, data: Map<String, String>) {
@@ -68,7 +81,13 @@ object Chat {
         notify(context, "확인이 필요해요", data["text"].orEmpty())
     }
 
-    private fun notify(context: Context, title: String, text: String) {
+    private fun notify(
+        context: Context,
+        title: String,
+        text: String,
+        channel: String = CHANNEL_CHAT,
+        notificationId: Int = NOTIFICATION_ID,
+    ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -80,7 +99,7 @@ object Chat {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notification = NotificationCompat.Builder(context, CHANNEL_CHAT)
+        val notification = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
@@ -88,11 +107,12 @@ object Chat {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+        NotificationManagerCompat.from(context).notify(notificationId, notification)
     }
 
     fun clearNotification(context: Context) {
         NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+        NotificationManagerCompat.from(context).cancel(CHECKIN_NOTIFICATION_ID)
     }
 }
 

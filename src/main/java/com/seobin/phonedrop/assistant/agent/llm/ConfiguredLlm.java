@@ -77,7 +77,7 @@ public class ConfiguredLlm implements LlmClient {
     }
 
     @Override
-    public Conversation start(String system, JsonNode toolDefinitions, String userContent) {
-        return client().start(system, toolDefinitions, userContent);
+    public Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch) {
+        return client().start(system, toolDefinitions, userContent, webSearch);
     }
 }

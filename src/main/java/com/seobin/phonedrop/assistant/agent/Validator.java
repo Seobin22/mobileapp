@@ -53,35 +53,51 @@ public class Validator {
                     violations.add(label + ": 할일#" + b.taskId() + "은 " + t.status() + " 상태라 배치할 수 없습니다");
                 }
             }
-            // 1. 새 블록끼리, 유지 블록과 겹침
+            // 1. 새 블록끼리 겹침
             for (int j = 0; j < i; j++) {
                 NewBlock o = newBlocks.get(j);
                 if (overlaps(b.start(), b.end(), o.start(), o.end())) {
                     violations.add(label + "이 " + label(o) + "과 겹칩니다");
                 }
             }
-            for (Store.Block k : keepBlocks) {
-                if (overlaps(b.start(), b.end(), k.start(), k.end())) {
-                    violations.add(label + "이 다른 블록(" + range(k.start(), k.end()) + ", "
-                            + taskTitle(k.taskId()) + ", 블록#" + k.id() + " " + k.status() + ")과 겹칩니다");
-                }
-            }
-            // 2. 일정(버퍼 포함)
-            for (Store.Event e : store.activeEventsOverlapping(b.start(), b.end())) {
-                violations.add(label + "이 " + e.title() + "(버퍼 포함 " + range(e.blockedStart(), e.blockedEnd())
-                        + ", 일정#" + e.id() + ")와 겹칩니다");
-            }
-            // 3. 수면·방해 금지
-            for (TimeUtil.Window q : time.quietWindows(b.start(), b.end())) {
-                violations.add(label + "이 수면·방해 금지 시간(" + range(q.start(), q.end()) + ")과 겹칩니다");
-                break;
-            }
-            // 4. 식사
-            for (TimeUtil.Window m : time.dailyWindows("life.meals", b.start(), b.end())) {
-                violations.add(label + "이 식사 시간(" + range(m.start(), m.end()) + ")과 겹칩니다");
-            }
+            checkConflicts(label, b, keepBlocks, violations);
         }
         return violations;
+    }
+
+    /**
+     * 시간 구간만 검사한다(유지 블록·일정·수면·방해 금지·식사). 과거·길이·할 일 검사는 하지 않는다.
+     * extend_block 의 늘어나는 구간(v3 §4.2)용.
+     */
+    public List<String> validateRange(long taskId, Instant start, Instant end, List<Store.Block> keepBlocks) {
+        List<String> violations = new ArrayList<>();
+        NewBlock b = new NewBlock(taskId, start, end);
+        checkConflicts(label(b), b, keepBlocks, violations);
+        return violations;
+    }
+
+    private void checkConflicts(String label, NewBlock b, List<Store.Block> keepBlocks, List<String> violations) {
+        // 1. 유지 블록과 겹침
+        for (Store.Block k : keepBlocks) {
+            if (overlaps(b.start(), b.end(), k.start(), k.end())) {
+                violations.add(label + "이 다른 블록(" + range(k.start(), k.end()) + ", "
+                        + taskTitle(k.taskId()) + ", 블록#" + k.id() + " " + k.status() + ")과 겹칩니다");
+            }
+        }
+        // 2. 일정(버퍼 포함)
+        for (Store.Event e : store.activeEventsOverlapping(b.start(), b.end())) {
+            violations.add(label + "이 " + e.title() + "(버퍼 포함 " + range(e.blockedStart(), e.blockedEnd())
+                    + ", 일정#" + e.id() + ")와 겹칩니다");
+        }
+        // 3. 수면·방해 금지
+        for (TimeUtil.Window q : time.quietWindows(b.start(), b.end())) {
+            violations.add(label + "이 수면·방해 금지 시간(" + range(q.start(), q.end()) + ")과 겹칩니다");
+            break;
+        }
+        // 4. 식사
+        for (TimeUtil.Window m : time.dailyWindows("life.meals", b.start(), b.end())) {
+            violations.add(label + "이 식사 시간(" + range(m.start(), m.end()) + ")과 겹칩니다");
+        }
     }
 
     private String label(NewBlock b) {

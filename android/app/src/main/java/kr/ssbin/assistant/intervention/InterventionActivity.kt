@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,10 +33,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kr.ssbin.assistant.data.AppDatabase
 import kr.ssbin.assistant.data.InterventionEntity
+import kr.ssbin.assistant.ui.MainActivity
+import kr.ssbin.assistant.ui.WorkProductActivity
 import java.util.Locale
 
 /**
- * 잠금화면 위에 뜨는 개입 화면. 큰 제목, 한 문장, [시작] 버튼 하나(v1 에는 미루기 없음).
+ * 잠금화면 위에 뜨는 개입 화면. 큰 제목, 한 문장, [시작] 버튼, 그 아래 작은 [미루기 요청](v3 §8.1).
  * [시작]이 아닌 방법(뒤로가기·홈·화면 꺼짐)으로 나가면 dismiss 를 보내고 reshow_minutes 뒤 다시 띄운다.
  */
 class InterventionActivity : ComponentActivity() {
@@ -99,6 +102,10 @@ class InterventionActivity : ComponentActivity() {
                             .height(72.dp),
                     ) {
                         Text("시작", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    TextButton(onClick = { onSnoozePressed() }, enabled = current != null) {
+                        Text("미루기 요청", color = Color(0xFFBFA8B0), fontSize = 15.sp)
                     }
                 }
             }
@@ -167,6 +174,22 @@ class InterventionActivity : ComponentActivity() {
         handled = true
         val app = applicationContext
         Thread { InterventionController.onUserStart(app, current) }.start()
+        // 준비된 작업물이 있으면 바로 연다
+        current.workProductId?.let { startActivity(WorkProductActivity.intent(this, it)) }
+        finish()
+    }
+
+    /** [미루기 요청]: 화면을 닫고 채팅에서 비서와 협상한다. */
+    private fun onSnoozePressed() {
+        val current = entity.value ?: return
+        handled = true
+        val app = applicationContext
+        Thread { InterventionController.onUserSnooze(app, current) }.start()
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_OPEN_CHAT, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        )
         finish()
     }
 

@@ -10,7 +10,12 @@ import tools.jackson.databind.JsonNode;
  */
 public interface LlmClient {
 
-    Conversation start(String system, JsonNode toolDefinitions, String userContent);
+    /** webSearch: Anthropic 서버 측 웹 검색 도구(web_search)를 함께 켠다(빌드문서 v3 §4.4). */
+    Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch);
+
+    default Conversation start(String system, JsonNode toolDefinitions, String userContent) {
+        return start(system, toolDefinitions, userContent, false);
+    }
 
     interface Conversation {
         /** 다음 응답. 네트워크·5xx·타임아웃은 LlmException. */

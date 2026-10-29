@@ -63,6 +63,9 @@ public class PlanService {
             o.put("end", time.iso(b.end()));
             o.put("task_title", store.task(b.taskId()).map(Store.Task::title).orElse(""));
             o.put("screen_text", b.screenText());
+            if (b.workProductId() != null) {
+                o.put("work_product_id", b.workProductId());
+            }
         }
 
         Map<String, String> data = new LinkedHashMap<>();
@@ -73,6 +76,7 @@ public class PlanService {
         data.put("local_backup_grace_seconds", String.valueOf(settings.getInt("local_backup.grace_seconds")));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
         data.put("expire_grace_minutes", String.valueOf(settings.getInt("intervention.expire_grace_minutes")));
+        data.put("negotiation_timeout_minutes", String.valueOf(settings.getInt("negotiation.timeout_minutes")));
         return data;
     }
 }

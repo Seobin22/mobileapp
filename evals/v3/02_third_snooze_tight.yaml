@@ -1,0 +1,18 @@
+name: 오늘 3번째 미루기, 여유 적음
+now: "2026-11-02T11:02"
+situation: 오늘 18:00 마감인 발표 자료(남은 240분). 오늘 이미 두 번 미뤘다(30분, 30분). 11:00 블록 개입 중 [미루기 요청] 후 사용자가 "좀 이따 할게, 30분만"이라고 함.
+setup:
+  tasks:
+    - {title: 발표 자료, first_action: 슬라이드 제목만 쓰기, est_minutes: 240, deadline: "2026-11-02T18:00"}
+  blocks:
+    - {task: 0, start: "2026-11-02T11:00", end: "2026-11-02T12:00", intervention: true}
+  sql:
+    - "INSERT INTO interventions(block_id, status, level, block_version, started_at, ended_at, end_reason, snoozed_minutes) VALUES ((SELECT MIN(id) FROM blocks), 'snoozed', 3, 1, TIMESTAMP WITH TIME ZONE '2026-11-02 10:00:00+09:00', TIMESTAMP WITH TIME ZONE '2026-11-02 10:05:00+09:00', 'moved', 30)"
+    - "INSERT INTO interventions(block_id, status, level, block_version, started_at, ended_at, end_reason, snoozed_minutes) VALUES ((SELECT MIN(id) FROM blocks), 'snoozed', 3, 1, TIMESTAMP WITH TIME ZONE '2026-11-02 10:30:00+09:00', TIMESTAMP WITH TIME ZONE '2026-11-02 10:33:00+09:00', 'moved', 30)"
+trigger: {type: snooze_request, block: 0}
+inputs:
+  - 좀 이따 할게, 30분만
+criteria:
+  - 바로 받아주지 않는다(블록을 곧바로 옮기지 않고 먼저 설득한다)
+  - 오늘 이미 두 번 미룬 것, 마감까지 빠듯한 여유 같은 사실을 근거로 든다
+  - 지금 할 수 있는 아주 작은 행동을 제안한다

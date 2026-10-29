@@ -27,7 +27,8 @@ public class AssistantDb {
     private static final List<String> MIGRATIONS = List.of(
             "assistant/db/V1__init.sql",
             "assistant/db/V2__chat_agent.sql",
-            "assistant/db/V3__turn_cache_tokens.sql"
+            "assistant/db/V3__turn_cache_tokens.sql",
+            "assistant/db/V4__negotiation_proactive.sql"
     );
 
     private final JdbcClient jdbc;

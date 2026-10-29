@@ -21,6 +21,8 @@ import org.springframework.web.bind.annotation.RestController;
 import com.seobin.phonedrop.assistant.ApiException;
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.Json;
+import com.seobin.phonedrop.assistant.SettingsService;
 import com.seobin.phonedrop.assistant.TimeUtil;
 import com.seobin.phonedrop.assistant.Tx;
 import com.seobin.phonedrop.assistant.agent.ChatService;
@@ -42,9 +44,12 @@ public class ChatController {
     private final ConfirmationService confirmations;
     private final Timeline timeline;
     private final ConfiguredLlm llm;
+    private final SettingsService settings;
+    private final TimeUtil time;
 
     public ChatController(Tx tx, AssistantDb db, AssistantClock clock, ChatService chat,
-                          ConfirmationService confirmations, Timeline timeline, ConfiguredLlm llm) {
+                          ConfirmationService confirmations, Timeline timeline, ConfiguredLlm llm,
+                          SettingsService settings, TimeUtil time) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -52,6 +57,8 @@ public class ChatController {
         this.confirmations = confirmations;
         this.timeline = timeline;
         this.llm = llm;
+        this.settings = settings;
+        this.time = time;
     }
 
     @PostMapping("/messages")
@@ -88,6 +95,74 @@ public class ChatController {
             throw ApiException.badRequest("to 는 from 보다 뒤여야 합니다");
         }
         return tx.run(() -> timeline.timeline(f, t, false));
+    }
+
+    /** 작업물(빌드문서 v3 §7). */
+    @GetMapping("/work_products/{id}")
+    public Map<String, Object> workProduct(@PathVariable long id) {
+        return tx.run(() -> db.jdbc().sql("SELECT * FROM work_products WHERE id = ?").param(id)
+                .query((rs, n) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", rs.getLong("id"));
+                    m.put("task_id", rs.getLong("task_id"));
+                    m.put("title", rs.getString("title"));
+                    m.put("kind", rs.getString("kind"));
+                    m.put("content_md", rs.getString("content_md"));
+                    m.put("sources", Json.parse(rs.getString("sources")));
+                    m.put("created_at", time.iso(AssistantDb.instant(rs, "created_at")));
+                    return m;
+                }).optional())
+                .orElseThrow(() -> ApiException.notFound("작업물이 없습니다: " + id));
+    }
+
+    /** 관리 화면용: 먼저 말 걸기 상태(메시지 예산, 예약된 wakeup, 아침·저녁 완료, 최근 작업물). */
+    @GetMapping("/admin/proactive")
+    public Map<String, Object> proactiveStatus() {
+        return tx.run(() -> {
+            Map<String, Object> result = new LinkedHashMap<>();
+            int[] sent = chat.proactiveToday();
+            result.put("messages_today", sent[0]);
+            result.put("daily_budget", settings.getInt("messages.daily_budget"));
+            result.put("high_today", sent[1]);
+            result.put("high_per_day", settings.getInt("messages.high_per_day"));
+            result.put("turns_today", chat.turnsToday());
+            result.put("turn_soft_limit", settings.getInt("agent.daily_turn_soft"));
+            result.put("wakeups", db.jdbc().sql("""
+                            SELECT w.id, w.fire_at, w.reason, w.task_id, w.status, t.title FROM wakeups w
+                            LEFT JOIN tasks t ON t.id = w.task_id
+                            WHERE w.status = 'scheduled' OR w.updated_at >= ? ORDER BY w.fire_at DESC LIMIT 30""")
+                    .param(AssistantDb.ts(clock.now().minus(Duration.ofDays(1))))
+                    .query((rs, n) -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("id", rs.getLong("id"));
+                        m.put("fire_at", time.iso(AssistantDb.instant(rs, "fire_at")));
+                        m.put("reason", rs.getString("reason"));
+                        m.put("task_id", rs.getObject("task_id"));
+                        m.put("task_title", rs.getString("title"));
+                        m.put("status", rs.getString("status"));
+                        return m;
+                    }).list());
+            result.put("daily_flags", db.jdbc().sql(
+                            "SELECT * FROM daily_flags ORDER BY logical_day DESC LIMIT 3")
+                    .query((rs, n) -> Map.of("logical_day", rs.getString("logical_day"),
+                            "morning_done", rs.getBoolean("morning_done"),
+                            "evening_done", rs.getBoolean("evening_done"))).list());
+            result.put("work_products", db.jdbc().sql("""
+                            SELECT w.id, w.task_id, w.title, w.kind, w.created_at,
+                            (SELECT MIN(b.id) FROM blocks b WHERE b.work_product_id = w.id) block_id
+                            FROM work_products w ORDER BY w.id DESC LIMIT 20""")
+                    .query((rs, n) -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("id", rs.getLong("id"));
+                        m.put("task_id", rs.getLong("task_id"));
+                        m.put("title", rs.getString("title"));
+                        m.put("kind", rs.getString("kind"));
+                        m.put("block_id", rs.getObject("block_id"));
+                        m.put("created_at", time.iso(AssistantDb.instant(rs, "created_at")));
+                        return m;
+                    }).list());
+            return result;
+        });
     }
 
     /** 관리 화면에서 Anthropic API 키 저장. 값은 다시 돌려주지 않는다. */

@@ -1,0 +1,13 @@
+name: pulse, 2일 전 질문 미답
+now: "2026-11-02T15:00"
+situation: 이틀 전 비서가 "보고서 분량을 몇 장으로 할까요?"라고 물었는데 답이 없다. 정기 점검(pulse).
+setup:
+  tasks:
+    - {title: 보고서 초안, first_action: 개요 5분 쓰기, est_minutes: 180, deadline: "2026-11-06T23:30"}
+  sql:
+    - "INSERT INTO questions(text, options, asked_at) VALUES ('보고서 분량을 몇 장으로 할까요?', '[\"5장\",\"10장\"]', TIMESTAMP WITH TIME ZONE '2026-10-31 15:00:00+09:00')"
+    - "INSERT INTO messages(role, content, kind, question_id, created_at) VALUES ('assistant', '보고서 분량을 몇 장으로 할까요?', 'question', (SELECT MAX(id) FROM questions), TIMESTAMP WITH TIME ZONE '2026-10-31 15:00:00+09:00')"
+trigger: {type: pulse}
+criteria:
+  - 답 안 한 질문을 다시 묻거나(선택지 가능), 답 없이 진행할 수 있게 합리적으로 정하고 그 결정을 알린다
+  - 메시지는 짧고 하나로 충분하다

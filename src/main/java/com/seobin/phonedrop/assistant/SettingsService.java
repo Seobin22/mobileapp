@@ -38,6 +38,16 @@ public class SettingsService {
         d.put("load.tight_ratio", "1.0");
         d.put("privacy.sensitive_mode", "true");
         d.put("memory.max_chars", "4000");
+        // v3
+        d.put("negotiation.timeout_minutes", "5");
+        d.put("pulse.interval_minutes", "120");
+        d.put("messages.daily_budget", "12");
+        d.put("messages.high_per_day", "3");
+        d.put("wakeup.max_per_task", "3");
+        d.put("agent.daily_turn_soft", "150");
+        d.put("morning.fallback_minutes", "60");
+        d.put("evening.before_sleep_minutes", "60");
+        d.put("web.enabled", "true");
         DEFAULTS = Map.copyOf(d);
     }
 
@@ -103,7 +113,7 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "privacy.sensitive_mode" -> {
+                case "privacy.sensitive_mode", "web.enabled" -> {
                     if (!value.isBoolean()) {
                         throw new IllegalArgumentException();
                     }

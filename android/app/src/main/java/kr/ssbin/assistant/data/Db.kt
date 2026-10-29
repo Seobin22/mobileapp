@@ -14,7 +14,7 @@ import androidx.room.Upsert
 
 /**
  * 받은 개입. id 는 서버 intervention_id, 또는 로컬 백업이 띄운 "local:{block_id}".
- * status: running | ended
+ * status: running | negotiating(미루기 협상 중, v3) | ended
  */
 @Entity(tableName = "interventions")
 data class InterventionEntity(
@@ -31,6 +31,8 @@ data class InterventionEntity(
     val status: String,
     val fromServer: Boolean,
     val updatedAt: Long,
+    /** [시작] 때 바로 열 작업물(v3 §8.1). */
+    val workProductId: Long? = null,
 )
 
 @Entity(tableName = "pending_actions")
@@ -50,6 +52,7 @@ data class PlanSnapshot(
     val graceSeconds: Int,
     val expireGraceMinutes: Int,
     val reshowMinutes: Int,
+    val negotiationMinutes: Int = 5,
 )
 
 /** 메인 스레드가 아닌 곳(서비스·리시버 스레드·IO 디스패처)에서만 부른다. */
@@ -66,6 +69,9 @@ interface AssistantDao {
 
     @Query("DELETE FROM interventions WHERE id = :id")
     fun deleteIntervention(id: String)
+
+    @Query("UPDATE interventions SET status = :status, updatedAt = :now WHERE id = :id")
+    fun setInterventionStatus(id: String, status: String, now: Long)
 
     @Query("UPDATE interventions SET status = 'ended', updatedAt = :now WHERE id = :id OR id = :localId")
     fun endIntervention(id: String, localId: String, now: Long)
@@ -88,7 +94,7 @@ interface AssistantDao {
 
 @Database(
     entities = [InterventionEntity::class, PendingAction::class, PlanSnapshot::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

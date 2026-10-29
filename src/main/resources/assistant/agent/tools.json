@@ -5,10 +5,19 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "from": {"type": "string", "description": "시작 시각 ISO-8601"},
-        "to": {"type": "string", "description": "끝 시각 ISO-8601"}
+        "from": {
+          "type": "string",
+          "description": "시작 시각 ISO-8601"
+        },
+        "to": {
+          "type": "string",
+          "description": "끝 시각 ISO-8601"
+        }
       },
-      "required": ["from", "to"]
+      "required": [
+        "from",
+        "to"
+      ]
     }
   },
   {
@@ -17,18 +26,39 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "kind": {"type": "string", "enum": ["completions", "interventions", "messages"]},
-        "since": {"type": "string", "description": "이 시각 이후 ISO-8601"},
-        "task_id": {"type": "integer"},
-        "limit": {"type": "integer", "description": "기본 50"}
+        "kind": {
+          "type": "string",
+          "enum": [
+            "completions",
+            "interventions",
+            "messages"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "description": "이 시각 이후 ISO-8601"
+        },
+        "task_id": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "기본 50"
+        }
       },
-      "required": ["kind", "since"]
+      "required": [
+        "kind",
+        "since"
+      ]
     }
   },
   {
     "name": "get_load_summary",
     "description": "목표별(+목표 없는 할 일) 남은 작업 시간과 마감까지 빈 시간을 비교한 부하 요약. status 는 ok·tight·short·no_deadline.",
-    "input_schema": {"type": "object", "properties": {}}
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
   },
   {
     "name": "upsert_goal",
@@ -36,14 +66,40 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "id": {"type": "integer"},
-        "title": {"type": "string"},
-        "deadline": {"type": ["string", "null"], "description": "ISO-8601 또는 null(마감 없음)"},
-        "reason": {"type": "string", "description": "사용자가 이 목표를 이루고 싶은 이유"},
-        "strategy": {"type": "string"},
-        "status": {"type": "string", "enum": ["active", "done"]},
-        "sensitive": {"type": "boolean"},
-        "confirm_text": {"type": "string", "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"}
+        "id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO-8601 또는 null(마감 없음)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "사용자가 이 목표를 이루고 싶은 이유"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "done"
+          ]
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "confirm_text": {
+          "type": "string",
+          "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        }
       }
     }
   },
@@ -53,17 +109,52 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "id": {"type": "integer"},
-        "goal_id": {"type": ["integer", "null"]},
-        "title": {"type": "string"},
-        "deadline": {"type": ["string", "null"]},
-        "est_minutes": {"type": "integer"},
-        "remaining_minutes": {"type": "integer"},
-        "priority": {"type": "integer", "minimum": 1, "maximum": 5},
-        "first_action": {"type": "string", "description": "바로 시작할 수 있을 만큼 작은 첫 행동"},
-        "notes": {"type": "string"},
-        "status": {"type": "string", "enum": ["active", "done"]},
-        "sensitive": {"type": "boolean"}
+        "id": {
+          "type": "integer"
+        },
+        "goal_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "est_minutes": {
+          "type": "integer"
+        },
+        "remaining_minutes": {
+          "type": "integer"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "first_action": {
+          "type": "string",
+          "description": "바로 시작할 수 있을 만큼 작은 첫 행동"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "done"
+          ]
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
       }
     }
   },
@@ -73,14 +164,31 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "id": {"type": "integer"},
-        "title": {"type": "string"},
-        "start": {"type": "string"},
-        "end": {"type": "string"},
-        "buffer_before_min": {"type": "integer"},
-        "buffer_after_min": {"type": "integer"},
-        "sensitive": {"type": "boolean"},
-        "confirm_text": {"type": "string", "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"}
+        "id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        },
+        "end": {
+          "type": "string"
+        },
+        "buffer_before_min": {
+          "type": "integer"
+        },
+        "buffer_after_min": {
+          "type": "integer"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "confirm_text": {
+          "type": "string",
+          "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        }
       }
     }
   },
@@ -90,9 +198,20 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "id": {"type": "integer"},
-        "content": {"type": "string"},
-        "status": {"type": "string", "enum": ["open", "converted", "dismissed"]}
+        "id": {
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "converted",
+            "dismissed"
+          ]
+        }
       }
     }
   },
@@ -102,11 +221,27 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "entity": {"type": "string", "enum": ["goal", "task", "event", "note"]},
-        "id": {"type": "integer"},
-        "confirm_text": {"type": "string", "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"}
+        "entity": {
+          "type": "string",
+          "enum": [
+            "goal",
+            "task",
+            "event",
+            "note"
+          ]
+        },
+        "id": {
+          "type": "integer"
+        },
+        "confirm_text": {
+          "type": "string",
+          "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        }
       },
-      "required": ["entity", "id"]
+      "required": [
+        "entity",
+        "id"
+      ]
     }
   },
   {
@@ -114,14 +249,23 @@
     "description": "사용자에 대한 지속적인 사실을 정리한 memory 전체를 교체한다. 기존 내용을 유지하면서 고쳐 쓴다.",
     "input_schema": {
       "type": "object",
-      "properties": {"content": {"type": "string"}},
-      "required": ["content"]
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ]
     }
   },
   {
     "name": "undo_last",
     "description": "사용자의 직전 요청으로 바뀐 것을 되돌린다(\"방금 거 취소\").",
-    "input_schema": {"type": "object", "properties": {}}
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
   },
   {
     "name": "set_schedule",
@@ -129,23 +273,44 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "from": {"type": "string"},
-        "to": {"type": "string"},
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
         "blocks": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "task_id": {"type": "integer"},
-              "start": {"type": "string"},
-              "end": {"type": "string"},
-              "screen_text": {"type": "string", "description": "시작 화면 한 문장. 비우면 '지금 할 건 하나예요. {first_action}'"}
+              "task_id": {
+                "type": "integer"
+              },
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "screen_text": {
+                "type": "string",
+                "description": "시작 화면 한 문장. 비우면 '지금 할 건 하나예요. {first_action}'"
+              }
             },
-            "required": ["task_id", "start", "end"]
+            "required": [
+              "task_id",
+              "start",
+              "end"
+            ]
           }
         }
       },
-      "required": ["from", "to", "blocks"]
+      "required": [
+        "from",
+        "to",
+        "blocks"
+      ]
     }
   },
   {
@@ -154,24 +319,52 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "block_id": {"type": "integer"},
-        "new_start": {"type": "string"},
-        "new_end": {"type": "string"}
+        "block_id": {
+          "type": "integer"
+        },
+        "new_start": {
+          "type": "string"
+        },
+        "new_end": {
+          "type": "string"
+        }
       },
-      "required": ["block_id", "new_start"]
+      "required": [
+        "block_id",
+        "new_start"
+      ]
     }
   },
   {
     "name": "send_message",
-    "description": "사용자에게 메시지를 보낸다. 사용자 메시지에 대한 답은 kind=reply.",
+    "description": "사용자에게 메시지를 보낸다. 사용자 메시지에 대한 답은 kind=reply. 먼저 말 걸 때는 proactive, 아침·저녁 정리는 briefing, 작업 중 진행 확인은 checkin. 알림을 울릴지(silent)는 코드가 정하고 결과로 알려준다(방해 금지·일정·작업 중·하루 예산 초과면 알림 없이 채팅에만 쌓인다). 정말 중요한 것만 importance=high.",
     "input_schema": {
       "type": "object",
       "properties": {
-        "text": {"type": "string"},
-        "kind": {"type": "string", "enum": ["reply", "proactive"]},
-        "importance": {"type": "string", "enum": ["low", "normal", "high"]}
+        "text": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "reply",
+            "proactive",
+            "briefing",
+            "checkin"
+          ]
+        },
+        "importance": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high"
+          ]
+        }
       },
-      "required": ["text"]
+      "required": [
+        "text"
+      ]
     }
   },
   {
@@ -180,10 +373,220 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "text": {"type": "string"},
-        "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4}
+        "text": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4
+        }
       },
-      "required": ["text"]
+      "required": [
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "get_facts",
+    "description": "할 일 하나의 사실만 계산한다(판단 없음): 오늘 미룬 횟수·분, 마감까지 남은 시간, 남은 작업 분, 마감까지 빈 시간, 여유(slack), 30분 미루면 여유, 이 시간대 최근 7일 시작률, 이유. 미루기 협상·체크인의 근거로 쓴다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "start_now",
+    "description": "지금 바로 할 일을 시작한다. 진행 중 개입이 이 할 일 블록이면 그 블록을 시작 처리하고, 아니면 지금부터 블록을 만들어 바로 started 로 둔다(길이 = 남은 시간과 다음 블록 길이(없으면 60분) 중 작은 값). 겹친 planned 블록은 취소되고 displaced 로 알려주니 다시 배치한다. 일정·방해 금지와 겹치면 거절.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "extend_block",
+    "description": "진행 중(started) 블록의 끝 시각을 늘린다. 뒤 블록·일정·식사·방해 금지와 겹치면 거절되니, 뒤 블록이 있으면 move_block 으로 먼저 옮긴다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "new_end": {
+          "type": "string",
+          "description": "ISO-8601"
+        }
+      },
+      "required": [
+        "block_id",
+        "new_end"
+      ]
+    }
+  },
+  {
+    "name": "end_block",
+    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "done",
+            "partial"
+          ]
+        },
+        "remaining_minutes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "block_id",
+        "outcome"
+      ]
+    }
+  },
+  {
+    "name": "schedule_wakeup",
+    "description": "정한 시각에 다시 깨어나 판단하도록 예약한다(체크인·사전 브리핑·결과 확인 등). at 은 미래. task_id 를 주면 그 할 일이 끝나거나 취소됐을 때 건너뛴다. 할 일당 예약 개수 상한이 있다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string",
+          "description": "ISO-8601"
+        },
+        "reason": {
+          "type": "string",
+          "description": "깨어났을 때 할 일(예: 30분 체크인, 사전 브리핑)"
+        },
+        "task_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "at",
+        "reason"
+      ]
+    }
+  },
+  {
+    "name": "cancel_wakeup",
+    "description": "예약한 wakeup 을 취소한다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "create_work_product",
+    "description": "할 일에 도움이 되는 작업물(조사 요약·체크리스트·초안·공부 범위)을 마크다운으로 저장한다. 웹에서 찾은 내용은 sources 에 출처를 넣고, 확실하지 않으면 본문에 '확인 필요'라고 적는다. 결과 id 를 attach_work_product 로 블록에 붙인다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "research",
+            "draft",
+            "study_plan",
+            "other"
+          ]
+        },
+        "content_md": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ]
+          }
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "kind",
+        "content_md"
+      ]
+    }
+  },
+  {
+    "name": "attach_work_product",
+    "description": "작업물을 아직 시작 전(planned·nudging) 블록에 붙인다. 사용자가 시작 화면에서 [시작]을 누르면 바로 열린다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "work_product_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "block_id",
+        "work_product_id"
+      ]
+    }
+  },
+  {
+    "name": "get_work_products",
+    "description": "할 일의 작업물 목록(최근 20개, 본문 포함).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
     }
   }
 ]

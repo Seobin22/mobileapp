@@ -98,3 +98,46 @@
 - 음성은 `SpeechRecognizer`(ko-KR), 인식 결과를 바로 전송(source=voice). `RECORD_AUDIO` 권한과 RecognitionService queries 추가.
 - 위젯은 Glance(`glance-appwidget:1.1.1`) 버튼 하나 → 투명 `QuickInputActivity`(입력창 + 마이크) → source=widget 전송 후 닫힘.
 - 평가 세트는 `evals/v2/*.yaml` + `EvalRunner`(JUnit, `-Deval=true` 일 때만) + `Makefile` 의 `make eval`. 채점은 같은 모델로 한 번 더 호출.
+
+## v3 (2026-10-29)
+
+### 구조
+- **스키마**: `V4__negotiation_proactive.sql`(스키마 버전 4). `interventions.negotiate_until`·`snoozed_minutes`, `blocks.work_product_id`, `wakeups`·`work_products`·`daily_flags`. jsonb 는 VARCHAR.
+- **turn 예약**: timing worker 쪽(개입·wakeup·pulse)도 turn 을 만들어야 해서 `TurnQueue`(루트 패키지)로 분리. 우선순위 user_message·snooze_request 10, 대부분 5, pulse 1.
+- **먼저 말 걸기**: `agent/ProactiveService` — pulse·morning_fallback·evening·wakeup_fire 작업. 앱 시작 때와 설정 저장 때 pulse·아침·저녁 작업을 다시 예약한다(`ensureJobs`). 다음 회차는 실행 때 예약.
+- **사실 계산**: `agent/Facts`(get_facts). 맥락에도 같은 값을 넣는다.
+- **웹 검색**: Anthropic 서버 측 도구 `web_search_20260209`(SDK `WebSearchTool20260209`, max_uses 5). 캐시 지점(마지막 사용자 도구) 뒤에 붙여 켜고 꺼도 앞부분 캐시가 깨지지 않게 했다. `pause_turn` 이면 응답을 그대로 붙여 최대 5번 이어서 요청한다.
+
+### 동작 세부
+- "진행 중 개입"은 running 과 negotiating 둘 다. 화면 재표시(reshow)는 running 일 때만. negotiating 중에도 expire·suspend 는 그대로 적용.
+- [미루기 요청]은 running 개입에만 적용(협상 중 또 누르면 무시). negotiation_timeout 은 expected_version 으로 확인하고, 사용자 메시지로 연장할 때마다 version 이 올라 이전 작업은 skipped.
+- get_facts: `snoozed_today_minutes` 는 move_block 이 nudging 블록을 옮길 때 기록한 `interventions.snoozed_minutes`(새 start − 기존 start) 합. 할 일 마감이 없으면 목표 마감을 쓴다.
+  `free_minutes_until_deadline` 은 v2 빈 시간 계산과 같되 그 할 일 자신의 블록은 빈 시간으로 센다(그 일을 할 시간이므로). `start_rate_this_hour_7d` 는 모든 할 일의 블록 기준, 없으면 null. `reason` 은 목표 이유, 없으면 할 일 메모.
+- start_now: 길이 = min(남은 분, 다음 planned 블록 길이 또는 60), 최소 5분. 일정(버퍼 포함)·조용한 시간·started 블록과 겹치면 거절, planned·nudging 은 취소하고 displaced 로 돌려준다. 식사는 검사하지 않는다(문서대로).
+- extend_block: 늘어나는 구간(max(지금 끝, now) ~ new_end)만 검증기의 겹침 검사(블록·일정·조용한 시간·식사)를 한다. end_block 은 started 만, 할 일 완료는 upsert_task 로 따로.
+- 블록 시작 개입 때 이전 블록이 started 면 partial(actual_end=now), 그 블록의 block_end 작업도 취소.
+- block_missed 는 expire(no_response)·suspend(quiet)·block_end 가 planned 블록을 missed 로 만들 때(never_started). 새 개입에 밀려(superseded) missed 가 되는 경우는 트리거하지 않는다.
+- **[시작] 시 block_started turn 추가**: 문서 §2 에는 없지만 §6 "작업이 시작되면 schedule_wakeup 으로 체크인"을 하려면 비서가 깨어날 계기가 필요하다. `start` 액션(개입 화면·관리 화면)으로 블록이 시작되면 block_started turn(priority 5). start_now 도구는 이미 turn 안이라 만들지 않는다.
+- silent 결정(§4.5)의 "오늘 보낸 non-reply 메시지"는 kind 가 proactive·briefing·checkin 인 비서 메시지(question·confirmation 제외). high 사용 수는 그중 importance=high 이고 알림이 간 것. "일정 진행 중"은 버퍼 제외.
+- chat.message 푸시에 `channel`(chat|checkin) 추가. silent 여도 푸시는 보낸다(앱이 알림 없이 채팅만 갱신).
+- pulse 의 "직전 30분 안에 다른 turn"은 queued·skipped 가 아닌 turn 의 started_at 기준. agent worker 가 pulse turn 을 집었을 때 시각이 된 다른 turn 이 대기 중이면 skipped.
+- morning: first_unlock 이 오늘 활동 구간(기상~취침) 안일 때만(수면 중 새벽 확인은 무시). 하루 1회는 daily_flags. wakeup 이 2시간 넘게 늦거나 할 일이 active 가 아니면 skipped.
+- 작업물은 soft 상한을 넘으면 생성 거절. attach 는 planned·nudging 블록만. plan.sync upcoming 에도 work_product_id 를 넣어 로컬 백업 개입도 작업물을 연다. plan.sync 에 `negotiation_timeout_minutes` 추가.
+- send_message 의 kind 에 briefing·checkin 추가(intervention 은 v4 용으로 코드만 받는다, 도구 정의에는 없음).
+- [미루기 요청] turn 에서 LLM 이 텍스트로만 답하면 그 텍스트를 reply 로 보낸다.
+- v1 T14·T7 은 v3 §3.5(변경)에 맞춰 "끝 시각에 started 유지 + block_ended turn"으로 고쳤다.
+
+### 관리 화면
+- 진행 중 개입에 "협상 중 · HH:MM까지" 표시와 [미루기 요청] 보내기 버튼. "먼저 말 걸기·작업물" 칸: 오늘 메시지 예산·high·turn 수, 예약된 wakeup, 아침·저녁 완료, 작업물(눌러서 본문·출처). 채팅에 🔕(알림 없음)·high 표시, 시간표에 작업물 버튼.
+- API 추가: `GET /v1/work_products/{id}`(문서 §7), `GET /v1/admin/proactive`(관리 화면용). admin/status 의 개입에 status·negotiate_until.
+
+### 안드로이드
+- 개입 화면 [시작] 아래 작은 [미루기 요청] → snooze_request 액션, 화면 닫고 채팅 탭, 상단 배너 "협상 중 · 답이 없으면 N분 뒤 다시 알려요".
+- FCM 이 없을 때도: 협상 시간 + 30초 뒤 로컬 타이머가 `GET /v1/admin/status` 로 개입 상태를 보고 running 이면 화면, negotiating 이면 1분 뒤 다시, 없으면 끝낸다. 서버에 못 닿으면 화면을 띄운다(안전한 쪽).
+- 작업물 뷰어 `WorkProductActivity`: Markwon(`io.noties.markwon:core:4.6.2`, 의존성 추가 — 문서 §8.2 지정)을 AndroidView(TextView)로, 아래 출처 링크. [시작] 때 work_product_id 가 있으면 바로 열고, 채팅의 "작업물#번호"는 버튼으로 연다(프롬프트에 그렇게 적게 함).
+- 알림 채널 chat·checkin 분리. silent 메시지는 알림 없이 채팅에만(🔕).
+- first_unlock: `ACTION_USER_PRESENT` 는 매니페스트 리시버로 받을 수 없어 앱 프로세스가 살아 있을 때 런타임 리시버로 받아 하트비트 events 로 보낸다. 못 받은 날은 서버 fallback(기상+60분).
+- Room 스키마 3(파괴적 마이그레이션 — 로컬 개입·계획은 다음 동기화로 다시 받는다). versionCode 3 / 3.0.0.
+
+### 평가
+- `evals/v3/*.yaml` 8개(§9.2). EvalRunner 가 `-Deval.dirs=v2,v3`(기본 둘 다)로 폴더를 고르고 `trigger`·`inputs`·`setup.blocks[].status/intervention`·`setup.sql`·`setup.memory` 를 지원한다. 결과 요약에 wakeup·작업물·개입·memory·알림 여부를 넣었다.

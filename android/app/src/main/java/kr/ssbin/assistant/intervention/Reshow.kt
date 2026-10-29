@@ -13,8 +13,8 @@ object Reshow {
 
     private const val REQUEST_CODE = 2000
 
-    fun schedule(context: Context, interventionId: String, minutes: Int) {
-        val at = System.currentTimeMillis() + minutes * 60_000L
+    fun schedule(context: Context, interventionId: String, minutes: Int, extraSeconds: Int = 0) {
+        val at = System.currentTimeMillis() + minutes * 60_000L + extraSeconds * 1000L
         Alarms.setExact(context, at, pending(context, interventionId))
     }
 
@@ -38,7 +38,9 @@ class ReshowReceiver : BroadcastReceiver() {
         Thread {
             try {
                 val entity = AppDatabase.dao(context).intervention(id)
-                if (entity != null && InterventionState.visibleId == null &&
+                if (entity?.status == "negotiating") {
+                    InterventionController.onNegotiationCheck(context, entity)
+                } else if (entity != null && InterventionState.visibleId == null &&
                     InterventionController.stillActive(context, entity)
                 ) {
                     Notifier.showFullScreen(context, entity)

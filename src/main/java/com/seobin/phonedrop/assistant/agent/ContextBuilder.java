@@ -32,15 +32,19 @@ public class ContextBuilder {
     private final TimeUtil time;
     private final SettingsService settings;
     private final Timeline timeline;
+    private final Facts facts;
+    private final ChatService chat;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
-                          Timeline timeline) {
+                          Timeline timeline, Facts facts, ChatService chat) {
         this.db = db;
         this.clock = clock;
         this.store = store;
         this.time = time;
         this.settings = settings;
         this.timeline = timeline;
+        this.facts = facts;
+        this.chat = chat;
     }
 
     public String build(String trigger, JsonNode ref) {
@@ -63,6 +67,34 @@ public class ContextBuilder {
                 .append(" / 방해 금지: ").append(windows(settings.get("dnd.windows"))).append("\n\n");
 
         sb.append("# 이번 실행 이유\n").append(reason(trigger, ref)).append("\n\n");
+
+        // v3 §6.1: 이 할 일의 사실(get_facts)을 미리 넣는다.
+        Long factTask = factTaskId(trigger, ref);
+        if (factTask != null) {
+            Map<String, Object> f = facts.of(factTask);
+            if (f != null) {
+                sb.append("# 사실(get_facts, 할일#").append(factTask).append(")\n")
+                        .append(com.seobin.phonedrop.assistant.Json.write(
+                                com.seobin.phonedrop.assistant.Json.MAPPER.valueToTree(f)))
+                        .append("\n\n");
+            }
+        }
+
+        int[] sent = chat.proactiveToday();
+        sb.append("# 메시지 예산(오늘)\n")
+                .append("먼저 보낸 메시지 ").append(sent[0]).append(" / ").append(settings.getInt("messages.daily_budget"))
+                .append(", high 알림 ").append(sent[1]).append(" / ").append(settings.getInt("messages.high_per_day"))
+                .append("\n\n");
+
+        sb.append("# 예약된 wakeup(향후 24시간)\n");
+        List<String> wakeups = db.jdbc().sql("""
+                        SELECT id, fire_at, reason, task_id FROM wakeups WHERE status = 'scheduled' AND fire_at < ?
+                        ORDER BY fire_at, id""")
+                .param(AssistantDb.ts(now.plus(Duration.ofHours(24))))
+                .query((rs, n) -> "- wakeup#" + rs.getLong("id") + " " + mdHm(AssistantDb.instant(rs, "fire_at"))
+                        + (rs.getObject("task_id") == null ? "" : " 할일#" + rs.getLong("task_id"))
+                        + " " + rs.getString("reason")).list();
+        sb.append(wakeups.isEmpty() ? "없음" : String.join("\n", wakeups)).append("\n\n");
 
         sb.append("# 향후 7일 시간표\n");
         appendTimeline(sb, now, now.plus(Duration.ofDays(7)));
@@ -138,8 +170,13 @@ public class ContextBuilder {
         for (Store.Intervention i : running) {
             Store.Block b = store.block(i.blockId()).orElseThrow();
             String title = store.task(b.taskId()).map(timeline::taskTitle).orElse("");
-            sb.append("- 개입#").append(i.id()).append(" 블록#").append(b.id()).append(' ').append(title)
-                    .append(" (").append(time.hm(i.startedAt())).append("부터 화면 표시 중)\n");
+            sb.append("- 개입#").append(i.id()).append(" 블록#").append(b.id()).append(" 할일#").append(b.taskId())
+                    .append(' ').append(title).append(" (").append(time.hm(i.startedAt())).append("부터 화면 표시 중)");
+            if ("negotiating".equals(i.status()) && i.negotiateUntil() != null) {
+                long left = Math.max(0, Duration.between(now, i.negotiateUntil()).toMinutes());
+                sb.append(" 협상 중, ").append(left).append("분 안에 답이 없으면 화면이 다시 뜸");
+            }
+            sb.append('\n');
         }
         sb.append('\n');
 
@@ -176,7 +213,35 @@ public class ContextBuilder {
                 yield "confirmation_resolved: 확인카드#" + id + (ref.path("accepted").asBoolean() ? " 수락" : " 거절")
                         + " (" + text + ")";
             }
+            case "snooze_request" -> "snooze_request: 사용자가 개입 화면에서 [미루기 요청]을 눌렀다 (개입#"
+                    + ref.path("intervention_id").asLong() + ", 블록#" + ref.path("block_id").asLong() + ")";
+            case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
+                    + switch (ref.path("reason").asString("")) {
+                        case "no_response" -> "no_response(화면에 무응답)";
+                        case "quiet" -> "quiet(방해 금지·수면으로 중단)";
+                        case "never_started" -> "never_started(시작되지 않고 끝 시각이 지남)";
+                        default -> ref.path("reason").asString("");
+                    };
+            case "block_started" -> "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
+                    + " 작업을 시작함(체크인 예약 등 동행)";
+            case "block_ended" -> "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong() + "의 끝 시각이 됨";
+            case "wakeup" -> "wakeup: 예약해 둔 wakeup#" + ref.path("wakeup_id").asLong()
+                    + (ref.hasNonNull("task_id") ? " 할일#" + ref.path("task_id").asLong() : "")
+                    + " — " + ref.path("reason").asString("");
+            case "pulse" -> "pulse: 정기 점검(먼저 말 걸 가치가 있을 때만 send_message)";
+            case "morning" -> "morning: 아침 브리핑(" + ref.path("logical_day").asString("") + ")";
+            case "evening" -> "evening: 저녁 회고(" + ref.path("logical_day").asString("") + ")";
             default -> trigger + ": " + ref;
+        };
+    }
+
+    /** snooze_request·block_missed·block_ended·wakeup(task_id 있음)이면 그 할 일. */
+    private Long factTaskId(String trigger, JsonNode ref) {
+        return switch (trigger) {
+            case "snooze_request", "block_missed", "block_ended", "block_started" ->
+                    store.block(ref.path("block_id").asLong(-1)).map(Store.Block::taskId).orElse(null);
+            case "wakeup" -> ref.hasNonNull("task_id") ? ref.get("task_id").asLong() : null;
+            default -> null;
         };
     }
 
@@ -200,7 +265,9 @@ public class ContextBuilder {
                             .append("calendar".equals(item.get("source")) ? ", 캘린더" : "").append(")\n");
                     case "block" -> sb.append("- ").append(range).append(" 블록#").append(item.get("id"))
                             .append(" [").append(item.get("status")).append("] 할일#").append(item.get("task_id"))
-                            .append(' ').append(nz(item.get("title"))).append('\n');
+                            .append(' ').append(nz(item.get("title")))
+                            .append(item.get("work_product_id") == null ? "" : " (작업물#" + item.get("work_product_id") + " 첨부)")
+                            .append('\n');
                     case "quiet" -> sb.append("- ").append(range).append(" 방해금지\n");
                     case "meal" -> sb.append("- ").append(range).append(" 식사\n");
                     default -> {

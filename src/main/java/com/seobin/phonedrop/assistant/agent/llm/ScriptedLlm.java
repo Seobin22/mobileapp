@@ -19,6 +19,8 @@ public class ScriptedLlm implements LlmClient {
     /** 받은 맥락·도구 결과(검증용). */
     public final List<String> userContents = new ArrayList<>();
     public final List<ToolResult> toolResults = new ArrayList<>();
+    /** turn 마다 web_search 를 켰는지. */
+    public final List<Boolean> webSearchFlags = new ArrayList<>();
 
     public static LlmResponse tools(ToolCall... calls) {
         return new LlmResponse(List.of(calls), "", "tool_use", 100, 50);
@@ -48,12 +50,14 @@ public class ScriptedLlm implements LlmClient {
         cursor = 0;
         userContents.clear();
         toolResults.clear();
+        webSearchFlags.clear();
     }
 
     @Override
-    public Conversation start(String system, JsonNode toolDefinitions, String userContent) {
+    public Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch) {
         synchronized (this) {
             userContents.add(userContent);
+            webSearchFlags.add(webSearch);
         }
         return new Conversation() {
             @Override

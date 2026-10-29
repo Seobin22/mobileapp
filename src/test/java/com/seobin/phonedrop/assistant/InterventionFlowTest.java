@@ -147,8 +147,11 @@ class InterventionFlowTest extends AssistantTestBase {
         assertThat(b.start()).isEqualTo(at("2026-11-02T11:30"));
         assertThat(b.end()).isEqualTo(at("2026-11-02T12:30"));
 
+        // v3 §3.5(변경): 끝 시각에 자동 done 대신 started 유지 + block_ended turn
         runUntil("2026-11-02T12:30");
-        assertThat(block(ids[1]).status()).isEqualTo("done");
+        assertThat(block(ids[1]).status()).isEqualTo("started");
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM turns WHERE trigger = 'block_ended'").query(Integer.class).single())
+                .isEqualTo(1);
     }
 
     @Test
@@ -228,7 +231,8 @@ class InterventionFlowTest extends AssistantTestBase {
     }
 
     @Test
-    void t14_startedBlockDoneAtEnd() {
+    void t14_startedBlockStaysStartedAtEnd() {
+        // v3 §3.5(변경): v1 의 "끝 시각에 자동 done"을 없앴다. 정리는 block_ended turn 에서 비서가 한다.
         long[] ids = createBlock("보고서 초안", "2026-11-02T10:00", 60);
         runUntil("2026-11-02T10:02");
         action("start", onlyIntervention().id(), ids[1], "k");
@@ -236,8 +240,8 @@ class InterventionFlowTest extends AssistantTestBase {
         assertThat(block(ids[1]).status()).isEqualTo("started");
         runUntil("2026-11-02T11:00");
         Store.Block b = block(ids[1]);
-        assertThat(b.status()).isEqualTo("done");
-        assertThat(b.actualEnd()).isEqualTo(at("2026-11-02T11:00"));
+        assertThat(b.status()).isEqualTo("started");
+        assertThat(b.actualEnd()).isNull();
     }
 
     @Test

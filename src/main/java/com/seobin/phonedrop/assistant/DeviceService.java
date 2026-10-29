@@ -8,6 +8,8 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
+import com.seobin.phonedrop.assistant.agent.ProactiveService;
+
 import tools.jackson.databind.JsonNode;
 
 @Service
@@ -16,11 +18,13 @@ public class DeviceService {
     private final AssistantDb db;
     private final AssistantClock clock;
     private final TimeUtil time;
+    private final ProactiveService proactive;
 
-    public DeviceService(AssistantDb db, AssistantClock clock, TimeUtil time) {
+    public DeviceService(AssistantDb db, AssistantClock clock, TimeUtil time, ProactiveService proactive) {
         this.db = db;
         this.clock = clock;
         this.time = time;
+        this.proactive = proactive;
     }
 
     /** 같은 토큰이면 갱신한다. */
@@ -46,7 +50,7 @@ public class DeviceService {
                 token, appVersion, capabilities, clock.now());
     }
 
-    /** events 는 v1 에서 저장만 한다. 모르는 기기면 404(앱이 다시 register 한다). */
+    /** events 를 저장하고, first_unlock 은 아침 브리핑(v3 §5.2)에 쓴다. 모르는 기기면 404(앱이 다시 register 한다). */
     public void heartbeat(JsonNode req) {
         long deviceId = req.path("device_id").asLong(-1);
         int updated;
@@ -65,8 +69,12 @@ public class DeviceService {
         }
         for (JsonNode event : req.path("events")) {
             String at = event.path("at").asString("");
-            db.insert("INSERT INTO device_events(device_id, type, at) VALUES (?, ?, ?)",
-                    deviceId, event.path("type").asString("unknown"), at.isEmpty() ? null : TimeUtil.parse(at));
+            String type = event.path("type").asString("unknown");
+            java.time.Instant when = at.isEmpty() ? null : TimeUtil.parse(at);
+            db.insert("INSERT INTO device_events(device_id, type, at) VALUES (?, ?, ?)", deviceId, type, when);
+            if ("first_unlock".equals(type)) {
+                proactive.onFirstUnlock(when == null ? clock.now() : when);
+            }
         }
     }
 

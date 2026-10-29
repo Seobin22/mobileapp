@@ -30,7 +30,7 @@
 </head>
 <body>
 <main>
-    <h1>실행 비서 관리 <span class="muted">v2 · 채팅 비서 + 계획</span></h1>
+    <h1>실행 비서 관리 <span class="muted">v3 · 협상·동행·먼저 말 걸기·대신 처리</span></h1>
 
     <section id="tokenBox">
         <h2>API 토큰</h2>
@@ -66,6 +66,12 @@
             <button id="send">보내기</button>
         </div>
         <div class="error" id="chatError"></div>
+    </section>
+
+    <section>
+        <h2>먼저 말 걸기 · 작업물 <button class="ghost" id="reloadProactive" style="float:right">새로고침</button></h2>
+        <div id="proactive" class="muted">-</div>
+        <div id="workProduct" style="display:none;margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffafc"></div>
     </section>
 
     <section>
@@ -164,7 +170,11 @@
         const running = s.running_interventions.map(i =>
             `<div class="running" style="border:1px solid;padding:8px;border-radius:6px;margin:6px 0">
                 개입 #${i.id} (블록 #${i.block_id}, L${i.level}) ${hm(i.started_at)} 시작
+                ${i.status === 'negotiating'
+                    ? `<span class="badge">협상 중 · ${hm(i.negotiate_until).substring(6)}까지 답이 없으면 화면 재등장</span>` : ''}
                 <button data-start="${i.id}" data-block="${i.block_id}">휴대폰 대신 [시작] 보내기</button>
+                ${i.status === 'running'
+                    ? `<button class="ghost" data-snooze="${i.id}" data-block="${i.block_id}">[미루기 요청] 보내기</button>` : ''}
              </div>`).join('');
         const devices = s.devices.length ? s.devices.map(d =>
             `기기 #${d.id} ${esc(d.app_version)} · 마지막 하트비트 ${hm(d.last_heartbeat)} · <code>${esc(JSON.stringify(d.capabilities))}</code>`
@@ -233,12 +243,38 @@
             return `<div style="text-align:${mine ? 'right' : 'left'};margin:6px 0">
                 <div style="display:inline-block;max-width:85%;text-align:left;padding:7px 10px;border-radius:10px;
                     background:${mine ? '#d6336c' : '#fff'};color:${mine ? '#fff' : 'inherit'};border:1px solid var(--line);white-space:pre-wrap">${esc(m.content)}${extra}</div>
-                <div class="muted" style="font-size:.7rem">${hm(m.created_at)} ${m.kind !== 'reply' ? esc(m.kind) : ''}</div></div>`;
+                <div class="muted" style="font-size:.7rem">${hm(m.created_at)} ${m.kind !== 'reply' ? esc(m.kind) : ''}${m.silent ? ' · 🔕 알림 없음' : ''}${m.importance === 'high' ? ' · ❗high' : ''}</div></div>`;
         }).join('') || '<span class="muted">대화가 없습니다</span>';
         box.scrollTop = box.scrollHeight;
         for (const m of data.messages) {
             if (m.role === 'assistant' && !m.read) api('POST', '/v1/messages/' + m.id + '/read').catch(() => {});
         }
+    }
+
+    async function loadProactive() {
+        const p = await api('GET', '/v1/admin/proactive');
+        const wakeups = p.wakeups.map(w => `${hm(w.fire_at)} <span class="badge">${esc(w.status)}</span> `
+            + `#${w.id} ${esc(w.reason)}${w.task_title ? ' · ' + esc(w.task_title) : ''}`).join('<br>') || '없음';
+        const flags = p.daily_flags.map(f => `${esc(f.logical_day)} 아침 ${f.morning_done ? '✅' : '–'} 저녁 ${f.evening_done ? '✅' : '–'}`)
+            .join('<br>') || '아직 없음';
+        const products = p.work_products.map(w => `<button class="ghost" data-wp="${w.id}" style="margin:2px">#${w.id} ${esc(w.title)}</button>`
+            + ` <span class="muted">${esc(w.kind)}${w.block_id ? ' · 블록#' + w.block_id + ' 첨부' : ''} · ${hm(w.created_at)}</span>`).join('<br>') || '없음';
+        $('proactive').innerHTML = `
+            <div>오늘 먼저 보낸 메시지 <b>${p.messages_today}</b> / ${p.daily_budget} · high 알림 ${p.high_today} / ${p.high_per_day}
+                · 오늘 turn ${p.turns_today} / ${p.turn_soft_limit}(넘으면 pulse·웹 검색·작업물 중지)</div>
+            <div style="margin-top:6px"><b>예약된 wakeup</b><br>${wakeups}</div>
+            <div style="margin-top:6px"><b>아침·저녁</b><br>${flags}</div>
+            <div style="margin-top:6px"><b>작업물</b><br>${products}</div>`;
+    }
+
+    async function showWorkProduct(id) {
+        const w = await api('GET', '/v1/work_products/' + id);
+        const sources = (w.sources || []).map(s => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a></li>`).join('');
+        $('workProduct').style.display = 'block';
+        $('workProduct').innerHTML = `<b>#${w.id} ${esc(w.title)}</b> <span class="badge">${esc(w.kind)}</span>
+            <button class="ghost" data-wp-close="1" style="float:right">닫기</button>
+            <pre style="margin-top:8px;font-size:.85rem">${esc(w.content_md)}</pre>
+            ${sources ? '<div class="muted" style="margin-top:6px">출처</div><ul>' + sources + '</ul>' : ''}`;
     }
 
     async function loadTimeline() {
@@ -247,7 +283,9 @@
         $('timeline').innerHTML = t.days.map(d => `<div style="margin:6px 0"><b>${esc(d.date)}</b><br>` + d.items
             .filter(i => i.kind !== 'free')
             .map(i => `${i.start.substring(11, 16)}–${i.end.substring(11, 16)} <span class="badge">${label[i.kind]}</span> `
-                + `${esc(i.title || '')}${i.status ? ' · ' + esc(i.status) : ''}`).join('<br>') + '</div>').join('')
+                + `${esc(i.title || '')}${i.status ? ' · ' + esc(i.status) : ''}`
+                + (i.work_product_id ? ` <button class="ghost" data-wp="${i.work_product_id}" style="padding:1px 6px;font-size:.75rem">작업물</button>` : ''))
+                .join('<br>') + '</div>').join('')
             || '없음';
     }
 
@@ -264,7 +302,7 @@
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadTasks(), loadAgent(), loadChat(), loadTimeline()]);
+            await Promise.all([loadStatus(), loadTasks(), loadAgent(), loadChat(), loadTimeline(), loadProactive()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
@@ -287,6 +325,7 @@
     };
     $('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('send').click(); });
     $('reloadChat').onclick = () => loadChat().catch(e => $('chatError').textContent = e.message);
+    $('reloadProactive').onclick = () => loadProactive().catch(e => $('proactive').textContent = e.message);
 
     $('saveToken').onclick = async () => {
         // 웹 콘솔에서 복사할 때 섞이는 공백·줄바꿈을 모두 지운다
@@ -324,6 +363,14 @@
                 await sendChat(el.dataset.answer, Number(el.dataset.qid));
                 return;
             }
+            if (el.dataset.wp) {
+                await showWorkProduct(el.dataset.wp);
+                return;
+            }
+            if (el.dataset.wpClose) {
+                $('workProduct').style.display = 'none';
+                return;
+            }
             if (el.dataset.confirm) {
                 await api('POST', '/v1/confirmations/' + el.dataset.confirm, { accept: el.dataset.accept === 'true' });
                 await loadChat();
@@ -340,6 +387,13 @@
                 const duration = prompt('길이(분)', el.dataset.duration);
                 await api('PATCH', '/v1/admin/tasks/' + el.dataset.edit,
                     { start: localInputToIso(start), duration_min: Number(duration) });
+            } else if (el.dataset.snooze) {
+                await api('POST', '/v1/actions', {
+                    idempotency_key: crypto.randomUUID(), type: 'snooze_request',
+                    intervention_id: Number(el.dataset.snooze), block_id: Number(el.dataset.block),
+                    client_at: new Date().toISOString()
+                });
+                for (const delay of [3000, 8000, 15000]) setTimeout(() => loadChat().catch(() => {}), delay);
             } else if (el.dataset.start) {
                 await api('POST', '/v1/actions', {
                     idempotency_key: crypto.randomUUID(), type: 'start',

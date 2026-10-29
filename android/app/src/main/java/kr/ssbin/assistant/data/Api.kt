@@ -61,6 +61,13 @@ interface AssistantApi {
     @GET("v1/timeline")
     suspend fun timeline(): TimelineResponse
 
+    @GET("v1/work_products/{id}")
+    suspend fun workProduct(@Path("id") id: Long): WorkProductDto
+
+    /** 진행 중 개입 상태(FCM 이 없을 때 협상 결과 확인용). */
+    @GET("v1/admin/status")
+    suspend fun status(): JsonObject
+
     @PUT("v1/settings")
     suspend fun putSetting(@Body body: JsonObject): JsonObject
 }

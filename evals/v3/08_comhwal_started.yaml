@@ -1,0 +1,14 @@
+name: 컴활 블록 started
+now: "2026-11-02T10:00"
+situation: 사용자가 개입 화면에서 [시작]을 눌러 컴활 공부 블록(10:00–11:00)이 시작됐다(block_started).
+setup:
+  goals:
+    - {title: 컴활 2급 필기 합격, deadline: "2026-11-30T23:00", reason: 취업 서류에 필요, strategy: "바로 30분 공부하고 진도 보고. 진행은 푼 기출 문제 수로 잰다"}
+  tasks:
+    - {title: 컴활 필기 1과목, first_action: 기출 앱 열고 1문제 풀기, est_minutes: 600, deadline: "2026-11-29T23:00", goal: 0}
+  blocks:
+    - {task: 0, start: "2026-11-02T10:00", end: "2026-11-02T11:00", status: started}
+trigger: {type: block_started, block: 0}
+criteria:
+  - 약 30분 뒤(10:25~10:40) 체크인 wakeup 을 예약한다(schedule_wakeup, 이 할 일)
+  - 시작 직후라 긴 메시지로 방해하지 않는다(보내더라도 한 줄)

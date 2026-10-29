@@ -63,6 +63,7 @@ import java.time.format.DateTimeFormatter
 
 private val PINK = Color(0xFFD6336C)
 private val ERROR = Color(0xFFC92A2A)
+private val WORK_PRODUCT_LINK = Regex("작업물\\s?#(\\d+)")
 
 // ------------------------------------------------------------------ 채팅(메인 탭)
 
@@ -141,7 +142,25 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
+    // 미루기 협상 중 배너(v3 §8.1). 남은 분은 15초마다 다시 계산한다.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(15_000)
+        }
+    }
+    val negotiationUntil = remember(now, reload) { Prefs.get(context).negotiationUntil }
+
     Column(modifier.fillMaxSize()) {
+        if (negotiationUntil > now) {
+            val left = ((negotiationUntil - now + 59_999) / 60_000).coerceAtLeast(1)
+            Text(
+                "협상 중 · 답이 없으면 ${left}분 뒤 다시 알려요",
+                color = Color.White,
+                modifier = Modifier.fillMaxWidth().background(PINK).padding(10.dp),
+            )
+        }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp), state = listState) {
             if (messages.isEmpty()) {
                 item { Text("말을 걸어 보세요. 예: \"금요일까지 보고서 써야 해\"", Modifier.padding(16.dp)) }
@@ -195,6 +214,15 @@ private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: 
                 .padding(10.dp)
         ) {
             Text(m.content, color = if (mine) Color.White else Color.Unspecified)
+            // "작업물#12" 를 누르면 작업물 뷰어(v3 §8.2)
+            if (!mine) {
+                val context = LocalContext.current
+                WORK_PRODUCT_LINK.findAll(m.content).map { it.groupValues[1].toLong() }.distinct().forEach { id ->
+                    TextButton(onClick = { context.startActivity(WorkProductActivity.intent(context, id)) }) {
+                        Text("📄 작업물#$id 열기")
+                    }
+                }
+            }
             if (m.kind == "question" && !m.options.isNullOrEmpty()) {
                 if (m.question_status == "open") {
                     m.options.forEach { option ->
@@ -223,7 +251,7 @@ private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: 
                     )
                 }
             }
-            Text(time(m.created_at), style = MaterialTheme.typography.labelSmall,
+            Text(time(m.created_at) + if (m.silent) " · 🔕" else "", style = MaterialTheme.typography.labelSmall,
                 color = if (mine) Color(0xFFFFE0EA) else Color.Gray)
         }
     }

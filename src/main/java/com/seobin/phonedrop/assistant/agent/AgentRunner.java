@@ -45,10 +45,11 @@ public class AgentRunner {
     private final ChatService chat;
     private final Jobs jobs;
     private final LlmClient llm;
+    private final ProactiveService proactive;
     private final String systemTemplate;
 
     public AgentRunner(Tx tx, AssistantDb db, AssistantClock clock, SettingsService settings, ContextBuilder context,
-                       Tools tools, ChatService chat, Jobs jobs, LlmClient llm) {
+                       Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -58,6 +59,7 @@ public class AgentRunner {
         this.chat = chat;
         this.jobs = jobs;
         this.llm = llm;
+        this.proactive = proactive;
         try (InputStream in = new ClassPathResource("assistant/prompts/system.md").getInputStream()) {
             this.systemTemplate = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -97,11 +99,18 @@ public class AgentRunner {
             });
             return "skipped";
         }
+        // v3 §2: pulse 를 실행하려는 순간 대기열에 다른 turn 이 있으면 pulse 는 건너뛴다.
+        if ("pulse".equals(trigger) && tx.run(this::otherTurnsWaiting)) {
+            tx.exec(() -> endTurn(turnId, "skipped", 0, 0, 0, "other turn queued"));
+            return "skipped";
+        }
         tx.exec(() -> db.update("UPDATE turns SET status = 'running', started_at = ? WHERE id = ?",
                 clock.now(), turnId));
 
         String system = systemTemplate.replace("{persona}", settings.getString("persona"));
         String userContent = tx.run(() -> context.build(trigger, ref));
+        // v3 §4.4: web.enabled=false 이거나 soft 상한을 넘으면 web_search 를 tools 에서 뺀다.
+        boolean webSearch = settings.getBoolean("web.enabled") && !tx.run(proactive::overSoftLimit);
         Tools.Context ctx = new Tools.Context(turnId, trigger, false);
         int maxCalls = settings.getInt("agent.max_tool_calls");
         long inTokens = 0;
@@ -112,7 +121,7 @@ public class AgentRunner {
         String status = "partial";
 
         try {
-            LlmClient.Conversation conv = llm.start(system, tools.definitions(), userContent);
+            LlmClient.Conversation conv = llm.start(system, tools.definitions(), userContent, webSearch);
             for (int i = 0; i < maxCalls; i++) {
                 LlmClient.LlmResponse resp = conv.next();
                 inTokens += resp.inputTokens();
@@ -165,7 +174,9 @@ public class AgentRunner {
         final long out = outTokens;
         tx.exec(() -> {
             // 텍스트로만 답하고 send_message 를 안 했으면 그 텍스트를 reply 로 보낸다.
-            if (fromUser && !ctx.sentReply && !finalText.isBlank()) {
+            // [미루기 요청]도 사용자가 누른 것이라 답이 있어야 한다.
+            boolean replyExpected = fromUser || "snooze_request".equals(trigger);
+            if (replyExpected && !ctx.sentReply && !finalText.isBlank()) {
                 chat.sendAssistant(finalText.trim(), "reply", "normal", null, null);
             }
             endTurn(turnId, finalStatus, calls, in, out, null);
@@ -184,6 +195,12 @@ public class AgentRunner {
             log.error("tool {} failed in turn {}", call.name(), ctx.turnId, e);
             return new LlmClient.ToolResult(call.id(), Json.write(Tools.error("내부 오류")), true);
         }
+    }
+
+    private boolean otherTurnsWaiting() {
+        return db.jdbc().sql("""
+                        SELECT COUNT(*) FROM jobs WHERE type = 'turn' AND status = 'scheduled' AND fire_at <= ?""")
+                .param(AssistantDb.ts(clock.now())).query(Integer.class).single() > 0;
     }
 
     private void recordCache(long turnId, long[] cache) {

@@ -1,10 +1,16 @@
 package kr.ssbin.assistant.intervention
 
 import android.content.Context
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kr.ssbin.assistant.data.ApiClient
 import kr.ssbin.assistant.data.AppDatabase
 import kr.ssbin.assistant.data.AppJson
 import kr.ssbin.assistant.data.InterventionEntity
 import kr.ssbin.assistant.data.PlanSnapshot
+import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.QuietWindow
 import kr.ssbin.assistant.data.UpcomingItem
 import kr.ssbin.assistant.schedule.LocalScheduler
@@ -38,9 +44,12 @@ object InterventionController {
             status = "running",
             fromServer = true,
             updatedAt = System.currentTimeMillis(),
+            workProductId = data["work_product_id"]?.toLongOrNull(),
         )
         dao.upsertIntervention(entity)
         dao.deleteIntervention(localId(blockId))
+        // 협상 시간이 지나 다시 온 경우(v3 §8.1)에도 평소처럼 풀스크린
+        Prefs.get(context).negotiationUntil = 0
         LocalScheduler.cancelBlock(context, blockId)
         Reshow.cancel(context)
 
@@ -58,6 +67,7 @@ object InterventionController {
         val dao = AppDatabase.dao(context)
         val blockId = data["block_id"]?.toLongOrNull() ?: dao.intervention(id)?.blockId
         dao.endIntervention(id, blockId?.let { localId(it) } ?: id, System.currentTimeMillis())
+        Prefs.get(context).negotiationUntil = 0
         Notifier.cancel(context)
         Reshow.cancel(context)
         if (blockId != null) InterventionState.emit(InterventionState.Event.Close(blockId))
@@ -72,6 +82,7 @@ object InterventionController {
             graceSeconds = data["local_backup_grace_seconds"]?.toIntOrNull() ?: 90,
             expireGraceMinutes = data["expire_grace_minutes"]?.toIntOrNull() ?: 15,
             reshowMinutes = data["reshow_minutes"]?.toIntOrNull() ?: DEFAULT_RESHOW_MINUTES,
+            negotiationMinutes = data["negotiation_timeout_minutes"]?.toIntOrNull() ?: 5,
         )
         AppDatabase.dao(context).savePlan(snapshot)
         LocalScheduler.rescheduleAll(context)
@@ -100,6 +111,7 @@ object InterventionController {
             status = "running",
             fromServer = false,
             updatedAt = System.currentTimeMillis(),
+            workProductId = item.work_product_id,
         )
         dao.upsertIntervention(entity)
         Notifier.showFullScreen(context, entity)
@@ -113,6 +125,53 @@ object InterventionController {
         Reshow.cancel(context)
         AppDatabase.dao(context).endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
         ActionQueue.enqueue(context, "start", entity.id, entity.blockId)
+    }
+
+    /**
+     * [미루기 요청] (v3 §8.1). 서버가 협상 상태로 바꾸고 비서가 채팅으로 말을 건다.
+     * 협상 시간 동안 재표시를 멈추고, 그 뒤에 서버에 상태를 물어 다시 띄울지 정한다(FCM 이 없어도 동작하도록).
+     */
+    fun onUserSnooze(context: Context, entity: InterventionEntity) {
+        val dao = AppDatabase.dao(context)
+        val minutes = dao.plan()?.negotiationMinutes ?: 5
+        Notifier.cancel(context)
+        Reshow.cancel(context)
+        dao.setInterventionStatus(entity.id, "negotiating", System.currentTimeMillis())
+        Prefs.get(context).negotiationUntil = System.currentTimeMillis() + minutes * 60_000L
+        ActionQueue.enqueue(context, "snooze_request", entity.id, entity.blockId)
+        Reshow.schedule(context, entity.id, minutes, extraSeconds = 30)
+    }
+
+    /**
+     * 협상 시간이 지났을 때(로컬 타이머). 서버 상태를 보고: 다시 running 이면 화면, 아직 협상 중이면 1분 뒤 다시 확인,
+     * 개입이 끝났으면(미루기 수락·시작) 로컬도 끝낸다. 서버에 못 닿으면 안전하게 화면을 띄운다.
+     */
+    fun onNegotiationCheck(context: Context, entity: InterventionEntity) {
+        val dao = AppDatabase.dao(context)
+        val status = runCatching {
+            val body = runBlocking { ApiClient.get(context).status() }
+            (body["running_interventions"] as? JsonArray)
+                ?.map { it as JsonObject }
+                ?.firstOrNull { (it["block_id"] as? JsonPrimitive)?.content == entity.blockId.toString() }
+                ?.let { (it["status"] as? JsonPrimitive)?.content ?: "running" }
+                ?: "ended"
+        }.getOrDefault("running")
+        when (status) {
+            "negotiating" -> Reshow.schedule(context, entity.id, 1)
+            "ended" -> {
+                dao.endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
+                Prefs.get(context).negotiationUntil = 0
+            }
+            else -> {
+                dao.setInterventionStatus(entity.id, "running", System.currentTimeMillis())
+                Prefs.get(context).negotiationUntil = 0
+                val running = dao.intervention(entity.id) ?: return
+                if (stillActive(context, running)) {
+                    Notifier.showFullScreen(context, running)
+                    Reshow.schedule(context, running.id, running.reshowMinutes)
+                }
+            }
+        }
     }
 
     /** 뒤로가기·홈으로 나감. 재표시는 계속된다. */

@@ -18,14 +18,21 @@ public class Store {
     }
 
     public record Block(long id, long taskId, Instant start, Instant end, String status, String screenText,
-                        Instant actualStart, Instant actualEnd, int version) {
+                        Instant actualStart, Instant actualEnd, int version, Long workProductId) {
     }
 
     public record Intervention(long id, long blockId, String status, int level, int blockVersion,
-                               Instant startedAt, Instant endedAt, String endReason, int version) {
+                               Instant startedAt, Instant endedAt, String endReason, int version,
+                               Instant negotiateUntil) {
 
+        /** 화면을 띄우는 중(재표시 대상). */
         public boolean running() {
             return "running".equals(status);
+        }
+
+        /** 끝나지 않은 개입: running 또는 negotiating(미루기 협상 중, 빌드문서 v3 §3). */
+        public boolean active() {
+            return "running".equals(status) || "negotiating".equals(status);
         }
     }
 
@@ -99,13 +106,16 @@ public class Store {
                 .query(Store::intervention).optional();
     }
 
+    /** 끝나지 않은 개입(running·negotiating). 개입은 동시에 하나만 둔다. */
     public List<Intervention> runningInterventions() {
-        return db.jdbc().sql("SELECT * FROM interventions WHERE status = 'running' ORDER BY id")
+        return db.jdbc().sql("SELECT * FROM interventions WHERE status IN ('running', 'negotiating') ORDER BY id")
                 .query(Store::intervention).list();
     }
 
     public Optional<Intervention> runningForBlock(long blockId) {
-        return db.jdbc().sql("SELECT * FROM interventions WHERE status = 'running' AND block_id = ? ORDER BY id")
+        return db.jdbc().sql("""
+                        SELECT * FROM interventions WHERE status IN ('running', 'negotiating') AND block_id = ?
+                        ORDER BY id""")
                 .param(blockId).query(Store::intervention).list().stream().findFirst();
     }
 
@@ -134,6 +144,12 @@ public class Store {
     public List<Block> blocksStartingBetween(Instant from, Instant to) {
         return db.jdbc().sql("SELECT * FROM blocks WHERE start_at >= ? AND start_at < ? ORDER BY start_at, id")
                 .param(AssistantDb.ts(from)).param(AssistantDb.ts(to))
+                .query(Store::block).list();
+    }
+
+    /** 진행 중(started) 블록. */
+    public List<Block> startedBlocks() {
+        return db.jdbc().sql("SELECT * FROM blocks WHERE status = 'started' ORDER BY start_at, id")
                 .query(Store::block).list();
     }
 
@@ -172,12 +188,13 @@ public class Store {
         return new Block(rs.getLong("id"), rs.getLong("task_id"), AssistantDb.instant(rs, "start_at"),
                 AssistantDb.instant(rs, "end_at"), rs.getString("status"), rs.getString("screen_text"),
                 AssistantDb.instant(rs, "actual_start"), AssistantDb.instant(rs, "actual_end"),
-                rs.getInt("version"));
+                rs.getInt("version"), AssistantDb.nullableLong(rs, "work_product_id"));
     }
 
     static Intervention intervention(ResultSet rs, int n) throws SQLException {
         return new Intervention(rs.getLong("id"), rs.getLong("block_id"), rs.getString("status"),
                 rs.getInt("level"), rs.getInt("block_version"), AssistantDb.instant(rs, "started_at"),
-                AssistantDb.instant(rs, "ended_at"), rs.getString("end_reason"), rs.getInt("version"));
+                AssistantDb.instant(rs, "ended_at"), rs.getString("end_reason"), rs.getInt("version"),
+                AssistantDb.instant(rs, "negotiate_until"));
     }
 }

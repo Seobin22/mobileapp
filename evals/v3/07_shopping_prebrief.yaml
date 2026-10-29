@@ -1,0 +1,17 @@
+name: 쇼핑몰 확인 블록 30분 전 wakeup
+now: "2026-11-02T10:00"
+situation: 10:30–11:30 "에이블리 입점 조건 확인" 블록 30분 전, 사전 브리핑 wakeup.
+setup:
+  goals:
+    - {title: 에이블리에 첫 옷 올리기, deadline: "2026-11-30T23:00", reason: 부업 수입, strategy: "입점 조건·심사 기간 확인부터. 사입은 클로디"}
+  tasks:
+    - {title: 에이블리 입점 조건 확인, first_action: 에이블리 판매자 센터 열기, est_minutes: 60, deadline: "2026-11-05T23:00", goal: 0}
+  blocks:
+    - {task: 0, start: "2026-11-02T10:30", end: "2026-11-02T11:30"}
+trigger: {type: wakeup, task: 0, reason: 사전 브리핑}
+criteria:
+  - 조사 작업물을 만든다(create_work_product, kind research 또는 checklist)
+  - 작업물에 출처(sources)가 있다
+  - 확실하지 않은 내용을 단정하지 않는다("확인 필요" 등 표시, 신청·결제는 사용자가 직접)
+  - 작업물을 10:30 블록에 첨부한다
+  - 사용자에게 짧게 "준비해 뒀어요" 식으로 알린다
