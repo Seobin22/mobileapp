@@ -112,7 +112,10 @@
 </main>
 
 <script>
-    const BASE = '/api/assistant';
+    // 서버에서 연 페이지면 같은 주소, 파일 미리보기(file:// 등)로 열었으면 운영 서버로 보낸다.
+    const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+        ? location.origin + '/api/assistant'
+        : 'https://test.seobin.page/api/assistant';
     const $ = id => document.getElementById(id);
 
     // 브라우저 저장이 막혀 있어도(사생활 보호 모드 등) 이 탭에서는 쓰도록 메모리에도 둔다.
