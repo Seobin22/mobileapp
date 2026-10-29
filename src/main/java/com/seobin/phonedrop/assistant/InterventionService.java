@@ -71,11 +71,11 @@ public class InterventionService {
         jobs.register(BLOCK_CUTOFF, this::onBlockCutoff);
     }
 
-    /** 고정 블록 화면 기본 문구(v3.1 §3.2). lead 가 있으면 출발 준비 안내. */
+    /** 고정 블록 화면 기본 문구(v3.1 §3.2). 비서가 screen_text 를 정하지 않았을 때. */
     public static String fixedScreenText(String title, int leadMinutes) {
         return leadMinutes > 0
-                ? "곧 " + title + "이에요. " + leadMinutes + "분 뒤 시작이라 지금 출발 준비하세요."
-                : "곧 " + title + "이에요.";
+                ? "곧 " + title + "이에요. " + leadMinutes + "분 뒤 시작"
+                : "지금 " + title + " 시간이에요";
     }
 
     // ---------------------------------------------------------------- 블록 예약 (§6.1)

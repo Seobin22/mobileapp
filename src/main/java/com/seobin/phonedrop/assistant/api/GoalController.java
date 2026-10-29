@@ -74,6 +74,7 @@ public class GoalController {
         return tx.run(() -> {
             FixedBlockService.Result r = fixedBlocks.upsert(body, null);
             fixedBlocks.notifyDisplaced(r);
+            fixedBlocks.notifyPrepNeeded(r);
             return fixedBlocks.toResponse(r);
         });
     }

@@ -19,8 +19,8 @@ import com.seobin.phonedrop.assistant.TimeUtil;
 
 /**
  * 시간표 조회(get_timeline, GET /v1/timeline)와 부하 요약(get_load_summary).
- * free = 활동 구간 − 활성 블록(고정 블록은 출발 준비·이동 시간 포함) − 조용한 시간 − 식사.
- * 항목 kind: fixed_block | planned_block | quiet | meal | free (빌드문서 v3.1 §3.3).
+ * free = 활동 구간 − 활성 블록(고정 블록은 출발 준비·이동 시간 포함) − 조용한 시간.
+ * 항목 kind: fixed_block | planned_block | quiet | free (빌드문서 v3.1 §3.3, 기본 식사 시간 없음).
  */
 @Component
 public class Timeline {
@@ -98,6 +98,7 @@ public class Timeline {
                     item.put("buffer_after_min", b.bufferAfterMin());
                     item.put("location", b.location());
                     item.put("source", b.source());
+                    item.put("prep_set_by", b.prepSetBy());
                 }
                 if (b.workProductId() != null) {
                     item.put("work_product_id", b.workProductId());
@@ -114,10 +115,7 @@ public class Timeline {
                 }
                 busy.add(q);
             }
-            for (TimeUtil.Window m : time.dailyWindows("life.meals", s, e)) {
-                items.add(item("meal", m.start(), m.end()));
-                busy.add(m);
-            }
+
             Instant freeFrom = max(s, active.start());
             Instant freeTo = min(e, active.end());
             for (TimeUtil.Window f : subtract(freeFrom, freeTo, busy)) {
@@ -158,7 +156,7 @@ public class Timeline {
                     .filter(b -> ownTaskId == null || !ownTaskId.equals(b.taskId()))
                     .forEach(b -> busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd())));
             busy.addAll(time.quietWindows(s, e));
-            busy.addAll(time.dailyWindows("life.meals", s, e));
+
             for (TimeUtil.Window f : subtract(s, e, busy)) {
                 total += Duration.between(f.start(), f.end()).toMinutes();
             }

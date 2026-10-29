@@ -65,7 +65,7 @@ public class ContextBuilder {
         sb.append("# 생활 패턴\n")
                 .append("기상 ").append(settings.getString("life.wake"))
                 .append(" / 취침 ").append(settings.getString("life.sleep"))
-                .append(" / 식사 ").append(windows(settings.get("life.meals")))
+
                 .append(" / 집중 잘 되는 시간: ").append(windows(settings.get("life.focus_windows")))
                 .append(" / 방해 금지: ").append(windows(settings.get("dnd.windows"))).append("\n\n");
 
@@ -261,6 +261,9 @@ public class ContextBuilder {
             case "goal_changed_by_user" -> "goal_changed_by_user: 사용자가 목표 탭에서 목표#" + ref.path("goal_id").asLong()
                     + "을 직접 바꿈(" + ref.path("action").asString("") + (ref.hasNonNull("fields") ? " " + ref.get("fields").asString() : "")
                     + "). 시간표를 다시 정리하고 짧게 알린다";
+            case "fixed_block_added" -> "fixed_block_added: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
+                    + "을 준비 시간 없이 넣었다. 장소·거리·준비물·일의 성격을 보고 lead_minutes·buffer_after_min 을 정하거나"
+                    + " 앞에 준비용 계획 블록을 만든다(upsert_fixed_block 에 id 와 두 값만)";
             case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 넣어 계획 블록 " + ref.path("displaced") + "이 취소됐다. 재배치하고 알린다";
             case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
@@ -321,6 +324,8 @@ public class ContextBuilder {
                                 .append(goalTag(item))
                                 .append(item.get("task_id") == null ? "" : " (할일#" + item.get("task_id") + ")")
                                 .append(item.get("location") == null ? "" : " @" + item.get("location"))
+                                .append(item.get("prep_set_by") == null ? " (준비 시간 미정)"
+                                        : "user".equals(item.get("prep_set_by")) ? " (준비 시간 사용자가 정함)" : "")
                                 .append("calendar".equals(item.get("source")) ? " (캘린더)" : "")
                                 .append(" ").append(item.get("status")).append('\n');
                     }
@@ -331,7 +336,7 @@ public class ContextBuilder {
                             .append(item.get("work_product_id") == null ? "" : " (작업물#" + item.get("work_product_id") + " 첨부)")
                             .append('\n');
                     case "quiet" -> sb.append("- ").append(range).append(" 방해금지\n");
-                    case "meal" -> sb.append("- ").append(range).append(" 식사\n");
+
                     default -> {
                     }
                 }

@@ -333,7 +333,6 @@ fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, 
                                         Text(
                                             when (item.kind) {
                                                 "quiet" -> "방해 금지"
-                                                "meal" -> "식사"
                                                 else -> item.title.orEmpty()
                                             },
                                             fontWeight = if (isBlock) FontWeight.Bold else null,

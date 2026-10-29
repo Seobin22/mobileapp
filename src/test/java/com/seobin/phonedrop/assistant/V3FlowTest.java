@@ -179,11 +179,11 @@ class V3FlowTest extends AssistantTestBase {
                         INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes, deadline)
                         VALUES ('보고서', '열기', 120, 120, ?)""",
                 at("2026-11-02T15:00"));
-        // 09:00~15:00 중 식사 12:00~13:00 을 빼면 300분
+        // 09:00~15:00 전부 빈 시간(v3.1: 기본 식사 시간 없음) = 360분
         JsonNode f = tool("get_facts", "{\"task_id\":" + taskId + "}");
-        assertThat(f.path("free_minutes_until_deadline").asInt()).isEqualTo(300);
-        assertThat(f.path("slack_minutes").asInt()).isEqualTo(180);
-        assertThat(f.path("slack_if_delayed_30m").asInt()).isEqualTo(150);
+        assertThat(f.path("free_minutes_until_deadline").asInt()).isEqualTo(360);
+        assertThat(f.path("slack_minutes").asInt()).isEqualTo(240);
+        assertThat(f.path("slack_if_delayed_30m").asInt()).isEqualTo(210);
         assertThat(f.path("hours_until_deadline").asDouble()).isEqualTo(6.0);
     }
 

@@ -159,6 +159,8 @@ data class TimelineItem(
     val lead_minutes: Int = 0,
     val buffer_after_min: Int = 0,
     val location: String? = null,
+    /** lead·buffer 를 누가 정했나(user | assistant | null=아직, 비서가 정함). */
+    val prep_set_by: String? = null,
 )
 
 // ------------------------------------------------------------------ v3.1 목표·고정 블록

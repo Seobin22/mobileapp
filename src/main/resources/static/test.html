@@ -89,7 +89,7 @@
         <div class="row">
             <div><label>시작</label><input id="start" type="datetime-local"></div>
             <div><label>길이(분)</label><input id="duration" type="number" value="30" min="5"></div>
-            <div><label>출발 준비(분)</label><input id="lead" type="number" value="10" min="0"></div>
+            <div><label>출발 준비(분, 비우면 비서가 정함)</label><input id="lead" type="number" min="0" placeholder="비서가 정함"></div>
         </div>
         <div class="row">
             <div><label>장소(선택)</label><input id="location" placeholder="역삼동 ○○치과"></div>
@@ -322,7 +322,7 @@
 
     async function loadTimeline() {
         const t = await api('GET', '/v1/timeline');
-        const label = { fixed_block: '고정', planned_block: '계획', quiet: '방해금지', meal: '식사', free: '빈 시간' };
+        const label = { fixed_block: '고정', planned_block: '계획', quiet: '방해금지', free: '빈 시간' };
         const leave = i => {
             if (!i.lead_minutes) return '';
             const d = new Date(new Date(i.start).getTime() - i.lead_minutes * 60000);
@@ -404,13 +404,14 @@
         try {
             const body = {
                 title: $('title').value, start: localInputToIso($('start').value),
-                duration_min: Number($('duration').value), lead_minutes: Number($('lead').value || 0)
+                duration_min: Number($('duration').value)
             };
+            if ($('lead').value !== '') body.lead_minutes = Number($('lead').value);
             if ($('firstAction').value.trim()) body.first_action = $('firstAction').value.trim();
             if ($('location').value.trim()) body.location = $('location').value.trim();
             if ($('goalSelect').value) body.goal_id = Number($('goalSelect').value);
             await api('POST', '/v1/fixed_blocks', body);
-            $('title').value = ''; $('firstAction').value = ''; $('location').value = ''; $('lead').value = 10;
+            $('title').value = ''; $('firstAction').value = ''; $('location').value = ''; $('lead').value = '';
             await refreshAll();
         } catch (e) { $('addError').textContent = e.message; }
     };

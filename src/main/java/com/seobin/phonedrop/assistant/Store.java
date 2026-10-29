@@ -20,11 +20,13 @@ public class Store {
     /**
      * 시간표의 칸(빌드문서 v3.1 §1). kind=fixed 는 사용자가 시각을 정한 고정 블록(할 일 없이도 있다),
      * planned 는 비서가 할 일을 위해 잡은 계획 블록. 둘 다 개입(알람)이 간다.
+     * prepSetBy: lead·buffer 를 누가 정했나(user | assistant | null=아직, lead 0 으로 계산, v3.1 §3.2.1).
      */
     public record Block(long id, Long taskId, Instant start, Instant end, String status, String screenText,
                         Instant actualStart, Instant actualEnd, int version, Long workProductId,
                         String kind, String title, Long goalId, int leadMinutes, int bufferAfterMin,
-                        String location, String source, String externalId, boolean sensitive) {
+                        String location, String source, String externalId, boolean sensitive,
+                        String prepSetBy) {
 
         public boolean fixed() {
             return "fixed".equals(kind);
@@ -212,7 +214,8 @@ public class Store {
                 rs.getInt("version"), AssistantDb.nullableLong(rs, "work_product_id"),
                 rs.getString("kind"), rs.getString("title"), AssistantDb.nullableLong(rs, "goal_id"),
                 rs.getInt("lead_minutes"), rs.getInt("buffer_after_min"), rs.getString("location"),
-                rs.getString("source"), rs.getString("external_id"), rs.getBoolean("sensitive"));
+                rs.getString("source"), rs.getString("external_id"), rs.getBoolean("sensitive"),
+                rs.getString("prep_set_by"));
     }
 
     static Intervention intervention(ResultSet rs, int n) throws SQLException {

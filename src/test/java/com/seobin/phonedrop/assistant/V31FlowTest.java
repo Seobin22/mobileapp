@@ -173,10 +173,16 @@ class V31FlowTest extends AssistantTestBase {
     }
 
     @Test
-    void f2b_defaultLeadFromSettings() {
+    void p3_noDefaultLeadSetting() {
+        assertThat(settings.all()).doesNotContainKey("fixed.default_lead_minutes").doesNotContainKey("life.meals");
+        // 비서가 준비 시간을 안 정하면 lead 0(아직 안 정함), 시작 시각에 개입
         JsonNode r = tool("upsert_fixed_block", "{\"title\":\"회의\",\"start\":\"" + iso("2026-11-02T15:00")
                 + "\",\"end\":\"" + iso("2026-11-02T16:00") + "\"}");
-        assertThat(block(r.path("id").asLong()).leadMinutes()).isEqualTo(10);
+        Store.Block b = block(r.path("id").asLong());
+        assertThat(b.leadMinutes()).isZero();
+        assertThat(b.prepSetBy()).isNull();
+        assertThat(b.screenText()).isEqualTo("지금 회의 시간이에요");
+        assertThat(jobFire("start_intervention")).isEqualTo(at("2026-11-02T15:00"));
     }
 
     @Test
@@ -247,6 +253,101 @@ class V31FlowTest extends AssistantTestBase {
         runUntil("2026-11-02T09:50");
         assertThat(block(p).status()).isEqualTo("partial");
         assertThat(block(p).actualEnd()).isEqualTo(at("2026-11-02T09:50"));
+    }
+
+    // ------------------------------------------------------------------ P: 준비 시간은 비서의 판단 (§3.2.1)
+
+    @Autowired
+    com.seobin.phonedrop.assistant.agent.FixedBlockService fixedBlocks;
+
+    /** 앱(POST /v1/fixed_blocks)과 같은 경로: turnId 없이 만들고 준비 시간이 비었으면 fixed_block_added. */
+    long appFixed(String json) {
+        return tx.run(() -> {
+            var r = fixedBlocks.upsert(Json.parse(json), null);
+            fixedBlocks.notifyDisplaced(r);
+            fixedBlocks.notifyPrepNeeded(r);
+            assertThat(r.ok()).as(r.error()).isTrue();
+            return r.id();
+        });
+    }
+
+    @Test
+    void p1_appBlockWithoutPrepLetsAssistantDecide() {
+        long id = appFixed("{\"title\":\"치과\",\"start\":\"" + iso("2026-11-02T15:00") + "\",\"duration_min\":60,"
+                + "\"location\":\"강남역 치과\"}");
+        Store.Block b = block(id);
+        assertThat(b.prepSetBy()).isNull();
+        assertThat(b.leadMinutes()).isZero();
+        assertThat(b.source()).isEqualTo("manual");
+        assertThat(turns("fixed_block_added")).isEqualTo(1);
+        assertThat(db.jdbc().sql("SELECT priority FROM jobs WHERE type = 'turn'").query(Integer.class).single()).isEqualTo(10);
+
+        llm.then(tools(call("upsert_fixed_block", "{\"id\":" + id + ",\"lead_minutes\":30,\"buffer_after_min\":20}")))
+                .then(text(""));
+        runAgent();
+        assertThat(llm.userContents.getFirst()).contains("fixed_block_added").contains("(준비 시간 미정)");
+        assertThat(count("SELECT COUNT(*) FROM confirmations")).isZero();
+        b = block(id);
+        assertThat(b.leadMinutes()).isEqualTo(30);
+        assertThat(b.bufferAfterMin()).isEqualTo(20);
+        assertThat(b.prepSetBy()).isEqualTo("assistant");
+        assertThat(jobFire("start_intervention")).isEqualTo(at("2026-11-02T14:30"));
+    }
+
+    @Test
+    void p2_userSetPrepIsNotOverwrittenByAssistant() {
+        long id = appFixed("{\"title\":\"치과\",\"start\":\"" + iso("2026-11-02T15:00") + "\",\"duration_min\":60,"
+                + "\"lead_minutes\":15}");
+        assertThat(block(id).prepSetBy()).isEqualTo("user");
+        assertThat(turns("fixed_block_added")).isZero();
+
+        JsonNode pulse = tool("pulse", "upsert_fixed_block", "{\"id\":" + id + ",\"lead_minutes\":40}");
+        assertThat(pulse.path("ok").asBoolean()).isFalse();
+        assertThat(pulse.path("error").asString()).contains("사용자가 정한 준비 시간");
+        JsonNode chat = tool("upsert_fixed_block", "{\"id\":" + id + ",\"lead_minutes\":40}");
+        assertThat(chat.path("ok").asBoolean()).isFalse();
+        assertThat(block(id).leadMinutes()).isEqualTo(15);
+        // 사용자가 직접 말한 값이면 바꿀 수 있다
+        assertThat(tool("upsert_fixed_block", "{\"id\":" + id + ",\"lead_minutes\":25,\"prep_from_user\":true}")
+                .path("ok").asBoolean()).isTrue();
+        assertThat(block(id).leadMinutes()).isEqualTo(25);
+        assertThat(block(id).prepSetBy()).isEqualTo("user");
+    }
+
+    @Test
+    void p2b_assistantPrepCanBeRedecidedWithoutConfirmation() {
+        long id = tool("upsert_fixed_block", fixed("미용실", "2026-11-02T16:00", "2026-11-02T17:00", 10)).path("id").asLong();
+        assertThat(block(id).prepSetBy()).isEqualTo("assistant");
+        JsonNode r = tool("wakeup", "upsert_fixed_block", "{\"id\":" + id + ",\"lead_minutes\":30}");
+        assertThat(r.path("ok").asBoolean()).isTrue();
+        assertThat(block(id).leadMinutes()).isEqualTo(30);
+        // 시작 시각 변경은 기존 권한 규칙 그대로(확인 카드)
+        JsonNode move = tool("wakeup", "upsert_fixed_block", "{\"id\":" + id + ",\"start\":\"" + iso("2026-11-02T18:00")
+                + "\",\"end\":\"" + iso("2026-11-02T19:00") + "\"}");
+        assertThat(move.path("pending_confirmation_id").isNumber()).isTrue();
+    }
+
+    // ------------------------------------------------------------------ M: 기본 식사 시간 없음
+
+    @Test
+    void m1_noMealSetting() {
+        assertThat(settings.all()).doesNotContainKey("life.meals");
+    }
+
+    @Test
+    void m2_lunchTimeIsSchedulable() {
+        long t = task(null, "보고서");
+        JsonNode r = tool("set_schedule", "{\"from\":\"" + iso("2026-11-02T09:00") + "\",\"to\":\"" + iso("2026-11-03T00:00")
+                + "\",\"blocks\":[{\"task_id\":" + t + ",\"start\":\"" + iso("2026-11-02T12:00") + "\",\"end\":\""
+                + iso("2026-11-02T13:00") + "\"}]}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+    }
+
+    @Test
+    void m3_noMealInTimelineOrContext() {
+        JsonNode r = tool("get_timeline", "{\"from\":\"" + iso("2026-11-02T09:00") + "\",\"to\":\"" + iso("2026-11-04T00:00") + "\"}");
+        assertThat(r.toString()).doesNotContain("\"meal\"");
+        assertThat(tx.run(this::agentContext)).doesNotContain("식사");
     }
 
     // ------------------------------------------------------------------ G: 목표 진행 보장

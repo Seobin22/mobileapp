@@ -72,12 +72,14 @@ public class V5DataMigration {
                 already++;
                 continue;
             }
+            // 일정의 버퍼는 비서가 정했던 값이라 prep_set_by=assistant(없으면 아직 안 정함).
+            String prep = e.before() > 0 || e.after() > 0 ? "assistant" : null;
             long id = db.insert("""
                             INSERT INTO blocks(kind, title, start_at, end_at, status, screen_text, lead_minutes,
-                            buffer_after_min, source, external_id, sensitive, migrated_event_id)
-                            VALUES ('fixed', ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
+                            buffer_after_min, source, external_id, sensitive, migrated_event_id, prep_set_by)
+                            VALUES ('fixed', ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?)""",
                     e.title(), e.start(), e.end(), InterventionService.fixedScreenText(e.title(), e.before()),
-                    e.before(), e.after(), e.source(), e.externalId(), e.sensitive(), e.id());
+                    e.before(), e.after(), e.source(), e.externalId(), e.sensitive(), e.id(), prep);
             // 개입 시각(start − lead)이 과거면 시작 작업은 예약되지 않는다(끝 작업만).
             interventions.scheduleBlockJobs(store.block(id).orElseThrow());
             copied++;

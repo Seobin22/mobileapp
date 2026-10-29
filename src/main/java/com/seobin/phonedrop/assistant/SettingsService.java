@@ -27,7 +27,7 @@ public class SettingsService {
         d.put("local_backup.grace_seconds", "90");
         d.put("jobs.late_threshold_seconds", "120");
         // v2
-        d.put("life.meals", "[{\"start\":\"12:00\",\"end\":\"13:00\"},{\"start\":\"18:30\",\"end\":\"19:30\"}]");
+
         d.put("life.focus_windows", "[{\"days\":[1,2,3,4,5],\"start\":\"09:00\",\"end\":\"12:00\"}]");
         d.put("persona", "\"다정한 코치\"");
         d.put("agent.max_tool_calls", "15");
@@ -51,7 +51,7 @@ public class SettingsService {
         d.put("goal.min_horizon_days", "2");
         d.put("goal.coverage_retry", "2");
         d.put("talk.timeout_minutes", "5");
-        d.put("fixed.default_lead_minutes", "10");
+
         DEFAULTS = Map.copyOf(d);
     }
 
@@ -111,7 +111,7 @@ public class SettingsService {
                 case "user.timezone" -> ZoneId.of(value.asString());
                 case "life.wake", "life.sleep" -> LocalTime.parse(value.asString());
                 case "dnd.windows", "life.focus_windows" -> validateWindows(value, true);
-                case "life.meals" -> validateWindows(value, false);
+
                 case "persona" -> {
                     if (!value.isString() || value.asString().isBlank()) {
                         throw new IllegalArgumentException();

@@ -156,7 +156,7 @@
 - **고정 블록 검증**: 사용자가 정한 시각이므로 수면·식사는 검사하지 않는다(길이 5분 미만·이미 지남은 거절). 수면·방해 금지와 겹치면 알람이 안 뜨므로 도구 결과에 warning 을 넣어 비서가 알리게 했다. `/v1/admin/tasks`(v1 호환)는 예전처럼 수면·방해 금지를 거절한다.
 - 고정끼리 겹침 거절 문구: "○○(MM/dd HH:mm–HH:mm, 블록#N)와 겹쳐요. 시간을 바꿔 주세요."
 - 진행 중 블록과 겹치면 `block_cutoff` 작업(금지 구간 시작)으로 partial + block_ended turn(reason=fixed_block).
-- `fixed.default_lead_minutes`(10)는 도구·앱 API 에서 lead 를 안 줬을 때만. v1 `/v1/admin/tasks` 는 lead 0 고정 블록 + 할 일을 함께 만든다(v1 수정·삭제가 할 일 id 로 동작하도록).
+- (개정 3에서 `fixed.default_lead_minutes` 를 없앴다. 아래 "v3.1 개정" 참고.) v1 `/v1/admin/tasks` 는 lead 0 고정 블록 + 할 일을 함께 만든다(v1 수정·삭제가 할 일 id 로 동작하도록).
 - 고정 블록 move_block: 권한(사용자 말 아니면 확인 카드) 후 고정 블록 규칙으로 옮긴다(겹친 계획 블록 displaced). nudging 이면 snoozed(moved).
 - 고정 블록 화면 기본 문구: "곧 {title}이에요. {lead}분 뒤 시작이라 지금 출발 준비하세요."(lead 0 이면 "곧 {title}이에요.") — OPEN_ISSUES 참고.
 - "고정 블록 진행 중"(구 일정 진행 중: pulse 건너뛰기·알림 없음 판단)은 [시작]을 누르지 않은 고정 블록만. 시작한 고정 블록은 작업 중으로 본다(체크인 알림이 감).
@@ -189,3 +189,14 @@
 - 탭 3개(채팅·시간표·목표). 시간표: 목표 색 띠·이름표 칩·'고정'·출발 시각. [+] = 고정 블록 만들기(제목·날짜·시각·길이·출발 준비 기본 10·장소·목표·첫 행동).
 - 풀스크린: 이름표·제목·문구 / [시작] / 대화 / 입력줄(🎤 ko-KR 인식 끝나면 바로 전송). 답을 기다리는 동안 "생각 중…", 3초마다 서버에서도 확인(FCM 이 늦어도 보이게). 답은 TTS. [미루기 요청] 버튼은 없앴다. talk_timeout 뒤 intervention.level 이 다시 오면 같은 화면에서 알림음.
 - 로컬 백업 알람은 plan.sync 의 alarm_at(= start − lead) 기준. Room 스키마 4(파괴적 마이그레이션).
+
+## v3.1 개정(빌드문서 v3.1 개정 3, 2026-10-30) — 기본 식사 시간 폐지·준비 시간은 비서의 판단
+
+- **기본 식사 시간 폐지**: 설정 `life.meals` 기본값·검증·"식사 시간 겹침" 검사·시간표 meal 항목·맥락의 식사 표기를 모두 없앴다. 서버 DB 의 `life.meals` 행은 V6 마이그레이션이 지운다(직전 자동 백업 pre-V6). 점심 시간에도 블록이 잡힐 수 있다. 비워 둘 시간은 사용자가 고정 블록으로 넣는다. 집중 시간대 등 다른 설정 기본값은 그대로(문서 §0-6).
+- **준비 시간 기본값 없음**: `fixed.default_lead_minutes` 설정을 없앴다(V6 가 행 삭제). lead·buffer 를 안 주면 0 이고 `prep_set_by`=NULL(아직 안 정함, 시작 시각에 개입).
+- **prep_set_by**(blocks, V6): 앱 API(`/v1/fixed_blocks`, `/v1/admin/tasks`)에서 lead·buffer 를 넣으면 user, 비서 도구가 넣으면 assistant, 도구에서 `prep_from_user=true`(사용자가 직접 말한 값)이면 user. 이미 lead·buffer 가 있던 고정 블록(일정에서 옮긴 것)은 assistant 로 채웠다.
+- **덮어쓰기 금지**: prep_set_by=user 인 블록의 lead·buffer 를 비서가(어떤 trigger 든, prep_from_user 없이) 다른 값으로 바꾸려 하면 도구가 거절한다.
+- **확인 카드 없이**: lead·buffer 만 바꾸는 upsert_fixed_block(id + 두 값)은 사용자 말이 아닌 trigger 에서도 바로 실행한다(Permissions 의 시각 변경 = start·end 만). 시작·끝 변경·생성은 기존대로 확인 카드.
+- **fixed_block_added**: 앱에서 lead·buffer 없이 고정 블록을 만들면 turn(priority 10, ref block_id). 맥락의 시간표에 "(준비 시간 미정)"·"(준비 시간 사용자가 정함)" 표기.
+- 화면 문구 기본값: lead>0 "곧 {title}이에요. {lead}분 뒤 시작", 0 "지금 {title} 시간이에요".
+- 앱 3.1.1: [+] 의 출발·준비 시간은 비워 둘 수 있다(비우면 비서가 정함). 관리 화면도 같다.

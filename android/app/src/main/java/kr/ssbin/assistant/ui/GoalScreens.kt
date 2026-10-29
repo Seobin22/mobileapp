@@ -116,7 +116,8 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
             java.time.Duration.between(OffsetDateTime.parse(it.start), OffsetDateTime.parse(it.end)).toMinutes()
         } ?: 60).toString())
     }
-    var lead by remember { mutableStateOf((initial?.lead_minutes ?: 10).toString()) }
+    // 준비 시간은 비워 두면 비서가 장소·일의 성격을 보고 정한다(v3.1 §3.2.1).
+    var lead by remember { mutableStateOf(initial?.let { if (it.prep_set_by == null) "" else it.lead_minutes.toString() } ?: "") }
     var location by remember { mutableStateOf(initial?.location ?: "") }
     var firstAction by remember { mutableStateOf("") }
     var goalId by remember { mutableStateOf(initial?.goal_id) }
@@ -138,7 +139,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                 OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
                 OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") })
                 OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
-                OutlinedTextField(lead, { lead = it }, label = { Text("출발 준비(분) — 이만큼 먼저 알려요") })
+                OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
                 OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
                 if (initial == null) {
                     OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동(선택)") })
@@ -170,8 +171,9 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                         .atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
                 }.getOrNull()
                 val minutes = duration.trim().toIntOrNull()
-                val leadMinutes = lead.trim().ifEmpty { "0" }.toIntOrNull()
-                if (title.isBlank() || start == null || minutes == null || leadMinutes == null) {
+                val leadText = lead.trim()
+                val leadMinutes = if (leadText.isEmpty()) null else leadText.toIntOrNull()
+                if (title.isBlank() || start == null || minutes == null || (leadText.isNotEmpty() && leadMinutes == null)) {
                     error = "제목·날짜·시각·길이·출발 준비 형식을 확인하세요"
                     return@TextButton
                 }

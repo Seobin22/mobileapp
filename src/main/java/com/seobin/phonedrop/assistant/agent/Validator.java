@@ -74,7 +74,7 @@ public class Validator {
     }
 
     /**
-     * 시간 구간만 검사한다(유지 블록·수면·방해 금지·식사). 과거·길이·할 일 검사는 하지 않는다.
+     * 시간 구간만 검사한다(유지 블록·수면·방해 금지). 과거·길이·할 일 검사는 하지 않는다.
      * extend_block 의 늘어나는 구간(v3 §4.2)용.
      */
     public List<String> validateRange(Long taskId, Instant start, Instant end, List<Store.Block> keepBlocks) {
@@ -85,7 +85,7 @@ public class Validator {
     }
 
     /**
-     * 고정 블록 검사(§3.1). 사용자가 정한 시각이므로 수면·식사는 보지 않는다.
+     * 고정 블록 검사(§3.1). 사용자가 정한 시각이므로 수면·방해 금지는 보지 않는다.
      * 고정 블록끼리 금지 구간이 겹치면 거절, 계획 블록과 겹치면 고정 블록이 우선(displaced),
      * 진행 중 블록과 겹치면 금지 구간 시작에 partial(cutoff).
      */
@@ -139,10 +139,7 @@ public class Validator {
             violations.add(label + "이 수면·방해 금지 시간(" + range(q.start(), q.end()) + ")과 겹칩니다");
             break;
         }
-        // 4. 식사
-        for (TimeUtil.Window m : time.dailyWindows("life.meals", b.start(), b.end())) {
-            violations.add(label + "이 식사 시간(" + range(m.start(), m.end()) + ")과 겹칩니다");
-        }
+        // (v3.1: 기본 식사 시간과 '식사 시간 겹침' 검사는 없앴다.)
     }
 
     private String label(NewBlock b) {

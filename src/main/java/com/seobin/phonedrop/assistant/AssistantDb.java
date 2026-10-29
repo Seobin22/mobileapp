@@ -37,7 +37,8 @@ public class AssistantDb {
             "assistant/db/V2__chat_agent.sql",
             "assistant/db/V3__turn_cache_tokens.sql",
             "assistant/db/V4__negotiation_proactive.sql",
-            "assistant/db/V5__fixed_blocks_goals.sql"
+            "assistant/db/V5__fixed_blocks_goals.sql",
+            "assistant/db/V6__prep_set_by.sql"
     );
 
     private static final Logger log = LoggerFactory.getLogger(AssistantDb.class);

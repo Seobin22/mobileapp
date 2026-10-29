@@ -54,8 +54,8 @@ public class Permissions {
                     if (b != null && "calendar".equals(b.source())) {
                         return Decision.reject(CALENDAR_REJECT);
                     }
-                    boolean timeChange = args.hasNonNull("start") || args.hasNonNull("end")
-                            || args.hasNonNull("lead_minutes") || args.hasNonNull("buffer_after_min");
+                    // v3.1 §3.2.1: 준비 시간(lead·buffer)만 바꾸는 것은 확인 카드 없이(사용자가 정한 값은 도구가 거절한다).
+                    boolean timeChange = args.hasNonNull("start") || args.hasNonNull("end");
                     if (timeChange && !fromUser) {
                         return Decision.confirm("fixed_change");
                     }

@@ -93,7 +93,8 @@ class AgentUnitTest extends AssistantTestBase {
     void validatorQuietMealPastShortInactive() {
         long t = task("보고서", 60);
         assertThat(check(t, "2026-11-02T23:00", "2026-11-03T00:00")).anyMatch(v -> v.contains("수면·방해 금지"));
-        assertThat(check(t, "2026-11-02T12:30", "2026-11-02T13:30")).anyMatch(v -> v.contains("식사"));
+        // v3.1: 기본 식사 시간이 없으므로 점심 시간에도 블록을 둘 수 있다(M2)
+        assertThat(check(t, "2026-11-02T12:00", "2026-11-02T13:00")).isEmpty();
         assertThat(check(t, "2026-11-02T08:00", "2026-11-02T08:30")).anyMatch(v -> v.contains("지났습니다"));
         assertThat(check(t, "2026-11-02T10:00", "2026-11-02T10:04")).anyMatch(v -> v.contains("5분 미만"));
         assertThat(check(9999L, "2026-11-02T10:00", "2026-11-02T10:30")).anyMatch(v -> v.contains("없습니다"));
@@ -229,8 +230,8 @@ class AgentUnitTest extends AssistantTestBase {
         String text = tx.run(() -> context.build("user_message", Json.parse("{\"message_id\":0}")));
         assertThat(text).doesNotContain("정신과").doesNotContain("산부인과");
         assertThat(text).contains("할일#" + sensitive + " 비공개 할 일").contains("[고정] 비공개 일정 블록#" + ev);
-        // 09:00 기준, 10–11 블록·12–13 식사·14:50–16:10 고정 블록(준비·이동 포함)·18:30–19:30 식사
-        assertThat(text).contains("- 빈 시간: 09:00–10:00, 11:00–12:00, 13:00–14:50, 16:10–18:30, 19:30–23:30");
+        // 09:00 기준, 10–11 블록·14:50–16:10 고정 블록(준비·이동 포함). 식사 시간 없음(v3.1)
+        assertThat(text).contains("- 빈 시간: 09:00–10:00, 11:00–14:50, 16:10–23:30");
         assertThat(text).contains("# 목표 없는 할 일").contains("할일#" + t + " 보고서 초안");
     }
 }

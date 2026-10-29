@@ -108,10 +108,26 @@ public class FixedBlockService {
         if (!end.isAfter(start)) {
             return Result.fail("end 는 start 보다 뒤여야 합니다");
         }
+        // v3.1 §3.2.1: 준비 시간은 기본값이 없다. 비워 두면 아직 안 정함(lead 0 으로 계산).
+        // 앱(turnId 없음)에서 넣은 값은 user, 비서 도구가 넣은 값은 assistant(사용자가 직접 말한 값이면 prep_from_user).
+        boolean prepGiven = in.hasNonNull("lead_minutes") || in.hasNonNull("buffer_after_min");
         int lead = in.hasNonNull("lead_minutes") ? Math.max(0, in.get("lead_minutes").asInt())
-                : existing != null ? existing.leadMinutes() : settings.getInt("fixed.default_lead_minutes");
+                : existing != null ? existing.leadMinutes() : 0;
         int bufferAfter = in.hasNonNull("buffer_after_min") ? Math.max(0, in.get("buffer_after_min").asInt())
                 : existing != null ? existing.bufferAfterMin() : 0;
+        String prepSetBy = existing == null ? null : existing.prepSetBy();
+        if (prepGiven) {
+            boolean byUser = turnId == null || in.path("prep_from_user").asBoolean(false);
+            boolean prepChanged = existing == null || lead != existing.leadMinutes()
+                    || bufferAfter != existing.bufferAfterMin();
+            if (!byUser && prepChanged && existing != null && "user".equals(existing.prepSetBy())) {
+                return Result.fail("사용자가 정한 준비 시간(출발 준비 " + existing.leadMinutes() + "분, 끝난 뒤 "
+                        + existing.bufferAfterMin() + "분)이라 바꾸지 않습니다. 필요하면 사용자에게 말로 제안하세요.");
+            }
+            if (prepChanged || prepSetBy == null) {
+                prepSetBy = byUser ? "user" : "assistant";
+            }
+        }
         Long goalId = in.has("goal_id") ? (in.get("goal_id").isNull() ? null : in.get("goal_id").asLong())
                 : existing == null ? null : existing.goalId();
         if (goalId != null && store.goal(goalId).filter(g -> "active".equals(g.status())).isEmpty()) {
@@ -143,9 +159,10 @@ public class FixedBlockService {
             String source = turnId == null ? "manual" : "chat";
             blockId = db.insert("""
                             INSERT INTO blocks(kind, title, task_id, goal_id, start_at, end_at, status, screen_text,
-                            lead_minutes, buffer_after_min, location, source, sensitive)
-                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?)""",
-                    title, taskId, goalId, start, end, screen, lead, bufferAfter, location, source, sensitive);
+                            lead_minutes, buffer_after_min, location, source, sensitive, prep_set_by)
+                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
+                    title, taskId, goalId, start, end, screen, lead, bufferAfter, location, source, sensitive,
+                    prepSetBy);
             record(turnId, blockId, null);
         } else {
             blockId = existing.id();
@@ -157,10 +174,10 @@ public class FixedBlockService {
             db.update("""
                             UPDATE blocks SET title = ?, task_id = ?, goal_id = ?, start_at = ?, end_at = ?,
                             screen_text = ?, lead_minutes = ?, buffer_after_min = ?, location = ?, sensitive = ?,
-                            status = CASE WHEN ? THEN 'planned' ELSE status END,
+                            prep_set_by = ?, status = CASE WHEN ? THEN 'planned' ELSE status END,
                             version = version + CASE WHEN ? THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?""",
-                    title, taskId, goalId, start, end, screen, lead, bufferAfter, location, sensitive,
+                    title, taskId, goalId, start, end, screen, lead, bufferAfter, location, sensitive, prepSetBy,
                     timeChanged, timeChanged, blockId);
             record(turnId, blockId, before);
         }
@@ -217,6 +234,18 @@ public class FixedBlockService {
             ref.put("block_id", r.id());
             ref.set("displaced", Json.MAPPER.valueToTree(r.displaced()));
             turns.enqueue("blocks_displaced", ref, TurnQueue.PRIORITY_DEFAULT);
+        }
+    }
+
+    /**
+     * 앱에서 준비 시간을 비워 두고 만든 고정 블록이면 fixed_block_added turn(priority 10, §3.2.1).
+     * 비서가 lead·buffer 를 정하거나 준비용 계획 블록을 만든다.
+     */
+    public void notifyPrepNeeded(Result r) {
+        if (r.ok() && store.block(r.id()).map(b -> b.prepSetBy() == null).orElse(false)) {
+            ObjectNode ref = Json.object();
+            ref.put("block_id", r.id());
+            turns.enqueue("fixed_block_added", ref, TurnQueue.PRIORITY_USER);
         }
     }
 

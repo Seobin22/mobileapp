@@ -1,7 +1,7 @@
 [
   {
     "name": "get_timeline",
-    "description": "기간(최대 14일)의 시간표를 날짜별로 본다. items 의 kind 는 fixed_block(사용자가 시각을 정한 고정 블록)·planned_block(네가 잡은 계획 블록)·quiet(방해 금지)·meal(식사)·free(빈 시간). 블록마다 goal_id·goal_label·goal_color. 고정 블록은 lead_minutes(출발·준비)·buffer_after_min(끝난 뒤 이동) 구간도 다른 블록 금지. 시각은 ISO-8601(오프셋 포함).",
+    "description": "기간(최대 14일)의 시간표를 날짜별로 본다. items 의 kind 는 fixed_block(사용자가 시각을 정한 고정 블록)·planned_block(네가 잡은 계획 블록)·quiet(방해 금지)·free(빈 시간). 블록마다 goal_id·goal_label·goal_color. 고정 블록은 lead_minutes(출발·준비)·buffer_after_min(끝난 뒤 이동) 구간도 다른 블록 금지이고, prep_set_by 는 그 값을 누가 정했는지(user | assistant | null=아직 안 정함). 시각은 ISO-8601(오프셋 포함).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -213,7 +213,7 @@
   },
   {
     "name": "upsert_fixed_block",
-    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes 는 출발·준비 시간(개입이 start − lead 에 시작, 생략하면 기본값), buffer_after_min 은 끝난 뒤 이동·회복 시간. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 사용자가 방금 말한 경우가 아니면 확인 카드가 된다.",
+    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes(출발·준비 시간, 개입이 start − lead 에 시작)와 buffer_after_min(끝난 뒤 이동·회복)은 기본값이 없다: 장소·거리·준비물·일의 성격을 보고 네가 정한다(집에서 바로 하는 일이면 0). 사용자가 준비 시간을 직접 말했으면 prep_from_user=true. 사용자가 정한 준비 시간은 바꿀 수 없다(거절된다). 네가 정한 준비 시간(prep_set_by=assistant)은 새 정보가 생기면 id 와 두 값만 보내 확인 카드 없이 다시 정할 수 있다. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 시작·끝 시각 변경과 생성은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -233,7 +233,7 @@
         },
         "lead_minutes": {
           "type": "integer",
-          "description": "출발·준비 시간(분). 외출 약속은 이동 시간에 맞게, 집에서 하는 일은 0~5"
+          "description": "출발·준비 시간(분). 기본값 없음, 맥락으로 판단(집에서 하는 일 0, 먼 곳은 이동 시간을 넉넉히)"
         },
         "buffer_after_min": {
           "type": "integer",
@@ -260,6 +260,10 @@
         },
         "sensitive": {
           "type": "boolean"
+        },
+        "prep_from_user": {
+          "type": "boolean",
+          "description": "lead·buffer 를 사용자가 직접 말했으면 true(이후 비서가 바꾸지 않는다)"
         },
         "confirm_text": {
           "type": "string",
@@ -501,7 +505,7 @@
   },
   {
     "name": "extend_block",
-    "description": "진행 중(started) 블록의 끝 시각을 늘린다. 뒤 블록·일정·식사·방해 금지와 겹치면 거절되니, 뒤 블록이 있으면 move_block 으로 먼저 옮긴다.",
+    "description": "진행 중(started) 블록의 끝 시각을 늘린다. 뒤 블록·고정 블록·방해 금지와 겹치면 거절되니, 뒤 블록이 있으면 move_block 으로 먼저 옮긴다.",
     "input_schema": {
       "type": "object",
       "properties": {
