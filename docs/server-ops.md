@@ -12,7 +12,8 @@
 | 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, 만료 2027-01-26 |
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
 | 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지) |
-| 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`). 자세한 내용은 [assistant.md](assistant.md) |
+| 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`, `firebase.json`). 자세한 내용은 [assistant.md](assistant.md) |
+| 실행 비서 푸시 | FCM. systemd drop-in `/etc/systemd/system/phonedrop.service.d/firebase.conf` 에 `ASSISTANT_PUSH_MODE=firebase`, `ASSISTANT_FIREBASE_CREDENTIALS=/root/data/assistant/firebase.json` |
 
 ## 서브도메인 페이지 구조
 
@@ -37,6 +38,7 @@
   - `.github/workflows/server-ops.yml`: `ops` 브랜치에 push하면 실행. 기존 Secrets(`SERVER_SSH_KEY`, `SERVER_KNOWN_HOSTS`, `SERVER_HOST`, `SERVER_USER`, `SERVER_PORT`)로 서버에 root로 접속한다.
   - `ops/check.sh`: 사전 확인(certbot 존재, 인증서 lineage, nginx 설정). 실패하면 run.sh는 실행되지 않는다.
   - `ops/run.sh`: 실제로 실행할 명령. 작업할 때마다 이 파일을 바꿔서 push한다.
+  - 워크플로는 실행할 때마다 Secret `FIREBASE_SERVICE_ACCOUNT` 를 서버 `/root/data/assistant/firebase.json` 에 다시 쓴다(값은 출력하지 않음).
 - 사용법
   ```bash
   git switch ops
@@ -60,6 +62,7 @@
 | 날짜 | 내용 | 결과 |
 |---|---|---|
 | 2026-10-28 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page` 후 nginx reload | 성공 (run 40637108002) |
+| 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
 
