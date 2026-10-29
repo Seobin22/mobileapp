@@ -13,6 +13,7 @@
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
 | 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지) |
 | 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`, `firebase.json`). 자세한 내용은 [assistant.md](assistant.md) |
+| 실행 비서 DB 백업 | `/root/data/assistant/backups/` — 스키마 변경 직전 `pre-V*.zip`(보관), 매일 04:00 `daily-*.zip`(7일). 앱이 직접 만든다(cron 아님). 복구: 앱 정지 → zip 안의 `assistant.mv.db` 를 `/root/data/assistant/` 에 덮어쓰기 → 앱 시작 |
 | 실행 비서 푸시 | FCM. systemd drop-in `/etc/systemd/system/phonedrop.service.d/firebase.conf` 에 `ASSISTANT_PUSH_MODE=firebase`, `ASSISTANT_FIREBASE_CREDENTIALS=/root/data/assistant/firebase.json` |
 
 ## 서브도메인 페이지 구조

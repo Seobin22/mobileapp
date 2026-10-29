@@ -67,8 +67,10 @@ class AgentFlowTest extends AssistantTestBase {
                 .query(String.class).list();
     }
 
+    /** v3.1: 일정(events) 대신 고정 블록(lead 0). */
     long event(String title, String start, String end) {
-        return db.insert("INSERT INTO events(title, start_at, end_at) VALUES (?, ?, ?)", title, at(start), at(end));
+        return db.insert("INSERT INTO blocks(kind, title, start_at, end_at, screen_text) VALUES ('fixed', ?, ?, ?, '')",
+                title, at(start), at(end));
     }
 
     @Test
@@ -113,30 +115,30 @@ class AgentFlowTest extends AssistantTestBase {
         assertThat(llm.toolResults.get(0).isError()).isTrue();
         assertThat(llm.toolResults.get(0).content()).contains("violations").contains("치과");
         assertThat(llm.toolResults.get(1).isError()).isFalse();
-        assertThat(db.jdbc().sql("SELECT start_at FROM blocks").query((rs, n) -> AssistantDb.instant(rs, "start_at")).list())
+        assertThat(db.jdbc().sql("SELECT start_at FROM blocks WHERE kind = 'planned'").query((rs, n) -> AssistantDb.instant(rs, "start_at")).list())
                 .containsExactly(at("2026-11-02T16:30"));
     }
 
     @Test
     void s3_userMovesEventDirectly() {
         long ev = event("치과", "2026-11-05T15:00", "2026-11-05T16:00");
-        llm.then(tools(call("upsert_event", "{\"id\":" + ev + ",\"start\":\"" + iso("2026-11-12T15:00") + "\",\"end\":\""
+        llm.then(tools(call("upsert_fixed_block", "{\"id\":" + ev + ",\"start\":\"" + iso("2026-11-12T15:00") + "\",\"end\":\""
                 + iso("2026-11-12T16:00") + "\"}"))).then(text("옮겼어요"));
         say("치과 다음 주로 미뤄졌어");
         runAgent();
-        assertThat(store.event(ev).orElseThrow().start()).isEqualTo(at("2026-11-12T15:00"));
+        assertThat(block(ev).start()).isEqualTo(at("2026-11-12T15:00"));
         assertThat(count("SELECT COUNT(*) FROM confirmations")).isZero();
     }
 
     @Test
     void s4_nonUserTriggerEventChangeBecomesConfirmation() {
         long ev = event("치과", "2026-11-05T15:00", "2026-11-05T16:00");
-        llm.then(tools(call("upsert_event", "{\"id\":" + ev + ",\"start\":\"" + iso("2026-11-09T15:00") + "\",\"end\":\""
+        llm.then(tools(call("upsert_fixed_block", "{\"id\":" + ev + ",\"start\":\"" + iso("2026-11-09T15:00") + "\",\"end\":\""
                 + iso("2026-11-09T16:00") + "\",\"confirm_text\":\"치과를 11/09 15:00으로 옮길까요?\"}"))).then(text(""));
         tx.run(() -> chat.enqueueTurn("confirmation_resolved", Json.parse("{\"confirmation_id\":0,\"accepted\":true}"), 5));
         runAgent();
 
-        assertThat(store.event(ev).orElseThrow().start()).isEqualTo(at("2026-11-05T15:00"));
+        assertThat(block(ev).start()).isEqualTo(at("2026-11-05T15:00"));
         assertThat(llm.toolResults.getFirst().content()).contains("pending_confirmation_id");
         assertThat(count("SELECT COUNT(*) FROM confirmations WHERE status = 'pending'")).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM messages WHERE kind = 'confirmation'")).isEqualTo(1);
@@ -148,11 +150,11 @@ class AgentFlowTest extends AssistantTestBase {
     void s5_acceptConfirmationAppliesAndSchedulesTurn() {
         s4_nonUserTriggerEventChangeBecomesConfirmation();
         long confirmationId = lastId("confirmations");
-        long ev = lastId("events");
+        long ev = lastId("blocks");
         Map<String, Object> r = tx.run(() -> confirmations.resolve(confirmationId, true));
 
         assertThat(r.get("status")).isEqualTo("accepted");
-        assertThat(store.event(ev).orElseThrow().start()).isEqualTo(at("2026-11-09T15:00"));
+        assertThat(block(ev).start()).isEqualTo(at("2026-11-09T15:00"));
         assertThat(count("SELECT COUNT(*) FROM changes c JOIN turns t ON t.id = c.turn_id WHERE t.trigger = 'system'"))
                 .isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM turns WHERE trigger = 'confirmation_resolved' AND status = 'queued'"))
@@ -269,8 +271,8 @@ class AgentFlowTest extends AssistantTestBase {
     void s12_eventConflictsThenRescheduled() {
         long taskId = db.insert("INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes) VALUES ('보고서', '열기', 60, 60)");
         long blockId = createBlockFor(taskId, "2026-11-05T15:00", "2026-11-05T16:00");
-        llm.then(tools(call("upsert_event", "{\"title\":\"치과\",\"start\":\"" + iso("2026-11-05T15:00") + "\",\"end\":\""
-                        + iso("2026-11-05T16:00") + "\",\"buffer_before_min\":20,\"buffer_after_min\":20}")))
+        llm.then(tools(call("upsert_fixed_block", "{\"title\":\"치과\",\"start\":\"" + iso("2026-11-05T15:00") + "\",\"end\":\""
+                        + iso("2026-11-05T16:00") + "\",\"lead_minutes\":20,\"buffer_after_min\":20}")))
                 .then(tools(call("set_schedule", "{\"from\":\"" + iso("2026-11-05T00:00") + "\",\"to\":\"" + iso("2026-11-06T00:00")
                         + "\",\"blocks\":[{\"task_id\":" + taskId + ",\"start\":\"" + iso("2026-11-05T16:30") + "\",\"end\":\""
                         + iso("2026-11-05T17:30") + "\"}]}")))
@@ -278,9 +280,10 @@ class AgentFlowTest extends AssistantTestBase {
         say("목요일 3시 치과");
         runAgent();
 
-        assertThat(llm.toolResults.get(0).content()).contains("\"conflicting_blocks\":[" + blockId + "]");
+        // v3.1 §3.1: 고정 블록이 우선, 겹친 계획 블록은 displaced 로 취소
+        assertThat(llm.toolResults.get(0).content()).contains("\"displaced\":[" + blockId + "]");
         assertThat(block(blockId).status()).isEqualTo("cancelled");
-        assertThat(db.jdbc().sql("SELECT start_at FROM blocks WHERE status = 'planned'")
+        assertThat(db.jdbc().sql("SELECT start_at FROM blocks WHERE kind = 'planned' AND status = 'planned'")
                 .query((rs, n) -> AssistantDb.instant(rs, "start_at")).single()).isEqualTo(at("2026-11-05T16:30"));
     }
 

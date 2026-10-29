@@ -45,10 +45,12 @@ object InterventionController {
             fromServer = true,
             updatedAt = System.currentTimeMillis(),
             workProductId = data["work_product_id"]?.toLongOrNull(),
+            goalLabel = data["goal_label"].orEmpty(),
+            goalColor = data["goal_color"].orEmpty(),
         )
         dao.upsertIntervention(entity)
         dao.deleteIntervention(localId(blockId))
-        // 협상 시간이 지나 다시 온 경우(v3 §8.1)에도 평소처럼 풀스크린
+        // 풀스크린 대화 무응답 뒤 다시 온 경우(v3.1 §3.6-6)에도 평소처럼 풀스크린. 떠 있는 화면은 대화를 유지한다.
         Prefs.get(context).negotiationUntil = 0
         LocalScheduler.cancelBlock(context, blockId)
         Reshow.cancel(context)
@@ -82,7 +84,8 @@ object InterventionController {
             graceSeconds = data["local_backup_grace_seconds"]?.toIntOrNull() ?: 90,
             expireGraceMinutes = data["expire_grace_minutes"]?.toIntOrNull() ?: 15,
             reshowMinutes = data["reshow_minutes"]?.toIntOrNull() ?: DEFAULT_RESHOW_MINUTES,
-            negotiationMinutes = data["negotiation_timeout_minutes"]?.toIntOrNull() ?: 5,
+            // v3.1: 풀스크린 대화 무응답 시간(구 서버는 negotiation_timeout_minutes)
+            negotiationMinutes = (data["talk_timeout_minutes"] ?: data["negotiation_timeout_minutes"])?.toIntOrNull() ?: 5,
         )
         AppDatabase.dao(context).savePlan(snapshot)
         LocalScheduler.rescheduleAll(context)
@@ -112,6 +115,8 @@ object InterventionController {
             fromServer = false,
             updatedAt = System.currentTimeMillis(),
             workProductId = item.work_product_id,
+            goalLabel = item.goal_label,
+            goalColor = item.goal_color,
         )
         dao.upsertIntervention(entity)
         Notifier.showFullScreen(context, entity)
@@ -128,25 +133,25 @@ object InterventionController {
     }
 
     /**
-     * [미루기 요청] (v3 §8.1). 서버가 협상 상태로 바꾸고 비서가 채팅으로 말을 건다.
-     * 협상 시간 동안 재표시를 멈추고, 그 뒤에 서버에 상태를 물어 다시 띄울지 정한다(FCM 이 없어도 동작하도록).
+     * 풀스크린에서 말했다(v3.1 §3.6). 서버가 talking 으로 바꾸고 비서가 그 화면에 답한다.
+     * 대화 시간 동안 재표시를 멈추고, 그 뒤에 서버에 상태를 물어 다시 띄울지 정한다(FCM 이 늦어도 동작하도록).
+     * 메시지 전송은 화면(InterventionActivity)이 한다.
      */
-    fun onUserSnooze(context: Context, entity: InterventionEntity) {
+    fun onUserTalk(context: Context, entity: InterventionEntity) {
         val dao = AppDatabase.dao(context)
         val minutes = dao.plan()?.negotiationMinutes ?: 5
         Notifier.cancel(context)
         Reshow.cancel(context)
-        dao.setInterventionStatus(entity.id, "negotiating", System.currentTimeMillis())
+        dao.setInterventionStatus(entity.id, "talking", System.currentTimeMillis())
         Prefs.get(context).negotiationUntil = System.currentTimeMillis() + minutes * 60_000L
-        ActionQueue.enqueue(context, "snooze_request", entity.id, entity.blockId)
         Reshow.schedule(context, entity.id, minutes, extraSeconds = 30)
     }
 
     /**
-     * 협상 시간이 지났을 때(로컬 타이머). 서버 상태를 보고: 다시 running 이면 화면, 아직 협상 중이면 1분 뒤 다시 확인,
-     * 개입이 끝났으면(미루기 수락·시작) 로컬도 끝낸다. 서버에 못 닿으면 안전하게 화면을 띄운다.
+     * 대화 시간이 지났을 때(로컬 타이머). 서버 상태를 보고: 다시 running 이면 화면, 아직 대화 중이면 1분 뒤 다시 확인,
+     * 개입이 끝났으면(미루기 합의·시작) 로컬도 끝낸다. 서버에 못 닿으면 안전하게 화면을 띄운다.
      */
-    fun onNegotiationCheck(context: Context, entity: InterventionEntity) {
+    fun onTalkCheck(context: Context, entity: InterventionEntity) {
         val dao = AppDatabase.dao(context)
         val status = runCatching {
             val body = runBlocking { ApiClient.get(context).status() }
@@ -157,7 +162,7 @@ object InterventionController {
                 ?: "ended"
         }.getOrDefault("running")
         when (status) {
-            "negotiating" -> Reshow.schedule(context, entity.id, 1)
+            "talking", "negotiating" -> Reshow.schedule(context, entity.id, 1)
             "ended" -> {
                 dao.endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
                 Prefs.get(context).negotiationUntil = 0
@@ -188,7 +193,7 @@ object InterventionController {
      * FCM 의 intervention.end 를 못 받았더라도 여기서 스스로 끝낸다(알림 제거, 상태 ended).
      */
     fun stillActive(context: Context, entity: InterventionEntity): Boolean {
-        if (entity.status != "running") return false
+        if (entity.status != "running" && entity.status != "talking") return false
         val now = Instant.now()
         val expired = entity.expireAt?.let { !now.isBefore(OffsetDateTime.parse(it).toInstant()) } ?: false
         val quiet = AppDatabase.dao(context).plan()?.let { inQuiet(it, now) } ?: false

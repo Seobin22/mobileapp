@@ -38,8 +38,8 @@ class ReshowReceiver : BroadcastReceiver() {
         Thread {
             try {
                 val entity = AppDatabase.dao(context).intervention(id)
-                if (entity?.status == "negotiating") {
-                    InterventionController.onNegotiationCheck(context, entity)
+                if (entity?.status == "talking") {
+                    InterventionController.onTalkCheck(context, entity)
                 } else if (entity != null && InterventionState.visibleId == null &&
                     InterventionController.stillActive(context, entity)
                 ) {

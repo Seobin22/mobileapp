@@ -11,11 +11,16 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
+import com.seobin.phonedrop.assistant.agent.FixedBlockService;
 import com.seobin.phonedrop.assistant.agent.Validator;
 
 import tools.jackson.databind.JsonNode;
 
-/** v1 수동 등록(POST/GET/PATCH/DELETE /v1/admin/tasks). 할 일 하나에 블록 하나. */
+/**
+ * v1 수동 등록(POST/GET/PATCH/DELETE /v1/admin/tasks). 할 일 하나에 블록 하나.
+ * v3.1 §4.4: /v1/fixed_blocks 로 대체됐고 1버전 동안 호환용으로 남긴다. 블록은 고정 블록(lead 0)으로 만들고,
+ * v1 의 수정·삭제가 할 일 id 로 동작하도록 할 일도 함께 만든다(DECISIONS).
+ */
 @Service
 public class TaskAdminService {
 
@@ -28,10 +33,12 @@ public class TaskAdminService {
     private final PlanService plan;
     private final InterventionService interventions;
     private final Validator validator;
+    private final FixedBlockService fixedBlocks;
 
     public TaskAdminService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, PlanService plan,
-                            InterventionService interventions, Validator validator) {
+                            InterventionService interventions, Validator validator, FixedBlockService fixedBlocks) {
         this.validator = validator;
+        this.fixedBlocks = fixedBlocks;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -46,19 +53,36 @@ public class TaskAdminService {
         Instant start = TimeUtil.parse(required(req, "start"));
         int duration = req.path("duration_min").asInt(0);
         Instant end = start.plus(Duration.ofMinutes(duration));
-        validate(start, end, null, null);
+        if (duration < 5) {
+            throw ApiException.unprocessable("블록의 길이가 5분 미만입니다");
+        }
+        if (start.isBefore(clock.now())) {
+            throw ApiException.unprocessable("블록의 시작 시각이 이미 지났습니다");
+        }
+        // v1 호환: 이 경로는 수면·방해 금지 시간을 계속 거절한다(개입이 뜨지 않는 시간).
+        time.firstQuietOverlap(start, end).ifPresent(q -> {
+            throw ApiException.unprocessable("블록이 수면·방해 금지 시간과 겹칩니다");
+        });
 
         long taskId = db.insert(
                 "INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes) VALUES (?, ?, ?, ?)",
                 title, firstAction, duration, duration);
-        long blockId = db.insert("INSERT INTO blocks(task_id, start_at, end_at, screen_text) VALUES (?, ?, ?, ?)",
-                taskId, start, end, SCREEN_PREFIX + firstAction);
-        interventions.scheduleBlockJobs(store.block(blockId).orElseThrow());
-        plan.bumpAndSync();
+        tools.jackson.databind.node.ObjectNode in = Json.object();
+        in.put("title", title);
+        in.put("start", time.iso(start));
+        in.put("end", time.iso(end));
+        in.put("lead_minutes", 0);
+        in.put("task_id", taskId);
+        in.put("screen_text", SCREEN_PREFIX + firstAction);
+        FixedBlockService.Result r = fixedBlocks.upsert(in, null);
+        if (!r.ok()) {
+            throw ApiException.unprocessable(r.error()); // tx 가 할 일 생성도 되돌린다
+        }
+        fixedBlocks.notifyDisplaced(r);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("task_id", taskId);
-        result.put("block_id", blockId);
+        result.put("block_id", r.id());
         return result;
     }
 
@@ -144,7 +168,15 @@ public class TaskAdminService {
             if (!List.of("planned", "nudging").contains(b.status())) {
                 throw ApiException.unprocessable("시작했거나 끝난 블록은 시각을 바꿀 수 없습니다");
             }
-            validate(start, end, taskId, b.id());
+            if (b.fixed()) {
+                List<String> errors = validator.validateFixed(b.id(), start, end, b.leadMinutes(), b.bufferAfterMin(),
+                        clock.now()).errors();
+                if (!errors.isEmpty()) {
+                    throw ApiException.unprocessable(String.join("\n", errors));
+                }
+            } else {
+                validate(start, end, taskId, b.id());
+            }
             if ("nudging".equals(b.status())) {
                 interventions.cancelRunningForBlock(b.id());
             }
@@ -158,13 +190,13 @@ public class TaskAdminService {
                 : b.screenText();
         if (timeChanged) {
             db.update("""
-                            UPDATE blocks SET start_at = ?, end_at = ?, status = 'planned', screen_text = ?,
+                            UPDATE blocks SET start_at = ?, end_at = ?, status = 'planned', screen_text = ?, title = ?,
                             version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
-                    start, end, screenText, b.id());
+                    start, end, screenText, title, b.id());
             interventions.scheduleBlockJobs(store.block(b.id()).orElseThrow());
         } else {
-            db.update("UPDATE blocks SET screen_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    screenText, b.id());
+            db.update("UPDATE blocks SET screen_text = ?, title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    screenText, title, b.id());
         }
         int version = plan.bumpAndSync();
 

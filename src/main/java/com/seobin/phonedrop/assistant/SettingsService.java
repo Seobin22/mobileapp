@@ -39,7 +39,6 @@ public class SettingsService {
         d.put("privacy.sensitive_mode", "true");
         d.put("memory.max_chars", "4000");
         // v3
-        d.put("negotiation.timeout_minutes", "5");
         d.put("pulse.interval_minutes", "120");
         d.put("messages.daily_budget", "12");
         d.put("messages.high_per_day", "3");
@@ -48,6 +47,11 @@ public class SettingsService {
         d.put("morning.fallback_minutes", "60");
         d.put("evening.before_sleep_minutes", "60");
         d.put("web.enabled", "true");
+        // v3.1 (negotiation.timeout_minutes 는 talk.timeout_minutes 로 대체)
+        d.put("goal.min_horizon_days", "2");
+        d.put("goal.coverage_retry", "2");
+        d.put("talk.timeout_minutes", "5");
+        d.put("fixed.default_lead_minutes", "10");
         DEFAULTS = Map.copyOf(d);
     }
 

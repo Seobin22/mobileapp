@@ -70,6 +70,31 @@ interface AssistantApi {
 
     @PUT("v1/settings")
     suspend fun putSetting(@Body body: JsonObject): JsonObject
+
+    // v3.1 목표 탭(§3.7)·고정 블록(§4.4)
+    @GET("v1/goals")
+    suspend fun goals(): GoalsResponse
+
+    @GET("v1/goals/{id}/blocks")
+    suspend fun goalBlocks(@Path("id") id: Long): GoalBlocksResponse
+
+    @PATCH("v1/goals/{id}")
+    suspend fun patchGoal(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @POST("v1/goals/{id}/complete")
+    suspend fun completeGoal(@Path("id") id: Long): JsonObject
+
+    @POST("v1/goals/{id}/cancel")
+    suspend fun cancelGoal(@Path("id") id: Long): JsonObject
+
+    @POST("v1/fixed_blocks")
+    suspend fun createFixedBlock(@Body body: FixedBlockRequest): JsonObject
+
+    @PATCH("v1/fixed_blocks/{id}")
+    suspend fun patchFixedBlock(@Path("id") id: Long, @Body body: FixedBlockRequest): JsonObject
+
+    @DELETE("v1/fixed_blocks/{id}")
+    suspend fun deleteFixedBlock(@Path("id") id: Long): JsonObject
 }
 
 object ApiClient {

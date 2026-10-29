@@ -14,7 +14,9 @@ import org.springframework.stereotype.Component;
 
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.Jobs;
+import com.seobin.phonedrop.assistant.Store;
 import com.seobin.phonedrop.assistant.Json;
 import com.seobin.phonedrop.assistant.SettingsService;
 import com.seobin.phonedrop.assistant.Tx;
@@ -46,10 +48,13 @@ public class AgentRunner {
     private final Jobs jobs;
     private final LlmClient llm;
     private final ProactiveService proactive;
+    private final GoalCoverage coverage;
+    private final Store store;
     private final String systemTemplate;
 
     public AgentRunner(Tx tx, AssistantDb db, AssistantClock clock, SettingsService settings, ContextBuilder context,
-                       Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive) {
+                       Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive,
+                       GoalCoverage coverage, Store store) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -60,6 +65,8 @@ public class AgentRunner {
         this.jobs = jobs;
         this.llm = llm;
         this.proactive = proactive;
+        this.coverage = coverage;
+        this.store = store;
         try (InputStream in = new ClassPathResource("assistant/prompts/system.md").getInputStream()) {
             this.systemTemplate = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -88,7 +95,8 @@ public class AgentRunner {
 
     /** @return ok | partial | failed | retry | skipped */
     String runTurn(long turnId, String trigger, JsonNode ref, int attempts) {
-        boolean fromUser = "user_message".equals(trigger);
+        // 풀스크린 대화도 사용자가 직접 한 말이다(답이 있어야 하고, 한도 초과 안내도 한다).
+        boolean fromUser = Permissions.fromUser(trigger);
         int hardLimit = settings.getInt("agent.daily_turn_hard");
         if (tx.run(chat::turnsToday) >= hardLimit) {
             tx.exec(() -> {
@@ -107,12 +115,18 @@ public class AgentRunner {
         tx.exec(() -> db.update("UPDATE turns SET status = 'running', started_at = ? WHERE id = ?",
                 clock.now(), turnId));
 
-        String system = systemTemplate.replace("{persona}", settings.getString("persona"));
+        String system = systemTemplate.replace("{persona}", settings.getString("persona"))
+                .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")));
         String userContent = tx.run(() -> context.build(trigger, ref));
         // v3 §4.4: web.enabled=false 이거나 soft 상한을 넘으면 web_search 를 tools 에서 뺀다.
         boolean webSearch = settings.getBoolean("web.enabled") && !tx.run(proactive::overSoftLimit);
         Tools.Context ctx = new Tools.Context(turnId, trigger, false);
+        if ("intervention_talk".equals(trigger) && ref.hasNonNull("intervention_id")) {
+            ctx.interventionId = ref.get("intervention_id").asLong();
+        }
         int maxCalls = settings.getInt("agent.max_tool_calls");
+        int coverageRetries = settings.getInt("goal.coverage_retry");
+        int coverageSent = 0;
         long inTokens = 0;
         long outTokens = 0;
         long[] cache = {0, 0}; // 캐시 읽기, 캐시 쓰기
@@ -130,6 +144,13 @@ public class AgentRunner {
                 cache[1] += resp.cacheWriteTokens();
                 lastText = resp.text() == null ? "" : resp.text();
                 if (resp.toolCalls().isEmpty()) {
+                    // v3.1 §3.4-1: 이 turn 에서 손댄 목표에 블록이 없으면 turn 을 끝내지 않고 되돌려 보낸다.
+                    String missing = coverageSent < coverageRetries ? tx.run(() -> missingMessage(ctx)) : null;
+                    if (missing != null) {
+                        coverageSent++;
+                        conv.addUserText(missing);
+                        continue;
+                    }
                     status = "ok";
                     break;
                 }
@@ -174,15 +195,34 @@ public class AgentRunner {
         final long out = outTokens;
         tx.exec(() -> {
             // 텍스트로만 답하고 send_message 를 안 했으면 그 텍스트를 reply 로 보낸다.
-            // [미루기 요청]도 사용자가 누른 것이라 답이 있어야 한다.
+            // 풀스크린 대화(구 [미루기 요청] 포함)도 사용자가 말한 것이라 답이 있어야 한다.
             boolean replyExpected = fromUser || "snooze_request".equals(trigger);
             if (replyExpected && !ctx.sentReply && !finalText.isBlank()) {
-                chat.sendAssistant(finalText.trim(), "reply", "normal", null, null);
+                chat.sendAssistant(finalText.trim(), "reply", "normal", null, null, false, ctx.interventionId);
+            }
+            // 되돌려 보내기를 다 써도 누락이면 turn 은 끝내고 30분 뒤 goal_needs_blocks (§3.4-1).
+            for (long goalId : ctx.touchedGoals) {
+                store.goal(goalId).filter(g -> coverage.isMissing(g, clock.now()))
+                        .ifPresent(g -> coverage.giveUpForNow(g.id(), turnId));
             }
             endTurn(turnId, finalStatus, calls, in, out, null);
             recordCache(turnId, cache);
         });
         return finalStatus;
+    }
+
+    /** 이 turn 에서 손댄 목표 중 누락 목표가 있으면 LLM 에게 돌려보낼 문장, 없으면 null. */
+    private String missingMessage(Tools.Context ctx) {
+        int days = settings.getInt("goal.min_horizon_days");
+        StringBuilder sb = new StringBuilder();
+        for (long goalId : ctx.touchedGoals) {
+            Store.Goal g = store.goal(goalId).orElse(null);
+            if (g != null && coverage.isMissing(g, clock.now())) {
+                sb.append("목표 #").append(g.id()).append('(').append(g.label()).append(")에 ").append(days)
+                        .append("일 안에 잡힌 블록이 없습니다. 블록을 배치하거나, 기다리는 중이면 waiting_until과 이유를 기록하세요.\n");
+            }
+        }
+        return sb.isEmpty() ? null : "[시스템 검사] " + sb.toString().trim();
     }
 
     /** 도구마다 별도 트랜잭션. 예외는 그 도구 결과만 "내부 오류"로 돌려주고 루프는 계속한다. */

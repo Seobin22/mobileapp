@@ -19,7 +19,8 @@ import com.seobin.phonedrop.assistant.TimeUtil;
 
 /**
  * 시간표 조회(get_timeline, GET /v1/timeline)와 부하 요약(get_load_summary).
- * free = 활동 구간 − 일정(버퍼 포함) − 활성 블록 − 조용한 시간 − 식사.
+ * free = 활동 구간 − 활성 블록(고정 블록은 출발 준비·이동 시간 포함) − 조용한 시간 − 식사.
+ * 항목 kind: fixed_block | planned_block | quiet | meal | free (빌드문서 v3.1 §3.3).
  */
 @Component
 public class Timeline {
@@ -40,9 +41,17 @@ public class Timeline {
         this.settings = settings;
     }
 
-    /** sensitive 모드면 제목을 가린다(id 는 유지). */
-    public String eventTitle(Store.Event e) {
-        return e.sensitive() && settings.getBoolean("privacy.sensitive_mode") ? "비공개 일정" : e.title();
+    /** sensitive 모드면 제목을 가린다(id 는 유지). 고정 블록은 블록 자체, 계획 블록은 할 일의 sensitive. */
+    public String blockTitle(Store.Block b) {
+        boolean masking = settings.getBoolean("privacy.sensitive_mode");
+        if (b.fixed()) {
+            return b.sensitive() && masking ? "비공개 일정" : store.blockTitle(b);
+        }
+        Store.Task t = b.taskId() == null ? null : store.task(b.taskId()).orElse(null);
+        if (t != null && t.sensitive() && masking) {
+            return "비공개 할 일";
+        }
+        return store.blockTitle(b);
     }
 
     public String taskTitle(Store.Task t) {
@@ -74,28 +83,28 @@ public class Timeline {
             List<Map<String, Object>> items = new ArrayList<>();
             List<TimeUtil.Window> busy = new ArrayList<>();
 
-            for (Store.Event ev : store.activeEventsOverlapping(s, e)) {
-                Map<String, Object> item = item("event", ev.start(), ev.end());
-                item.put("id", ev.id());
-                item.put("title", mask ? eventTitle(ev) : ev.title());
-                item.put("buffer_before_min", ev.bufferBeforeMin());
-                item.put("buffer_after_min", ev.bufferAfterMin());
-                item.put("source", ev.source());
-                items.add(item);
-                busy.add(new TimeUtil.Window(ev.blockedStart(), ev.blockedEnd()));
-            }
             for (Store.Block b : blocksOverlapping(s, e)) {
-                Map<String, Object> item = item("block", b.start(), b.end());
+                Map<String, Object> item = item(b.fixed() ? "fixed_block" : "planned_block", b.start(), b.end());
                 item.put("id", b.id());
                 item.put("status", b.status());
                 item.put("task_id", b.taskId());
+                item.put("title", mask ? blockTitle(b) : store.blockTitle(b));
+                Store.Goal goal = goalOf(b);
+                item.put("goal_id", goal == null ? null : goal.id());
+                item.put("goal_label", goal == null ? "" : goal.label());
+                item.put("goal_color", goal == null ? "" : goal.color());
+                if (b.fixed()) {
+                    item.put("lead_minutes", b.leadMinutes());
+                    item.put("buffer_after_min", b.bufferAfterMin());
+                    item.put("location", b.location());
+                    item.put("source", b.source());
+                }
                 if (b.workProductId() != null) {
                     item.put("work_product_id", b.workProductId());
                 }
-                store.task(b.taskId()).ifPresent(t -> item.put("title", mask ? taskTitle(t) : t.title()));
                 items.add(item);
                 if (List.of("planned", "nudging", "started").contains(b.status())) {
-                    busy.add(new TimeUtil.Window(b.start(), b.end()));
+                    busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd()));
                 }
             }
             for (TimeUtil.Window q : time.quietWindows(s, e)) {
@@ -145,10 +154,9 @@ public class Timeline {
                 continue;
             }
             List<TimeUtil.Window> busy = new ArrayList<>();
-            store.activeEventsOverlapping(s, e).forEach(ev -> busy.add(new TimeUtil.Window(ev.blockedStart(), ev.blockedEnd())));
-            store.activeBlocks().stream().filter(b -> b.start().isBefore(e) && s.isBefore(b.end()))
-                    .filter(b -> ownTaskId == null || b.taskId() != ownTaskId)
-                    .forEach(b -> busy.add(new TimeUtil.Window(b.start(), b.end())));
+            store.activeBlocks().stream().filter(b -> b.blockedStart().isBefore(e) && s.isBefore(b.blockedEnd()))
+                    .filter(b -> ownTaskId == null || !ownTaskId.equals(b.taskId()))
+                    .forEach(b -> busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd())));
             busy.addAll(time.quietWindows(s, e));
             busy.addAll(time.dailyWindows("life.meals", s, e));
             for (TimeUtil.Window f : subtract(s, e, busy)) {
@@ -229,6 +237,15 @@ public class Timeline {
             }
         }
         return total;
+    }
+
+    /** 블록의 목표(goal_id, 없으면 할 일의 목표). */
+    public Store.Goal goalOf(Store.Block b) {
+        Long goalId = b.goalId();
+        if (goalId == null && b.taskId() != null) {
+            goalId = store.task(b.taskId()).map(Store.Task::goalId).orElse(null);
+        }
+        return goalId == null ? null : store.goal(goalId).orElse(null);
     }
 
     private List<Store.Block> blocksOverlapping(Instant s, Instant e) {

@@ -78,6 +78,18 @@ public class ChatService {
             }
         }
         String source = req.path("source").asString("chat");
+        // v3.1 §3.6: 풀스크린에서 보낸 말(intervention_id 있음)은 그 개입의 대화로 저장하고 intervention_talk turn.
+        long interventionId = req.path("intervention_id").asLong(0);
+        if (interventionId > 0) {
+            if (!List.of("fullscreen", "fullscreen_voice").contains(source)) {
+                source = "fullscreen";
+            }
+            long[] r = interventions.userTalk(interventionId, text, source, clientMsgId.isEmpty() ? null : clientMsgId);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("message_id", r[0]);
+            result.put("turn_id", r[1]);
+            return result;
+        }
         long messageId = db.insert("""
                         INSERT INTO messages(role, content, kind, source, client_msg_id, created_at)
                         VALUES ('user', ?, 'reply', ?, ?, ?)""",
@@ -89,8 +101,8 @@ public class ChatService {
         }
         ObjectNode ref = Json.object();
         ref.put("message_id", messageId);
-        // v3 §3.2: 미루기 협상 중이면 협상 시간을 연장한다.
-        interventions.extendNegotiation();
+        // v3.1 §3.6-4: 풀스크린 대화 중이면 대화 시간을 연장한다.
+        interventions.extendTalk();
         long turnId = enqueueTurn("user_message", ref, PRIORITY_USER);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("message_id", messageId);
@@ -108,15 +120,25 @@ public class ChatService {
      */
     public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
                               boolean silent) {
+        return sendAssistant(text, kind, importance, questionId, confirmationId, silent, null);
+    }
+
+    /** interventionId: 풀스크린 대화의 답(v3.1 §3.6-3). 앱이 그 화면에 표시하고 TTS 로 읽는다. */
+    public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
+                              boolean silent, Long interventionId) {
         long id = db.insert("""
-                        INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id, created_at)
-                        VALUES ('assistant', ?, ?, ?, ?, ?, ?, ?)""",
-                text, kind, importance, silent, questionId, confirmationId, clock.now());
+                        INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id,
+                        intervention_id, created_at) VALUES ('assistant', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                text, kind, importance, silent, questionId, confirmationId, interventionId, clock.now());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "chat.message");
         data.put("message_id", String.valueOf(id));
         data.put("silent", String.valueOf(silent));
         data.put("channel", "checkin".equals(kind) ? "checkin" : "chat");
+        if (interventionId != null) {
+            data.put("intervention_id", String.valueOf(interventionId));
+            data.put("text", text.length() > 1000 ? text.substring(0, 1000) : text);
+        }
         data.put("preview", text.length() > 60 ? text.substring(0, 60) : text);
         push.pushAll(data);
         return id;
@@ -147,6 +169,13 @@ public class ChatService {
             m.put("kind", rs.getString("kind"));
             m.put("importance", rs.getString("importance"));
             m.put("silent", rs.getBoolean("silent"));
+            Long intervention = AssistantDb.nullableLong(rs, "intervention_id");
+            if (intervention != null) {
+                m.put("intervention_id", intervention);
+            }
+            if (rs.getString("source") != null) {
+                m.put("source", rs.getString("source"));
+            }
             Long q = AssistantDb.nullableLong(rs, "question_id");
             Long c = AssistantDb.nullableLong(rs, "confirmation_id");
             if (q != null) {

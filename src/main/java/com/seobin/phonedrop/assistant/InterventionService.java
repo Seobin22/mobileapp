@@ -27,7 +27,13 @@ public class InterventionService {
     public static final String EXPIRE = "expire";
     public static final String SUSPEND = "suspend_check";
     public static final String BLOCK_END = "block_end";
-    public static final String NEGOTIATION_TIMEOUT = "negotiation_timeout";
+    /** 풀스크린 대화 무응답(v3.1 §3.6). v3 의 negotiation_timeout 작업도 같은 처리기로 받는다(남아 있던 작업 호환). */
+    public static final String TALK_TIMEOUT = "talk_timeout";
+    static final String LEGACY_NEGOTIATION_TIMEOUT = "negotiation_timeout";
+    /** 새 고정 블록의 금지 구간 시작에 진행 중 블록을 partial 로 끝낸다(v3.1 §3.1). */
+    public static final String BLOCK_CUTOFF = "block_cutoff";
+    /** 사용자가 [미루기 요청](구 버튼)을 누르면 이 말로 풀스크린 대화를 시작한다(v3.1 §3.6-7). */
+    public static final String LEGACY_SNOOZE_TEXT = "미루고 싶어요";
 
     public static final int LEVEL = 3;
 
@@ -40,9 +46,11 @@ public class InterventionService {
     private final PlanService plan;
     private final PushService push;
     private final TurnQueue turns;
+    private final GoalCoverage coverage;
 
     public InterventionService(AssistantDb db, AssistantClock clock, Jobs jobs, Store store, TimeUtil time,
-                               SettingsService settings, PlanService plan, PushService push, TurnQueue turns) {
+                               SettingsService settings, PlanService plan, PushService push, TurnQueue turns,
+                               GoalCoverage coverage) {
         this.db = db;
         this.clock = clock;
         this.jobs = jobs;
@@ -52,21 +60,31 @@ public class InterventionService {
         this.plan = plan;
         this.push = push;
         this.turns = turns;
+        this.coverage = coverage;
         jobs.register(START, this::onStartIntervention);
         jobs.register(RESHOW, this::onReshow);
         jobs.register(EXPIRE, this::onExpire);
         jobs.register(SUSPEND, this::onSuspendCheck);
         jobs.register(BLOCK_END, this::onBlockEnd);
-        jobs.register(NEGOTIATION_TIMEOUT, this::onNegotiationTimeout);
+        jobs.register(TALK_TIMEOUT, this::onTalkTimeout);
+        jobs.register(LEGACY_NEGOTIATION_TIMEOUT, this::onTalkTimeout);
+        jobs.register(BLOCK_CUTOFF, this::onBlockCutoff);
+    }
+
+    /** 고정 블록 화면 기본 문구(v3.1 §3.2). lead 가 있으면 출발 준비 안내. */
+    public static String fixedScreenText(String title, int leadMinutes) {
+        return leadMinutes > 0
+                ? "곧 " + title + "이에요. " + leadMinutes + "분 뒤 시작이라 지금 출발 준비하세요."
+                : "곧 " + title + "이에요.";
     }
 
     // ---------------------------------------------------------------- 블록 예약 (§6.1)
 
-    /** 블록 생성·시각 변경 뒤에 부른다. 기존 블록 작업을 지우고 다시 예약한다. */
+    /** 블록 생성·시각 변경 뒤에 부른다. 기존 블록 작업을 지우고 다시 예약한다. 개입 시각 = start − lead (v3.1 §3.2). */
     public void scheduleBlockJobs(Store.Block b) {
         cancelBlockJobs(b.id());
-        if (!b.start().isBefore(clock.now())) {
-            jobs.schedule(START, b.id(), b.start(), b.version());
+        if (!b.interventionAt().isBefore(clock.now())) {
+            jobs.schedule(START, b.id(), b.interventionAt(), b.version());
         }
         jobs.schedule(BLOCK_END, b.id(), b.end(), null);
     }
@@ -74,6 +92,29 @@ public class InterventionService {
     public void cancelBlockJobs(long blockId) {
         jobs.cancelForTarget(START, blockId);
         jobs.cancelForTarget(BLOCK_END, blockId);
+        jobs.cancelForTarget(BLOCK_CUTOFF, blockId);
+    }
+
+    /** v3.1 §3.1: 진행 중 블록이 새 고정 블록 금지 구간과 겹치면 그 시작에 partial 로 끝낸다. */
+    public void scheduleCutoff(long startedBlockId, Instant at) {
+        jobs.cancelForTarget(BLOCK_CUTOFF, startedBlockId);
+        jobs.schedule(BLOCK_CUTOFF, startedBlockId, at.isAfter(clock.now()) ? at : clock.now(), null);
+    }
+
+    private boolean onBlockCutoff(Jobs.Job job) {
+        Store.Block b = store.block(job.targetId()).orElse(null);
+        if (b == null || !"started".equals(b.status())) {
+            return false;
+        }
+        db.update("UPDATE blocks SET status = 'partial', actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                clock.now(), b.id());
+        jobs.cancelForTarget(BLOCK_END, b.id());
+        ObjectNode ref = Json.object();
+        ref.put("block_id", b.id());
+        ref.put("reason", "fixed_block");
+        turns.enqueue("block_ended", ref, TurnQueue.PRIORITY_DEFAULT);
+        plan.bumpAndSync();
+        return true;
     }
 
     // ---------------------------------------------------------------- 작업 처리기 (§6.2~6.6)
@@ -97,6 +138,7 @@ public class InterventionService {
         for (Store.Intervention running : store.runningInterventions()) {
             end(running, "expired", "superseded", "superseded");
             markMissedIfNudging(running.blockId());
+            coverage.onBlockClosed(running.blockId());
         }
         // v3 §3.5: 이전 블록이 아직 started 면 partial 로 끝낸다(할 일 remaining 은 그대로).
         for (Store.Block started : store.startedBlocks()) {
@@ -106,6 +148,7 @@ public class InterventionService {
                                 WHERE id = ?""",
                         now, started.id());
                 cancelBlockJobs(started.id());
+                coverage.onBlockClosed(started.id());
             }
         }
 
@@ -145,6 +188,7 @@ public class InterventionService {
         end(i, "expired", "no_response", "expired");
         store.setBlockStatus(i.blockId(), "missed");
         enqueueMissed(i.blockId(), "no_response");
+        coverage.onBlockClosed(i.blockId());
         return true;
     }
 
@@ -156,6 +200,7 @@ public class InterventionService {
         end(i, "suspended", "quiet", "suspended");
         store.setBlockStatus(i.blockId(), "missed");
         enqueueMissed(i.blockId(), "quiet");
+        coverage.onBlockClosed(i.blockId());
         return true;
     }
 
@@ -183,6 +228,7 @@ public class InterventionService {
             case "planned" -> {
                 store.setBlockStatus(b.id(), "missed");
                 enqueueMissed(b.id(), "never_started");
+                coverage.onBlockClosed(b.id());
             }
             case "started" -> {
                 // v3 §3.5(변경): 자동 done 을 없앴다. 상태는 그대로 두고 비서가 진행을 묻는다.
@@ -208,7 +254,8 @@ public class InterventionService {
         jobs.cancelForTarget(RESHOW, i.id());
         jobs.cancelForTarget(EXPIRE, i.id());
         jobs.cancelForTarget(SUSPEND, i.id());
-        jobs.cancelForTarget(NEGOTIATION_TIMEOUT, i.id());
+        jobs.cancelForTarget(TALK_TIMEOUT, i.id());
+        jobs.cancelForTarget(LEGACY_NEGOTIATION_TIMEOUT, i.id());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "intervention.end");
         data.put("intervention_id", String.valueOf(i.id()));
@@ -233,16 +280,16 @@ public class InterventionService {
         });
     }
 
-    // ---------------------------------------------------------------- 미루기 협상 (v3 §3.1~3.3)
+    // ---------------------------------------------------------------- 풀스크린 대화 (v3.1 §3.6, v3 협상을 대체)
 
-    private boolean onNegotiationTimeout(Jobs.Job job) {
+    private boolean onTalkTimeout(Jobs.Job job) {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
-        if (i == null || !"negotiating".equals(i.status()) || job.expectedVersion() == null
+        if (i == null || !"talking".equals(i.status()) || job.expectedVersion() == null
                 || i.version() != job.expectedVersion()) {
             return false;
         }
         db.update("""
-                        UPDATE interventions SET status = 'running', negotiate_until = NULL, version = version + 1,
+                        UPDATE interventions SET status = 'running', talk_until = NULL, version = version + 1,
                         updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
                 i.id());
         sendLevel(store.intervention(i.id()).orElseThrow());
@@ -251,42 +298,65 @@ public class InterventionService {
         return true;
     }
 
-    /** 협상 중 사용자 메시지가 오면 협상 시간을 연장한다(v3 §3.2). */
-    public void extendNegotiation() {
+    /** 대화 중 사용자 메시지가 오면 대화 시간을 연장한다(§3.6-4). */
+    public void extendTalk() {
         for (Store.Intervention i : store.runningInterventions()) {
-            if ("negotiating".equals(i.status())) {
-                startNegotiation(i);
+            if ("talking".equals(i.status())) {
+                talk(i);
             }
         }
     }
 
-    /** negotiate_until = now + timeout, version +1, reshow 중단, timeout 작업 (재)예약. */
-    private Store.Intervention startNegotiation(Store.Intervention i) {
-        Instant until = clock.now().plus(Duration.ofMinutes(settings.getInt("negotiation.timeout_minutes")));
+    /**
+     * 풀스크린에서 사용자가 말하면: running·talking 개입을 talking 으로 두고 talk_until = now + timeout,
+     * version +1, reshow 중단, talk_timeout (재)예약. 개입이 이미 끝났으면 아무것도 하지 않는다.
+     */
+    public Optional<Store.Intervention> startTalk(long interventionId) {
+        return store.intervention(interventionId).filter(Store.Intervention::active).map(this::talk);
+    }
+
+    private Store.Intervention talk(Store.Intervention i) {
+        Instant until = clock.now().plus(Duration.ofMinutes(settings.getInt("talk.timeout_minutes")));
         db.update("""
-                        UPDATE interventions SET status = 'negotiating', negotiate_until = ?, version = version + 1,
+                        UPDATE interventions SET status = 'talking', talk_until = ?, version = version + 1,
                         updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
                 until, i.id());
         Store.Intervention updated = store.intervention(i.id()).orElseThrow();
         jobs.cancelForTarget(RESHOW, i.id());
-        jobs.cancelForTarget(NEGOTIATION_TIMEOUT, i.id());
-        jobs.schedule(NEGOTIATION_TIMEOUT, i.id(), until, updated.version());
+        jobs.cancelForTarget(TALK_TIMEOUT, i.id());
+        jobs.cancelForTarget(LEGACY_NEGOTIATION_TIMEOUT, i.id());
+        jobs.schedule(TALK_TIMEOUT, i.id(), until, updated.version());
         return updated;
     }
 
+    /** 사용자 메시지(풀스크린) 저장 + 대화 시작 + intervention_talk turn. ChatService 와 구 snooze_request 액션이 쓴다. */
+    public long[] userTalk(long interventionId, String text, String source, String clientMsgId) {
+        Store.Intervention i = store.intervention(interventionId)
+                .orElseThrow(() -> ApiException.notFound("개입이 없습니다: " + interventionId));
+        long messageId = db.insert("""
+                        INSERT INTO messages(role, content, kind, source, client_msg_id, intervention_id, created_at)
+                        VALUES ('user', ?, 'reply', ?, ?, ?, ?)""",
+                text, source, clientMsgId, i.id(), clock.now());
+        startTalk(i.id());
+        extendTalk();
+        ObjectNode ref = Json.object();
+        ref.put("message_id", messageId);
+        ref.put("intervention_id", i.id());
+        ref.put("block_id", i.blockId());
+        long turnId = turns.enqueue("intervention_talk", ref, TurnQueue.PRIORITY_USER);
+        return new long[]{messageId, turnId};
+    }
+
+    /** 구 [미루기 요청] 액션: "미루고 싶어요" 풀스크린 대화 시작으로 처리한다(§3.6-7). */
     private String snoozeRequest(Long interventionId, Long blockId) {
         Optional<Store.Intervention> found = resolve(interventionId, blockId);
         store.log(found.map(Store.Intervention::id).orElse(null),
                 found.map(Store.Intervention::blockId).orElse(blockId),
                 found.map(Store.Intervention::level).orElse(null), clock.now(), "snooze_request");
-        if (found.isEmpty() || !found.get().running()) {
+        if (found.isEmpty() || !found.get().active()) {
             return "ok";
         }
-        Store.Intervention i = startNegotiation(found.get());
-        ObjectNode ref = Json.object();
-        ref.put("intervention_id", i.id());
-        ref.put("block_id", i.blockId());
-        turns.enqueue("snooze_request", ref, TurnQueue.PRIORITY_USER);
+        userTalk(found.get().id(), LEGACY_SNOOZE_TEXT, "fullscreen", null);
         return "ok";
     }
 
@@ -301,13 +371,21 @@ public class InterventionService {
 
     private void sendLevel(Store.Intervention i) {
         Store.Block b = store.block(i.blockId()).orElseThrow();
-        String title = store.task(b.taskId()).map(Store.Task::title).orElse("");
+        String title = store.blockTitle(b);
+        Store.Goal goal = coverage.goalOf(b).flatMap(store::goal).orElse(null);
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "intervention.level");
         data.put("intervention_id", String.valueOf(i.id()));
         data.put("block_id", String.valueOf(b.id()));
         data.put("level", String.valueOf(i.level()));
         data.put("task_title", title);
+        data.put("kind", b.kind());
+        data.put("block_start", time.iso(b.start()));
+        data.put("lead_minutes", String.valueOf(b.leadMinutes()));
+        data.put("location", b.location() == null ? "" : b.location());
+        data.put("goal_label", goal == null ? "" : goal.label());
+        data.put("goal_color", goal == null ? "" : goal.color());
+        data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
         data.put("screen_text", b.screenText());
         data.put("tts_text", b.screenText());
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
@@ -407,8 +485,9 @@ public class InterventionService {
         if (b == null || !List.of("planned", "nudging", "missed").contains(b.status())) {
             return "ok";
         }
-        Store.Task t = store.task(b.taskId()).orElseThrow();
-        if (!"active".equals(t.status())) {
+        // 고정 블록은 할 일 없이도 시작할 수 있다.
+        Store.Task t = b.taskId() == null ? null : store.task(b.taskId()).orElse(null);
+        if (t != null && !"active".equals(t.status())) {
             return "ok";
         }
         startBlockNow(b, t, now);
@@ -436,7 +515,8 @@ public class InterventionService {
             cancelBlockJobs(b.id());
             jobs.schedule(BLOCK_END, b.id(), b.end(), null);
         } else {
-            Instant end = now.plus(Duration.ofMinutes(t.estMinutes()));
+            int minutes = t != null ? t.estMinutes() : (int) Duration.between(b.start(), b.end()).toMinutes();
+            Instant end = now.plus(Duration.ofMinutes(Math.max(5, minutes)));
             for (Store.Block other : store.activeBlocksOverlapping(now, end)) {
                 if (other.id() != b.id() && "planned".equals(other.status())) {
                     store.setBlockStatus(other.id(), "cancelled");

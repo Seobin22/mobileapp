@@ -27,6 +27,8 @@ import com.seobin.phonedrop.assistant.Store;
 import com.seobin.phonedrop.assistant.TaskAdminService;
 import com.seobin.phonedrop.assistant.TimeUtil;
 import com.seobin.phonedrop.assistant.Tx;
+import com.seobin.phonedrop.assistant.V5DataMigration;
+import com.seobin.phonedrop.assistant.BackupService;
 import com.seobin.phonedrop.assistant.agent.ProactiveService;
 import com.seobin.phonedrop.assistant.push.PushService;
 
@@ -52,10 +54,13 @@ public class AssistantController {
     private final Jobs jobs;
     private final PushService push;
     private final ProactiveService proactive;
+    private final V5DataMigration migration;
+    private final BackupService backups;
 
     public AssistantController(Tx tx, AssistantClock clock, TimeUtil time, DeviceService devices,
                                InterventionService interventions, TaskAdminService tasks, SettingsService settings,
-                               PlanService plan, Store store, Jobs jobs, PushService push, ProactiveService proactive) {
+                               PlanService plan, Store store, Jobs jobs, PushService push, ProactiveService proactive,
+                               V5DataMigration migration, BackupService backups) {
         this.tx = tx;
         this.clock = clock;
         this.time = time;
@@ -68,6 +73,8 @@ public class AssistantController {
         this.jobs = jobs;
         this.push = push;
         this.proactive = proactive;
+        this.migration = migration;
+        this.backups = backups;
     }
 
     @GetMapping("/health")
@@ -150,7 +157,7 @@ public class AssistantController {
                 m.put("id", i.id());
                 m.put("block_id", i.blockId());
                 m.put("status", i.status());
-                m.put("negotiate_until", time.iso(i.negotiateUntil()));
+                m.put("talk_until", time.iso(i.talkUntil()));
                 m.put("level", i.level());
                 m.put("started_at", time.iso(i.startedAt()));
                 return m;
@@ -166,6 +173,8 @@ public class AssistantController {
                 return m;
             }).toList());
             result.put("recent_pushes", push.recent());
+            result.put("data_migration", migration.lastResult());
+            result.put("backups", backups.list());
             return result;
         });
     }

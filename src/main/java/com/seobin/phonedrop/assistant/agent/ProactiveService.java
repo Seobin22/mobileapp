@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.Jobs;
 import com.seobin.phonedrop.assistant.Json;
 import com.seobin.phonedrop.assistant.SettingsService;
@@ -50,10 +51,11 @@ public class ProactiveService {
     private final SettingsService settings;
     private final TurnQueue turns;
     private final ChatService chat;
+    private final GoalCoverage coverage;
     private final boolean enabled;
 
     public ProactiveService(AssistantDb db, AssistantClock clock, Tx tx, Jobs jobs, Store store, TimeUtil time,
-                            SettingsService settings, TurnQueue turns, ChatService chat,
+                            SettingsService settings, TurnQueue turns, ChatService chat, GoalCoverage coverage,
                             @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
@@ -64,6 +66,7 @@ public class ProactiveService {
         this.settings = settings;
         this.turns = turns;
         this.chat = chat;
+        this.coverage = coverage;
         this.enabled = enabled;
         jobs.register(PULSE, this::onPulse);
         jobs.register(MORNING_FALLBACK, this::onMorningFallback);
@@ -123,8 +126,8 @@ public class ProactiveService {
         if (time.isQuiet(now)) {
             return "quiet";
         }
-        if (eventInProgress(now)) {
-            return "event";
+        if (fixedBlockInProgress(now)) {
+            return "fixed_block";
         }
         if (!store.startedBlocks().isEmpty()) {
             return "started_block";
@@ -146,10 +149,13 @@ public class ProactiveService {
         return chat.turnsToday() >= settings.getInt("agent.daily_turn_soft");
     }
 
-    /** 고정 일정 진행 중(버퍼 제외). */
-    public boolean eventInProgress(Instant now) {
-        return store.activeEventsOverlapping(now, now.plusSeconds(1)).stream()
-                .anyMatch(e -> !now.isBefore(e.start()) && now.isBefore(e.end()));
+    /**
+     * 고정 블록(약속) 진행 중(출발 준비·이동 시간 제외, v3.1 에서 일정을 대체).
+     * [시작]을 눌러 started 가 된 고정 블록은 작업 중으로 보고 여기서 빼서 체크인이 울리게 한다.
+     */
+    public boolean fixedBlockInProgress(Instant now) {
+        return store.activeFixedBlocksOverlapping(now, now.plusSeconds(1)).stream()
+                .anyMatch(b -> !"started".equals(b.status()) && !now.isBefore(b.start()) && now.isBefore(b.end()));
     }
 
     // ------------------------------------------------------------------ 아침·저녁 (§5.2)
@@ -173,6 +179,7 @@ public class ProactiveService {
 
     private boolean morning(LocalDate day) {
         if (flag(day, "morning_done")) {
+            needsBlocksForMissingGoals();
             return false;
         }
         setFlag(day, "morning_done");
@@ -186,6 +193,7 @@ public class ProactiveService {
         LocalDate day = time.logicalDay(job.fireAt());
         jobs.schedule(EVENING, 0, eveningAt(day.plusDays(1)), null);
         if (flag(day, "evening_done")) {
+            needsBlocksForMissingGoals();
             return false;
         }
         setFlag(day, "evening_done");
@@ -193,6 +201,13 @@ public class ProactiveService {
         ref.put("logical_day", day.toString());
         turns.enqueue("evening", ref, TurnQueue.PRIORITY_DEFAULT);
         return true;
+    }
+
+    /** v3.1 §3.4-3: 아침·저녁이 이미 처리됐는데 누락 목표가 있으면 따로 goal_needs_blocks. */
+    private void needsBlocksForMissingGoals() {
+        for (Store.Goal g : coverage.missing()) {
+            coverage.enqueueNeedsBlocks(g.id(), clock.now());
+        }
     }
 
     private boolean flag(LocalDate day, String column) {

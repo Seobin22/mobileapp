@@ -1,0 +1,16 @@
+# 빌드문서 v3.1 §5.2
+name: 풀스크린에서 "왜 지금 해야 돼?"
+now: "2026-11-02T10:01"
+situation: 보고서 계획 블록 10:00–11:00 시작 화면이 떠 있고, 사용자가 화면에서 말했다(TTS 로 읽힘).
+setup:
+  goals:
+    - {title: 분기 보고서 제출, label: 보고서, deadline: "2026-11-04T18:00", reason: 팀장님께 수요일 오전까지 드리기로 함}
+  tasks:
+    - {title: 보고서 초안, first_action: 개요 5분 쓰기, est_minutes: 180, deadline: "2026-11-04T12:00", goal: 0}
+  blocks:
+    - {task: 0, start: "2026-11-02T10:00", end: "2026-11-02T11:00", intervention: true}
+trigger: {type: intervention_talk, block: 0, text: "왜 지금 해야 돼?"}
+criteria:
+  - send_message(reply) 로 2~3문장 이내로 짧게 답한다(말로 듣기 좋게)
+  - 마감(11/04)·남은 시간·사용자가 말한 이유 같은 사실을 근거로 든다
+  - 아주 작은 첫 행동(개요 5분 등)을 제안한다

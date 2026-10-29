@@ -1,7 +1,11 @@
 # 실행 비서 (assistant)
 
 채팅으로 말하면 Claude 가 일정·할 일·목표를 정리하고 시간표를 짜고, 정해진 시각에 휴대폰 화면을 띄워 시작시키는 개인용 비서.
-안드로이드 앱 + 이 Spring 앱 안의 서버. 현재 **v3(협상·동행·먼저 말 걸기·대신 처리)**.
+안드로이드 앱 + 이 Spring 앱 안의 서버. 현재 **v3.1(블록 통일·목표 관리·풀스크린 대화)**.
+- 시간표의 모든 칸은 블록이고 모두 알람이 간다: 고정 블록(사용자가 시각을 정한 것, lead_minutes 만큼 먼저 개입) · 계획 블록(비서가 잡은 것). 일정(events)은 v3.1 에서 고정 블록으로 옮겼다.
+- 목표마다 이름표·색, 앱 목표 탭(GET/PATCH /v1/goals, complete, cancel). 활성 목표에는 2일 안에 블록이 있도록 코드가 검사한다(GoalCoverage).
+- 풀스크린에서 바로 대화: POST /v1/messages 에 intervention_id → intervention_talk turn, 답은 그 화면에 TTS.
+- DB 백업: 스키마 변경 직전 `backups/pre-V*.zip`, 매일 04:00 `backups/daily-*.zip`(7일).
 설계 기록은 [DECISIONS.md](DECISIONS.md), 열린 문제는 [OPEN_ISSUES.md](OPEN_ISSUES.md).
 
 ## 주소
@@ -37,7 +41,7 @@
   | `ASSISTANT_FIREBASE_CREDENTIALS` | 없음 | 서비스 계정 키 JSON 경로 |
 - 배포: master push → 기존 `deploy.yml`. 스키마 마이그레이션은 앱 시작 때 자동.
 - 테스트: `./mvnw test` (FakeClock·FakePush·ScriptedLlm·메모리 H2. v1 T1~T15, v2 단위·S1~S12, v3 N·B·W·P·M·A·R)
-- 평가 세트: `ANTHROPIC_API_KEY=... make eval` → `evals/report.md` (v2+v3, `-Deval.dirs=v3` 처럼 폴더 선택. 실제 API 비용이 든다)
+- 평가 세트: `ANTHROPIC_API_KEY=... make eval` → `evals/report.md` (v2+v3+v3_1, `-Deval.dirs=v3_1` 처럼 폴더 선택. 실제 API 비용이 든다)
 
 ## 안드로이드 앱 (`android/`)
 - 빌드: `android/**` 를 master 에 push 하면 GitHub Actions "Android APK" 가 빌드한다.
@@ -61,6 +65,14 @@
 1. 채팅으로 할 일 등록 → 시간표 탭에 블록 → 그 시각에 v1 화면
 2. 음성(🎤)·위젯 입력
 3. 확인 카드 [예]/[아니오] 동작
+### v3.1 (§6)
+1. "10분 뒤에 ○○ 잡아줘" → 시간표에 [고정] → 정각에 풀스크린
+2. 출발 준비 20분짜리 약속 → 20분 전에 화면
+3. 목표 2개 → 색·이름표가 다른 블록, 목표 탭에 2개
+4. 목표 탭에서 하나 취소 → 그 목표 블록 사라짐, 비서 알림
+5. 풀스크린에서 말로 "5분만 있다가 할게" → 음성 답 → 합의 시 화면 닫히고 새 시각에 다시 뜸
+6. 풀스크린 대화 중 5분 방치 → 다시 알림
+7. 목표 블록 하나 완료 → 비서가 다음 블록을 잡아 둠
 ### v3 (§10)
 1. [미루기 요청] → 채팅 협상 → 5분 방치하면 화면이 다시 뜸
 2. 미루기를 받아주면 새 시각에 화면이 뜸

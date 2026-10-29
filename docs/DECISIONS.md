@@ -141,3 +141,51 @@
 
 ### 평가
 - `evals/v3/*.yaml` 8개(§9.2). EvalRunner 가 `-Deval.dirs=v2,v3`(기본 둘 다)로 폴더를 고르고 `trigger`·`inputs`·`setup.blocks[].status/intervention`·`setup.sql`·`setup.memory` 를 지원한다. 결과 요약에 wakeup·작업물·개입·memory·알림 여부를 넣었다.
+
+## v3.1 (2026-10-29) — 블록 통일·목표 관리·풀스크린 대화
+
+### DB·백업 (§2.1)
+- **DB 확인**: H2 **파일** DB(`jdbc:h2:file:./data/assistant/assistant`, 서버 `/root/data/assistant/assistant.mv.db`). 재시작해도 데이터가 남으므로 PostgreSQL 전환은 하지 않았다.
+- **이전 전 백업**: `AssistantDb` 가 스키마를 올리기 직전(기존 버전 > 0 이고 새 버전이 있을 때) H2 `BACKUP TO` 로 `{data-dir}/backups/pre-V{n}-{시각}.zip` 을 만든다. 실패하면 마이그레이션하지 않는다. 메모리 DB(테스트)는 건너뛴다.
+- **매일 백업**: 서버 cron 대신 앱 작업 `db_backup`(`BackupService`) — 매일 04:00(사용자 시간대) `daily-*.zip`, 7일 지난 daily 는 지운다. pre-V* 는 지우지 않는다. 관리 화면 "DB 백업" 에 목록.
+- **스키마 V5**: blocks(kind·title·goal_id·task_id null 허용·lead_minutes·buffer_after_min·location·source·external_id·sensitive·migrated_event_id), goals(label·color·strategy_summary·progress(JSON 문자열)·waiting_until·waiting_reason·priority), messages.intervention_id, interventions.negotiate_until→talk_until·negotiating→talking, data_migrations.
+- **데이터 이전**: `V5DataMigration` 이 앱 시작 때마다 실행(다시 실행해도 같은 결과). 중복 판별은 `blocks.migrated_event_id`. events 는 남겨 두고 더 쓰지 않는다(다음 버전 삭제). 결과는 로그·`data_migrations`·관리 화면.
+
+### 고정·계획 블록 (§1, §3.1~3.3)
+- 블록 금지 구간 = [start − lead, end + buffer_after]. 계획 블록 검증은 유지 블록의 금지 구간과 비교한다(계획 블록은 lead·buffer 0).
+- **고정 블록 검증**: 사용자가 정한 시각이므로 수면·식사는 검사하지 않는다(길이 5분 미만·이미 지남은 거절). 수면·방해 금지와 겹치면 알람이 안 뜨므로 도구 결과에 warning 을 넣어 비서가 알리게 했다. `/v1/admin/tasks`(v1 호환)는 예전처럼 수면·방해 금지를 거절한다.
+- 고정끼리 겹침 거절 문구: "○○(MM/dd HH:mm–HH:mm, 블록#N)와 겹쳐요. 시간을 바꿔 주세요."
+- 진행 중 블록과 겹치면 `block_cutoff` 작업(금지 구간 시작)으로 partial + block_ended turn(reason=fixed_block).
+- `fixed.default_lead_minutes`(10)는 도구·앱 API 에서 lead 를 안 줬을 때만. v1 `/v1/admin/tasks` 는 lead 0 고정 블록 + 할 일을 함께 만든다(v1 수정·삭제가 할 일 id 로 동작하도록).
+- 고정 블록 move_block: 권한(사용자 말 아니면 확인 카드) 후 고정 블록 규칙으로 옮긴다(겹친 계획 블록 displaced). nudging 이면 snoozed(moved).
+- 고정 블록 화면 기본 문구: "곧 {title}이에요. {lead}분 뒤 시작이라 지금 출발 준비하세요."(lead 0 이면 "곧 {title}이에요.") — OPEN_ISSUES 참고.
+- "고정 블록 진행 중"(구 일정 진행 중: pulse 건너뛰기·알림 없음 판단)은 [시작]을 누르지 않은 고정 블록만. 시작한 고정 블록은 작업 중으로 본다(체크인 알림이 감).
+- get_history completions·interventions 의 task_id 는 고정 블록이면 null.
+
+### 목표 진행 보장 (§3.4)
+- `GoalCoverage`: 미래 블록 = goal_id 가 그 목표인 블록 중 planned·start>now. 누락 = active·대기 아님·now~now+min_horizon_days 안에 미래 블록 없음.
+- turn 끝 검사: 이 turn 에서 만들거나 바꾼 목표(upsert_goal, upsert_task 의 목표, 블록을 만들거나 취소·종료한 목표)만 본다. 도구 호출 없이 끝난 응답 뒤에 user 메시지 "[시스템 검사] 목표 #id(label)에 N일 안에 잡힌 블록이 없습니다…" 를 붙여 계속한다(LlmClient.addUserText). coverage_retry 회 뒤에도 누락이면 turn 은 끝내고 warn 로그 + 30분 뒤 goal_needs_blocks.
+- 이어 잡기: turn 밖에서 블록이 missed·partial·cancelled 가 될 때(expire·suspend·block_end·새 개입이 이전 started 를 partial·앱에서 고정 블록 삭제) 그 목표가 누락이면 goal_needs_blocks(priority 5). 같은 목표의 대기 중 turn 이 있으면 만들지 않는다. turn 안의 변경은 turn 끝 검사가 맡는다.
+- 매일: 맥락에 "블록이 없는 목표" 섹션을 항상 넣는다. 아침·저녁 작업이 왔는데 이미 처리된 날이면 누락 목표마다 goal_needs_blocks.
+- waiting_until 을 쓰면 `goal_waiting_check` 작업을 그 시각에(바뀌면 다시) 예약 → 그때도 대기가 끝났고 active 면 goal_waiting_check turn.
+- 목표 끝내기(탭 [완료]·[취소], 도구 cancel goal, upsert_goal status=done)는 같은 처리: 할 일 done/cancelled, 미래 계획 블록 cancelled, 연결 고정 블록은 goal_id 만 비움, 진행 중 개입이면 cancelled.
+
+### 목표 이름표·색 (§3.5)
+- 팔레트 8색: #E64980 #4C6EF5 #12B886 #FAB005 #7950F2 #FD7E14 #15AABF #82C91E. active 목표가 쓰지 않는 첫 색, 모두 쓰면 (active 수 % 8).
+- label 은 6자(코드포인트)로 자른다. 비면 제목 앞 6자. 탭에서 색은 #RRGGBB 로 받아 대문자로 저장.
+
+### 풀스크린 대화 (§3.6)
+- `POST /v1/messages` 에 intervention_id 가 있으면 그 개입의 대화: 메시지 저장(intervention_id, source fullscreen|fullscreen_voice) → 개입이 끝나지 않았으면 talking·talk_until·talk_timeout(expected_version) → intervention_talk turn(priority 10). 개입이 이미 끝났어도 turn 은 만든다(사용자가 말했으므로).
+- intervention_talk 은 권한상 user_message 와 같다(`Permissions.fromUser`). 맥락에 그 개입의 대화와 블록 할 일의 사실(get_facts)을 넣는다.
+- 답장: intervention_talk turn 의 send_message(kind=reply)와 텍스트만 답한 경우 모두 intervention_id 를 붙인다. chat.message 푸시에 intervention_id·text(최대 1000자).
+- start_now 에 block_id 를 추가(고정 블록처럼 할 일 없는 블록의 개입을 시작 처리).
+- 구 negotiation_timeout 작업과 구 snooze_request 액션은 호환 처리(대화 시작 "미루고 싶어요").
+
+### 목표 탭·고정 블록 API (§3.7, §4.4)
+- `GoalController`: GET /v1/goals(활성 + 최근 30일 끝난 목표, load_status·next_block_start·upcoming_block_count·coverage), GET /v1/goals/{id}/blocks, PATCH, complete, cancel. 변경은 먼저 goal_changed_by_user turn 을 만들고 그 turn_id 로 changes 에 남긴다.
+- `/v1/fixed_blocks` POST·PATCH·DELETE: source=manual, displaced 가 있으면 blocks_displaced turn. 계획 블록 수정 API 는 없다: 앱에서 계획 블록을 길게 누르면 비서에게 채팅으로 요청한다(비서가 다시 배치).
+
+### 앱 3.1.0
+- 탭 3개(채팅·시간표·목표). 시간표: 목표 색 띠·이름표 칩·'고정'·출발 시각. [+] = 고정 블록 만들기(제목·날짜·시각·길이·출발 준비 기본 10·장소·목표·첫 행동).
+- 풀스크린: 이름표·제목·문구 / [시작] / 대화 / 입력줄(🎤 ko-KR 인식 끝나면 바로 전송). 답을 기다리는 동안 "생각 중…", 3초마다 서버에서도 확인(FCM 이 늦어도 보이게). 답은 TTS. [미루기 요청] 버튼은 없앴다. talk_timeout 뒤 intervention.level 이 다시 오면 같은 화면에서 알림음.
+- 로컬 백업 알람은 plan.sync 의 alarm_at(= start − lead) 기준. Room 스키마 4(파괴적 마이그레이션).

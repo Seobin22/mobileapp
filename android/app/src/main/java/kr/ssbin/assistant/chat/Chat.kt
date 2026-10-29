@@ -68,6 +68,16 @@ object Chat {
     /** chat.message 푸시. silent=true 면 알림 없이 채팅에만 쌓인다(서버가 정함, v3 §4.5). */
     fun onChatPush(context: Context, data: Map<String, String>) {
         requestRefresh()
+        // v3.1: 풀스크린 대화의 답. 그 화면이 떠 있으면 화면이 표시·TTS 하고 알림은 띄우지 않는다.
+        val interventionId = data["intervention_id"]
+        if (interventionId != null) {
+            kr.ssbin.assistant.intervention.InterventionState.emit(
+                kr.ssbin.assistant.intervention.InterventionState.Event.Reply(
+                    interventionId, data["message_id"]?.toLongOrNull() ?: 0, data["text"] ?: data["preview"].orEmpty()
+                )
+            )
+            if (kr.ssbin.assistant.intervention.InterventionState.visibleId == interventionId) return
+        }
         if (data["silent"] == "true") return
         if (ChatVisibility.visible) return // 채팅 화면을 보고 있으면 알림을 띄우지 않는다
         if (data["channel"] == CHANNEL_CHECKIN) {

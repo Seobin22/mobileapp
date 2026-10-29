@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.SettingsService;
 import com.seobin.phonedrop.assistant.Store;
 import com.seobin.phonedrop.assistant.TimeUtil;
@@ -34,9 +35,10 @@ public class ContextBuilder {
     private final Timeline timeline;
     private final Facts facts;
     private final ChatService chat;
+    private final GoalCoverage coverage;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
-                          Timeline timeline, Facts facts, ChatService chat) {
+                          Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -45,6 +47,7 @@ public class ContextBuilder {
         this.timeline = timeline;
         this.facts = facts;
         this.chat = chat;
+        this.coverage = coverage;
     }
 
     public String build(String trigger, JsonNode ref) {
@@ -67,6 +70,19 @@ public class ContextBuilder {
                 .append(" / 방해 금지: ").append(windows(settings.get("dnd.windows"))).append("\n\n");
 
         sb.append("# 이번 실행 이유\n").append(reason(trigger, ref)).append("\n\n");
+
+        // v3.1 §3.6-2: 풀스크린 대화면 이 개입에서 오간 말
+        if ("intervention_talk".equals(trigger)) {
+            long interventionId = ref.path("intervention_id").asLong(-1);
+            sb.append("# 이 시작 화면에서 오간 대화(개입#").append(interventionId).append(")\n");
+            List<String> talk = db.jdbc().sql("""
+                            SELECT role, content, created_at FROM messages WHERE intervention_id = ? ORDER BY id""")
+                    .param(interventionId)
+                    .query((rs, n) -> "[" + mdHm(AssistantDb.instant(rs, "created_at")) + " "
+                            + ("user".equals(rs.getString("role")) ? "사용자" : "비서") + "] " + rs.getString("content"))
+                    .list();
+            sb.append(talk.isEmpty() ? "없음" : String.join("\n", talk)).append("\n\n");
+        }
 
         // v3 §6.1: 이 할 일의 사실(get_facts)을 미리 넣는다.
         Long factTask = factTaskId(trigger, ref);
@@ -107,12 +123,22 @@ public class ContextBuilder {
             sb.append("없음\n");
         }
         for (Store.Goal g : goals) {
-            sb.append("- 목표#").append(g.id()).append(' ').append(timeline.goalTitle(g))
-                    .append(" (마감 ").append(g.deadline() == null ? "없음" : md(g.deadline())).append(')');
+            sb.append("- 목표#").append(g.id()).append(" [").append(g.label()).append("] ").append(timeline.goalTitle(g))
+                    .append(" (마감 ").append(g.deadline() == null ? "없음" : md(g.deadline()))
+                    .append(", 우선 ").append(g.priority()).append(')');
             if (!g.reason().isBlank()) {
                 sb.append(" 이유: ").append(g.reason());
             }
+            if (g.progress() != null) {
+                sb.append(" 진행: ").append(g.progress());
+            }
+            if (g.waitingUntil() != null) {
+                sb.append(" 대기 중(").append(mdHm(g.waitingUntil())).append(" 확인")
+                        .append(g.waitingReason() == null ? "" : ", " + g.waitingReason()).append(')');
+            }
             sb.append('\n');
+            sb.append("  전략 요약: ").append(g.strategySummary().isBlank() ? "(없음 — strategy_summary 를 채우세요)"
+                    : g.strategySummary()).append('\n');
             if (!g.strategy().isBlank()) {
                 sb.append("  전략: ").append(g.strategy().replace("\n", "\n  ")).append('\n');
             }
@@ -120,6 +146,12 @@ public class ContextBuilder {
                     .forEach(t -> sb.append("  할 일: ").append(taskLine(t)).append('\n'));
         }
         sb.append('\n');
+
+        // v3.1 §3.4·§3.8: 블록이 없는 목표(누락). 판단 없이 "블록이 있는가"만 본 결과.
+        sb.append("# 블록이 없는 목표(").append(settings.getInt("goal.min_horizon_days")).append("일 안)\n");
+        List<Store.Goal> missing = coverage.missing();
+        sb.append(missing.isEmpty() ? "없음" : String.join("\n", missing.stream()
+                .map(g -> "- 목표#" + g.id() + " [" + g.label() + "] " + timeline.goalTitle(g)).toList())).append("\n\n");
 
         sb.append("# 목표 없는 할 일\n");
         List<Store.Task> loose = tasks.stream().filter(t -> t.goalId() == null).toList();
@@ -169,12 +201,13 @@ public class ContextBuilder {
         }
         for (Store.Intervention i : running) {
             Store.Block b = store.block(i.blockId()).orElseThrow();
-            String title = store.task(b.taskId()).map(timeline::taskTitle).orElse("");
-            sb.append("- 개입#").append(i.id()).append(" 블록#").append(b.id()).append(" 할일#").append(b.taskId())
-                    .append(' ').append(title).append(" (").append(time.hm(i.startedAt())).append("부터 화면 표시 중)");
-            if ("negotiating".equals(i.status()) && i.negotiateUntil() != null) {
-                long left = Math.max(0, Duration.between(now, i.negotiateUntil()).toMinutes());
-                sb.append(" 협상 중, ").append(left).append("분 안에 답이 없으면 화면이 다시 뜸");
+            sb.append("- 개입#").append(i.id()).append(" 블록#").append(b.id())
+                    .append(b.fixed() ? " [고정]" : "").append(b.taskId() == null ? "" : " 할일#" + b.taskId())
+                    .append(' ').append(timeline.blockTitle(b))
+                    .append(" (").append(time.hm(i.startedAt())).append("부터 화면 표시 중)");
+            if ("talking".equals(i.status()) && i.talkUntil() != null) {
+                long left = Math.max(0, Duration.between(now, i.talkUntil()).toMinutes());
+                sb.append(" 시작 화면에서 대화 중, ").append(left).append("분 안에 답이 없으면 화면이 다시 뜸");
             }
             sb.append('\n');
         }
@@ -215,6 +248,21 @@ public class ContextBuilder {
             }
             case "snooze_request" -> "snooze_request: 사용자가 개입 화면에서 [미루기 요청]을 눌렀다 (개입#"
                     + ref.path("intervention_id").asLong() + ", 블록#" + ref.path("block_id").asLong() + ")";
+            case "intervention_talk" -> {
+                String text = db.jdbc().sql("SELECT content FROM messages WHERE id = ?")
+                        .param(ref.path("message_id").asLong()).query(String.class).optional().orElse("");
+                yield "intervention_talk: 사용자가 시작 화면(개입#" + ref.path("intervention_id").asLong() + ", 블록#"
+                        + ref.path("block_id").asLong() + ")에서 말함: \"" + text + "\" (답은 TTS 로 읽힌다)";
+            }
+            case "goal_needs_blocks" -> "goal_needs_blocks: 목표#" + ref.path("goal_id").asLong()
+                    + "에 앞으로 " + settings.getInt("goal.min_horizon_days") + "일 안에 블록이 없다. 이어서 배치하거나 waiting_until 을 기록";
+            case "goal_waiting_check" -> "goal_waiting_check: 목표#" + ref.path("goal_id").asLong()
+                    + "의 대기(waiting_until)가 끝났다. 사용자에게 결과를 묻고 계획을 이어간다";
+            case "goal_changed_by_user" -> "goal_changed_by_user: 사용자가 목표 탭에서 목표#" + ref.path("goal_id").asLong()
+                    + "을 직접 바꿈(" + ref.path("action").asString("") + (ref.hasNonNull("fields") ? " " + ref.get("fields").asString() : "")
+                    + "). 시간표를 다시 정리하고 짧게 알린다";
+            case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
+                    + "을 넣어 계획 블록 " + ref.path("displaced") + "이 취소됐다. 재배치하고 알린다";
             case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
                     + switch (ref.path("reason").asString("")) {
                         case "no_response" -> "no_response(화면에 무응답)";
@@ -224,7 +272,10 @@ public class ContextBuilder {
                     };
             case "block_started" -> "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
                     + " 작업을 시작함(체크인 예약 등 동행)";
-            case "block_ended" -> "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong() + "의 끝 시각이 됨";
+            case "block_ended" -> "fixed_block".equals(ref.path("reason").asString(""))
+                    ? "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong()
+                    + "이 새 고정 블록의 준비 시간이 되어 부분 완료(partial)로 끝남"
+                    : "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong() + "의 끝 시각이 됨";
             case "wakeup" -> "wakeup: 예약해 둔 wakeup#" + ref.path("wakeup_id").asLong()
                     + (ref.hasNonNull("task_id") ? " 할일#" + ref.path("task_id").asLong() : "")
                     + " — " + ref.path("reason").asString("");
@@ -238,7 +289,7 @@ public class ContextBuilder {
     /** snooze_request·block_missed·block_ended·wakeup(task_id 있음)이면 그 할 일. */
     private Long factTaskId(String trigger, JsonNode ref) {
         return switch (trigger) {
-            case "snooze_request", "block_missed", "block_ended", "block_started" ->
+            case "snooze_request", "block_missed", "block_ended", "block_started", "intervention_talk" ->
                     store.block(ref.path("block_id").asLong(-1)).map(Store.Block::taskId).orElse(null);
             case "wakeup" -> ref.hasNonNull("task_id") ? ref.get("task_id").asLong() : null;
             default -> null;
@@ -259,13 +310,24 @@ public class ContextBuilder {
                 String range = hm(item.get("start")) + "–" + hm(item.get("end"));
                 switch ((String) item.get("kind")) {
                     case "free" -> free.append(free.isEmpty() ? "" : ", ").append(range);
-                    case "event" -> sb.append("- ").append(range).append(" 일정#").append(item.get("id")).append(' ')
-                            .append(item.get("title")).append(" (버퍼 앞").append(item.get("buffer_before_min"))
-                            .append(" 뒤").append(item.get("buffer_after_min"))
-                            .append("calendar".equals(item.get("source")) ? ", 캘린더" : "").append(")\n");
-                    case "block" -> sb.append("- ").append(range).append(" 블록#").append(item.get("id"))
-                            .append(" [").append(item.get("status")).append("] 할일#").append(item.get("task_id"))
-                            .append(' ').append(nz(item.get("title")))
+                    case "fixed_block" -> {
+                        int lead = ((Number) item.get("lead_minutes")).intValue();
+                        int after = ((Number) item.get("buffer_after_min")).intValue();
+                        sb.append("- ").append(range).append(" [고정] ").append(nz(item.get("title")))
+                                .append(" 블록#").append(item.get("id"))
+                                .append(lead > 0 ? " (출발 " + hm(java.time.Instant.parse(isoUtc(item.get("start")))
+                                        .minusSeconds(lead * 60L)) + ")" : "")
+                                .append(after > 0 ? " (끝난 뒤 " + after + "분 이동)" : "")
+                                .append(goalTag(item))
+                                .append(item.get("task_id") == null ? "" : " (할일#" + item.get("task_id") + ")")
+                                .append(item.get("location") == null ? "" : " @" + item.get("location"))
+                                .append("calendar".equals(item.get("source")) ? " (캘린더)" : "")
+                                .append(" ").append(item.get("status")).append('\n');
+                    }
+                    case "planned_block" -> sb.append("- ").append(range)
+                            .append(String.valueOf(item.get("goal_label")).isEmpty() ? "" : " [" + item.get("goal_label") + "]")
+                            .append(" 블록#").append(item.get("id")).append(' ').append(nz(item.get("title")))
+                            .append(" (할일#").append(item.get("task_id")).append(") ").append(item.get("status"))
                             .append(item.get("work_product_id") == null ? "" : " (작업물#" + item.get("work_product_id") + " 첨부)")
                             .append('\n');
                     case "quiet" -> sb.append("- ").append(range).append(" 방해금지\n");
@@ -276,6 +338,20 @@ public class ContextBuilder {
             }
             sb.append("- 빈 시간: ").append(free.isEmpty() ? "없음" : free).append('\n');
         }
+    }
+
+    private static String goalTag(Map<String, Object> item) {
+        Object label = item.get("goal_label");
+        return label == null || String.valueOf(label).isEmpty() ? "" : " [" + label + "]";
+    }
+
+    /** timeline 의 ISO(+09:00 등) → Instant.parse 가 읽는 형태. */
+    private static String isoUtc(Object iso) {
+        return java.time.OffsetDateTime.parse(String.valueOf(iso)).toInstant().toString();
+    }
+
+    private String hm(java.time.Instant t) {
+        return time.hm(t);
     }
 
     private String taskLine(Store.Task t) {

@@ -70,6 +70,11 @@ data class UpcomingItem(
     val task_title: String,
     val screen_text: String,
     val work_product_id: Long? = null,
+    /** v3.1: 개입 시각(= start − lead). 없으면(구 서버) start. */
+    val alarm_at: String? = null,
+    val kind: String = "planned",
+    val goal_label: String = "",
+    val goal_color: String = "",
 )
 
 /** plan.sync 의 quiet_windows 항목. */
@@ -84,6 +89,8 @@ data class PostMessageRequest(
     val text: String,
     val source: String,
     val answered_question_id: Long? = null,
+    /** v3.1 풀스크린 대화(source=fullscreen|fullscreen_voice). */
+    val intervention_id: Long? = null,
 )
 
 @Serializable
@@ -106,6 +113,9 @@ data class MessageDto(
     val read: Boolean = false,
     val silent: Boolean = false,
     val created_at: String,
+    /** v3.1: 시작 화면(풀스크린)에서 오간 말. */
+    val intervention_id: Long? = null,
+    val source: String? = null,
 )
 
 // ------------------------------------------------------------------ v3 작업물
@@ -132,6 +142,7 @@ data class TimelineResponse(val days: List<TimelineDay>)
 @Serializable
 data class TimelineDay(val date: String, val wake: String, val sleep: String, val items: List<TimelineItem>)
 
+/** kind: fixed_block | planned_block | quiet | meal | free (v3.1). */
 @Serializable
 data class TimelineItem(
     val kind: String,
@@ -142,4 +153,61 @@ data class TimelineItem(
     val status: String? = null,
     val task_id: Long? = null,
     val work_product_id: Long? = null,
+    val goal_id: Long? = null,
+    val goal_label: String? = null,
+    val goal_color: String? = null,
+    val lead_minutes: Int = 0,
+    val buffer_after_min: Int = 0,
+    val location: String? = null,
+)
+
+// ------------------------------------------------------------------ v3.1 목표·고정 블록
+
+@Serializable
+data class GoalProgress(val unit: String? = null, val total: Double? = null, val done: Double? = null)
+
+@Serializable
+data class GoalDto(
+    val id: Long,
+    val title: String,
+    val label: String = "",
+    val color: String = "",
+    val deadline: String? = null,
+    val status: String,
+    val priority: Int = 3,
+    val progress: GoalProgress? = null,
+    val strategy_summary: String = "",
+    val waiting_until: String? = null,
+    val waiting_reason: String? = null,
+    val load_status: String? = null,
+    val next_block_start: String? = null,
+    val upcoming_block_count: Int = 0,
+    val coverage: String? = null,
+)
+
+@Serializable
+data class GoalsResponse(val goals: List<GoalDto>)
+
+@Serializable
+data class GoalBlockDto(
+    val id: Long,
+    val kind: String,
+    val title: String,
+    val start: String,
+    val end: String,
+    val status: String,
+)
+
+@Serializable
+data class GoalBlocksResponse(val goal: GoalDto, val blocks: List<GoalBlockDto>)
+
+@Serializable
+data class FixedBlockRequest(
+    val title: String? = null,
+    val start: String? = null,
+    val duration_min: Int? = null,
+    val lead_minutes: Int? = null,
+    val location: String? = null,
+    val goal_id: Long? = null,
+    val first_action: String? = null,
 )

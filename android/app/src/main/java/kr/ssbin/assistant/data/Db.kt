@@ -14,7 +14,7 @@ import androidx.room.Upsert
 
 /**
  * 받은 개입. id 는 서버 intervention_id, 또는 로컬 백업이 띄운 "local:{block_id}".
- * status: running | negotiating(미루기 협상 중, v3) | ended
+ * status: running | talking(풀스크린 대화 중, v3.1) | ended
  */
 @Entity(tableName = "interventions")
 data class InterventionEntity(
@@ -33,6 +33,9 @@ data class InterventionEntity(
     val updatedAt: Long,
     /** [시작] 때 바로 열 작업물(v3 §8.1). */
     val workProductId: Long? = null,
+    /** 목표 이름표·색(v3.1 §3.5). 목표 없는 블록은 빈 값. */
+    val goalLabel: String = "",
+    val goalColor: String = "",
 )
 
 @Entity(tableName = "pending_actions")
@@ -94,7 +97,7 @@ interface AssistantDao {
 
 @Database(
     entities = [InterventionEntity::class, PendingAction::class, PlanSnapshot::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

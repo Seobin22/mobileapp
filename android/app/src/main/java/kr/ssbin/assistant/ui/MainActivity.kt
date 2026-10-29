@@ -37,7 +37,7 @@ import kotlinx.coroutines.withContext
 import kr.ssbin.assistant.Capabilities
 import kr.ssbin.assistant.data.ApiClient
 import kr.ssbin.assistant.data.Prefs
-import kr.ssbin.assistant.data.TaskDto
+import kr.ssbin.assistant.data.TimelineItem
 import kr.ssbin.assistant.work.Sync
 
 enum class Screen { Setup, Home, Permissions, Settings }
@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 채팅(메인) · 시간표 두 탭. 시간표의 [+] 는 v1 수동 추가 화면. */
+/** 채팅(메인) · 시간표 · 목표 세 탭(v3.1 §4). 시간표의 [+] 는 고정 블록 만들기. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
@@ -122,7 +122,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     val scope = rememberCoroutineScope()
     var tab by remember { mutableIntStateOf(0) }
     var adding by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<TaskDto?>(null) }
+    var editing by remember { mutableStateOf<TimelineItem?>(null) }
     var localTick by remember { mutableIntStateOf(0) }
     val allGranted = remember(tick) { Capabilities.allGranted(context) }
     LaunchedEffect(openChat) { if (openChat > 0) tab = 0 }
@@ -130,7 +130,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (tab == 0) "실행 비서" else "시간표") },
+                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "시간표"; else -> "목표" }) },
                 actions = {
                     TextButton(onClick = { navigate(Screen.Permissions) }) { Text("권한") }
                     TextButton(onClick = { navigate(Screen.Settings) }) { Text("설정") }
@@ -141,6 +141,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
             NavigationBar {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("💬") }, label = { Text("채팅") })
                 NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("📅") }, label = { Text("시간표") })
+                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎯") }, label = { Text("목표") })
             }
         },
     ) { padding ->
@@ -153,29 +154,22 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
                         .clickable { navigate(Screen.Permissions) }.padding(12.dp),
                 )
             }
-            if (tab == 0) {
-                ChatScreen(tick = tick + localTick)
-            } else {
-                TimelineScreen(
+            when (tab) {
+                0 -> ChatScreen(tick = tick + localTick)
+                1 -> TimelineScreen(
                     tick = tick + localTick,
                     onAdd = { adding = true },
-                    onEditTask = { taskId ->
-                        scope.launch {
-                            val task = withContext(Dispatchers.IO) {
-                                runCatching { ApiClient.get(context).tasks().tasks.firstOrNull { it.id == taskId } }.getOrNull()
-                            }
-                            editing = task
-                        }
-                    },
+                    onEditFixed = { item -> editing = item },
                 )
+                else -> GoalsScreen(tick = tick + localTick)
             }
         }
     }
 
     if (adding) {
-        TaskDialog(initial = null, onDismiss = { adding = false }, onSaved = { adding = false; localTick++ })
+        FixedBlockDialog(initial = null, onDismiss = { adding = false }, onSaved = { adding = false; localTick++ })
     }
-    editing?.let { task ->
-        TaskDialog(initial = task, onDismiss = { editing = null }, onSaved = { editing = null; localTick++ })
+    editing?.let { item ->
+        FixedBlockDialog(initial = item, onDismiss = { editing = null }, onSaved = { editing = null; localTick++ })
     }
 }

@@ -86,12 +86,12 @@ class V3FlowTest extends AssistantTestBase {
     void n1_snoozeRequestStartsNegotiation() {
         long[] ids = snoozedAt1001();
         Store.Intervention i = intervention(ids[2]);
-        assertThat(i.status()).isEqualTo("negotiating");
-        assertThat(i.negotiateUntil()).isEqualTo(at("2026-11-02T10:06"));
+        assertThat(i.status()).isEqualTo("talking");
+        assertThat(i.talkUntil()).isEqualTo(at("2026-11-02T10:06"));
         assertThat(count("SELECT COUNT(*) FROM jobs WHERE type = 'reshow' AND status = 'scheduled'")).isZero();
-        assertThat(count("SELECT COUNT(*) FROM jobs WHERE type = 'negotiation_timeout' AND status = 'scheduled'"))
+        assertThat(count("SELECT COUNT(*) FROM jobs WHERE type = 'talk_timeout' AND status = 'scheduled'"))
                 .isEqualTo(1);
-        assertThat(turns("snooze_request")).isEqualTo(1);
+        assertThat(turns("intervention_talk")).isEqualTo(1);
         assertThat(db.jdbc().sql("SELECT priority FROM jobs WHERE type = 'turn'").query(Integer.class).single())
                 .isEqualTo(10);
         // 협상 중에는 다시 띄우지 않는다
@@ -115,9 +115,9 @@ class V3FlowTest extends AssistantTestBase {
         long[] ids = snoozedAt1001();
         runUntil("2026-11-02T10:04");
         say("지금 너무 피곤해");
-        assertThat(intervention(ids[2]).negotiateUntil()).isEqualTo(at("2026-11-02T10:09"));
+        assertThat(intervention(ids[2]).talkUntil()).isEqualTo(at("2026-11-02T10:09"));
         runUntil("2026-11-02T10:08");
-        assertThat(intervention(ids[2]).status()).isEqualTo("negotiating");
+        assertThat(intervention(ids[2]).status()).isEqualTo("talking");
         runUntil("2026-11-02T10:09");
         assertThat(intervention(ids[2]).status()).isEqualTo("running");
     }
@@ -137,7 +137,7 @@ class V3FlowTest extends AssistantTestBase {
         assertThat(push.ofType("intervention.end")).anySatisfy(d -> assertThat(d.get("reason")).isEqualTo("snoozed"));
         assertThat(block(ids[1]).status()).isEqualTo("planned");
         assertThat(block(ids[1]).start()).isEqualTo(at("2026-11-02T10:30"));
-        assertThat(llm.userContents.getFirst()).contains("# 사실(get_facts").contains("snooze_request");
+        assertThat(llm.userContents.getFirst()).contains("# 사실(get_facts").contains("intervention_talk");
 
         runUntil("2026-11-02T10:30");
         assertThat(interventionCount()).isEqualTo(2);
@@ -262,6 +262,7 @@ class V3FlowTest extends AssistantTestBase {
     void startNowWithoutInterventionDisplacesPlannedBlocks() {
         long taskId = db.insert("INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes) VALUES ('운동', '신발 신기', 40, 40)");
         long[] other = createBlock("메일 정리", "2026-11-02T09:20", 30);
+        db.update("UPDATE blocks SET kind = 'planned' WHERE id = ?", other[1]); // 계획 블록(고정 블록이면 start_now 가 거절)
         JsonNode r = tool("start_now", "{\"task_id\":" + taskId + "}");
         assertThat(r.path("ok").asBoolean()).isTrue();
         Store.Block started = block(r.path("block_id").asLong());

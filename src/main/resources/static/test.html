@@ -13,7 +13,7 @@
         h2 { font-size: 1.05rem; margin: 0 0 10px; }
         section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
         label { display: block; font-size: .85rem; color: var(--muted); margin: 6px 0 2px; }
-        input, textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+        input, textarea, select { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
         textarea { min-height: 70px; font-family: monospace; font-size: .85rem; }
         button { padding: 8px 12px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
         button.ghost { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
@@ -30,7 +30,7 @@
 </head>
 <body>
 <main>
-    <h1>실행 비서 관리 <span class="muted">v3 · 협상·동행·먼저 말 걸기·대신 처리</span></h1>
+    <h1>실행 비서 관리 <span class="muted">v3.1 · 고정·계획 블록·목표 관리·풀스크린 대화</span></h1>
 
     <section id="tokenBox">
         <h2>API 토큰</h2>
@@ -75,28 +75,35 @@
     </section>
 
     <section>
-        <h2>시간표 (오늘부터 7일)</h2>
+        <h2>시간표 (오늘부터 7일) <span class="muted">고정 = 사용자가 정한 시각, 계획 = 비서가 잡은 블록. 둘 다 알람</span></h2>
         <div id="timeline" class="muted">-</div>
+        <div class="error" id="taskError"></div>
     </section>
 
     <section>
-        <h2>할 일 추가 <span class="muted">(수동 등록)</span></h2>
+        <h2>고정 블록 추가 <span class="muted">(앱의 [+]와 같음 · 바로 반영, 겹친 계획 블록은 비서가 다시 배치)</span></h2>
         <div class="row">
-            <div><label>제목</label><input id="title" placeholder="보고서 초안"></div>
-            <div><label>첫 행동</label><input id="firstAction" placeholder="문서 파일만 열기"></div>
+            <div><label>제목</label><input id="title" placeholder="치과"></div>
+            <div><label>첫 행동(선택)</label><input id="firstAction" placeholder="보험증 챙기기"></div>
         </div>
         <div class="row">
             <div><label>시작</label><input id="start" type="datetime-local"></div>
             <div><label>길이(분)</label><input id="duration" type="number" value="30" min="5"></div>
+            <div><label>출발 준비(분)</label><input id="lead" type="number" value="10" min="0"></div>
         </div>
-        <p><button id="add">추가</button> <button class="ghost" id="inTwo">2분 뒤로 채우기</button></p>
+        <div class="row">
+            <div><label>장소(선택)</label><input id="location" placeholder="역삼동 ○○치과"></div>
+            <div><label>목표 연결(선택)</label><select id="goalSelect"><option value="">없음</option></select></div>
+        </div>
+        <p><button id="add">추가</button> <button class="ghost" id="inTwo">2분 뒤로 채우기(준비 0분)</button></p>
         <div class="error" id="addError"></div>
     </section>
 
     <section>
-        <h2>오늘부터 7일</h2>
-        <div id="tasks" class="muted">-</div>
-        <div class="error" id="taskError"></div>
+        <h2>목표 <button class="ghost" id="reloadGoals" style="float:right">새로고침</button></h2>
+        <div id="goals" class="muted">-</div>
+        <div id="goalBlocks" style="display:none;margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffafc"></div>
+        <div class="error" id="goalError"></div>
     </section>
 
     <section>
@@ -170,11 +177,13 @@
         const running = s.running_interventions.map(i =>
             `<div class="running" style="border:1px solid;padding:8px;border-radius:6px;margin:6px 0">
                 개입 #${i.id} (블록 #${i.block_id}, L${i.level}) ${hm(i.started_at)} 시작
-                ${i.status === 'negotiating'
-                    ? `<span class="badge">협상 중 · ${hm(i.negotiate_until).substring(6)}까지 답이 없으면 화면 재등장</span>` : ''}
+                ${i.status === 'talking'
+                    ? `<span class="badge">시작 화면에서 대화 중 · ${hm(i.talk_until).substring(6)}까지 답이 없으면 화면 재등장</span>` : ''}
                 <button data-start="${i.id}" data-block="${i.block_id}">휴대폰 대신 [시작] 보내기</button>
-                ${i.status === 'running'
-                    ? `<button class="ghost" data-snooze="${i.id}" data-block="${i.block_id}">[미루기 요청] 보내기</button>` : ''}
+                <div class="row" style="margin-top:6px">
+                    <input id="talk-${i.id}" placeholder="시작 화면에서 하는 말 (예: 10분만 쉬고 할게)">
+                    <button class="ghost" data-talk="${i.id}">풀스크린 대화 보내기</button>
+                </div>
              </div>`).join('');
         const devices = s.devices.length ? s.devices.map(d =>
             `기기 #${d.id} ${esc(d.app_version)} · 마지막 하트비트 ${hm(d.last_heartbeat)} · <code>${esc(JSON.stringify(d.capabilities))}</code>`
@@ -184,7 +193,10 @@
             <div>서버 시각 ${hm(s.now)} · plan_version ${s.plan_version} · ${s.quiet_now ? '조용한 시간' : '활동 시간'}</div>
             ${running || '<div>진행 중 개입 없음</div>'}
             <div style="margin-top:6px">${devices}</div>
-            <details style="margin-top:6px"><summary>예약 작업</summary><div>${jobs}</div></details>`;
+            <details style="margin-top:6px"><summary>예약 작업</summary><div>${jobs}</div></details>
+            <details style="margin-top:6px"><summary>DB 백업·v3.1 데이터 이전</summary><div>
+                백업(매일 04:00, 7일 보관): ${(s.backups || []).map(esc).join(', ') || '없음'}<br>
+                이전 결과: <code>${esc(JSON.stringify(s.data_migration || {}))}</code></div></details>`;
         $('pushMode').textContent = s.push_mode === 'fake'
             ? '(FCM 미설정: 실제로 보내지 않고 기록만 함)' : '(Firebase 발송)';
         $('pushes').innerHTML = s.recent_pushes.length ? '<table>' + s.recent_pushes.map(p => {
@@ -194,18 +206,49 @@
         }).join('') + '</table>' : '아직 없음 (서버 재시작 시 비워짐)';
     }
 
-    async function loadTasks() {
-        const data = await api('GET', '/v1/admin/tasks');
-        if (!data.tasks.length) { $('tasks').textContent = '없음'; return; }
-        $('tasks').innerHTML = '<table><tr><th>시각</th><th>할 일</th><th>상태</th><th></th></tr>' + data.tasks.map(t => {
-            const b = t.blocks.filter(x => x.status !== 'cancelled').at(-1) || t.blocks.at(-1) || {};
-            return `<tr><td>${hm(b.start)}–${(b.end || '').substring(11, 16)}</td>
-                <td><b>${esc(t.title)}</b><br><span class="muted">${esc(t.first_action)}</span></td>
-                <td><span class="badge">${esc(t.status)}</span> <span class="badge">${esc(b.status)}</span></td>
-                <td class="actions">${t.status === 'active'
-                    ? `<button class="ghost" data-edit="${t.id}" data-start-at="${esc(b.start)}" data-duration="${t.est_minutes}">시각 변경</button>
-                       <button class="ghost" data-delete="${t.id}">삭제</button>` : ''}</td></tr>`;
-        }).join('') + '</table>';
+    const LOAD = { ok: '여유', tight: '빠듯', short: '부족', no_deadline: '마감 없음' };
+
+    function chip(label, color) {
+        return label ? `<span class="badge" style="background:${esc(color || '#868e96')};color:#fff">${esc(label)}</span>` : '';
+    }
+
+    async function loadGoals() {
+        const data = await api('GET', '/v1/goals');
+        $('goalSelect').innerHTML = '<option value="">없음</option>' + data.goals.filter(g => g.status === 'active')
+            .map(g => `<option value="${g.id}">[${esc(g.label)}] ${esc(g.title)}</option>`).join('');
+        if (!data.goals.length) { $('goals').textContent = '채팅에 목표를 말하면 비서가 계획을 세워요.'; return; }
+        $('goals').innerHTML = data.goals.map(g => {
+            const p = g.progress;
+            const progress = p && p.total ? ` · ${esc(p.unit || '')} ${p.done ?? 0}/${p.total}` : '';
+            const active = g.status === 'active';
+            return `<div style="border-left:6px solid ${esc(g.color || '#ccc')};padding:6px 10px;margin:8px 0;background:#fff;border-radius:6px">
+                ${chip(g.label, g.color)} <b>${esc(g.title)}</b> <span class="badge">${esc(g.status)}</span>
+                ${active ? `<span class="badge">${esc(LOAD[g.load_status] || g.load_status || '')}</span>` : ''}
+                ${g.coverage === 'missing' ? '<span class="badge" style="background:#c92a2a;color:#fff">블록 없음</span>' : ''}
+                <div class="muted">마감 ${g.deadline ? hm(g.deadline) : '없음'} · 우선 ${g.priority}${progress}
+                    · 다음 블록 ${g.next_block_start ? hm(g.next_block_start) : '-'} (${g.upcoming_block_count}개)
+                    ${g.waiting_until ? ` · 대기 중 · ${hm(g.waiting_until)} 확인 (${esc(g.waiting_reason || '')})` : ''}</div>
+                <div>${esc(g.strategy_summary || '전략 정리 중')}</div>
+                <div class="actions" style="margin-top:4px">
+                    <button class="ghost" data-goal-blocks="${g.id}">블록 보기</button>
+                    ${active ? `<button class="ghost" data-goal-deadline="${g.id}" data-value="${esc((g.deadline || '').substring(0, 16))}">마감 변경</button>
+                    <button class="ghost" data-goal-priority="${g.id}" data-value="${g.priority}">우선순위</button>
+                    <button class="ghost" data-goal-label="${g.id}" data-label="${esc(g.label)}" data-color="${esc(g.color)}">이름표·색</button>
+                    <button class="ghost" data-goal-complete="${g.id}">완료</button>
+                    <button class="ghost" data-goal-cancel="${g.id}">취소</button>` : ''}
+                </div></div>`;
+        }).join('');
+    }
+
+    async function showGoalBlocks(id) {
+        const r = await api('GET', '/v1/goals/' + id + '/blocks');
+        const RESULT = { done: '완료', partial: '부분', missed: '놓침', started: '진행 중', planned: '예정', nudging: '화면 표시 중' };
+        $('goalBlocks').style.display = 'block';
+        $('goalBlocks').innerHTML = `${chip(r.goal.label, r.goal.color)} <b>${esc(r.goal.title)}</b>
+            <button class="ghost" data-goal-blocks-close="1" style="float:right">닫기</button>
+            <div class="muted">${esc(r.goal.strategy_summary || '전략 정리 중')}</div>
+            ${r.blocks.map(b => `<div>${hm(b.start)}–${b.end.substring(11, 16)} <span class="badge">${b.kind === 'fixed' ? '고정' : '계획'}</span>
+                ${esc(b.title)} · ${esc(RESULT[b.status] || b.status)}</div>`).join('') || '<div class="muted">블록 없음</div>'}`;
     }
 
     async function loadSettings() {
@@ -243,7 +286,7 @@
             return `<div style="text-align:${mine ? 'right' : 'left'};margin:6px 0">
                 <div style="display:inline-block;max-width:85%;text-align:left;padding:7px 10px;border-radius:10px;
                     background:${mine ? '#d6336c' : '#fff'};color:${mine ? '#fff' : 'inherit'};border:1px solid var(--line);white-space:pre-wrap">${esc(m.content)}${extra}</div>
-                <div class="muted" style="font-size:.7rem">${hm(m.created_at)} ${m.kind !== 'reply' ? esc(m.kind) : ''}${m.silent ? ' · 🔕 알림 없음' : ''}${m.importance === 'high' ? ' · ❗high' : ''}</div></div>`;
+                <div class="muted" style="font-size:.7rem">${hm(m.created_at)} ${m.kind !== 'reply' ? esc(m.kind) : ''}${m.intervention_id ? ' · 📱 시작 화면에서' : ''}${m.silent ? ' · 🔕 알림 없음' : ''}${m.importance === 'high' ? ' · ❗high' : ''}</div></div>`;
         }).join('') || '<span class="muted">대화가 없습니다</span>';
         box.scrollTop = box.scrollHeight;
         for (const m of data.messages) {
@@ -279,13 +322,24 @@
 
     async function loadTimeline() {
         const t = await api('GET', '/v1/timeline');
-        const label = { event: '일정', block: '블록', quiet: '방해금지', meal: '식사', free: '빈 시간' };
+        const label = { fixed_block: '고정', planned_block: '계획', quiet: '방해금지', meal: '식사', free: '빈 시간' };
+        const leave = i => {
+            if (!i.lead_minutes) return '';
+            const d = new Date(new Date(i.start).getTime() - i.lead_minutes * 60000);
+            return ` · 출발 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        };
         $('timeline').innerHTML = t.days.map(d => `<div style="margin:6px 0"><b>${esc(d.date)}</b><br>` + d.items
             .filter(i => i.kind !== 'free')
-            .map(i => `${i.start.substring(11, 16)}–${i.end.substring(11, 16)} <span class="badge">${label[i.kind]}</span> `
-                + `${esc(i.title || '')}${i.status ? ' · ' + esc(i.status) : ''}`
-                + (i.work_product_id ? ` <button class="ghost" data-wp="${i.work_product_id}" style="padding:1px 6px;font-size:.75rem">작업물</button>` : ''))
-                .join('<br>') + '</div>').join('')
+            .map(i => `<div style="${i.goal_color ? 'border-left:4px solid ' + esc(i.goal_color) + ';padding-left:6px' : ''}">`
+                + `${i.start.substring(11, 16)}–${i.end.substring(11, 16)} <span class="badge">${label[i.kind] || esc(i.kind)}</span> `
+                + chip(i.goal_label, i.goal_color) + ` ${esc(i.title || '')}${i.status ? ' · ' + esc(i.status) : ''}`
+                + (i.kind === 'fixed_block' ? leave(i) + (i.location ? ' · @' + esc(i.location) : '') : '')
+                + (i.work_product_id ? ` <button class="ghost" data-wp="${i.work_product_id}" style="padding:1px 6px;font-size:.75rem">작업물</button>` : '')
+                + (i.kind === 'fixed_block' && ['planned', 'nudging'].includes(i.status)
+                    ? ` <button class="ghost" data-fixed-edit="${i.id}" data-start-at="${esc(i.start)}" data-duration="${(new Date(i.end) - new Date(i.start)) / 60000}" style="padding:1px 6px;font-size:.75rem">시각 변경</button>`
+                      + ` <button class="ghost" data-fixed-delete="${i.id}" style="padding:1px 6px;font-size:.75rem">삭제</button>` : '')
+                + '</div>')
+                .join('') + '</div>').join('')
             || '없음';
     }
 
@@ -302,7 +356,7 @@
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadTasks(), loadAgent(), loadChat(), loadTimeline(), loadProactive()]);
+            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
@@ -326,6 +380,7 @@
     $('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('send').click(); });
     $('reloadChat').onclick = () => loadChat().catch(e => $('chatError').textContent = e.message);
     $('reloadProactive').onclick = () => loadProactive().catch(e => $('proactive').textContent = e.message);
+    $('reloadGoals').onclick = () => loadGoals().catch(e => $('goalError').textContent = e.message);
 
     $('saveToken').onclick = async () => {
         // 웹 콘솔에서 복사할 때 섞이는 공백·줄바꿈을 모두 지운다
@@ -341,16 +396,21 @@
         $('start').value = toLocalInput(new Date(Date.now() + 2 * 60000 + 60000 - Date.now() % 60000));
         if (!$('title').value) $('title').value = '테스트 블록';
         if (!$('firstAction').value) $('firstAction').value = '휴대폰 화면 확인하기';
+        $('lead').value = 0;
     };
 
     $('add').onclick = async () => {
         $('addError').textContent = '';
         try {
-            await api('POST', '/v1/admin/tasks', {
-                title: $('title').value, first_action: $('firstAction').value,
-                start: localInputToIso($('start').value), duration_min: Number($('duration').value)
-            });
-            $('title').value = ''; $('firstAction').value = '';
+            const body = {
+                title: $('title').value, start: localInputToIso($('start').value),
+                duration_min: Number($('duration').value), lead_minutes: Number($('lead').value || 0)
+            };
+            if ($('firstAction').value.trim()) body.first_action = $('firstAction').value.trim();
+            if ($('location').value.trim()) body.location = $('location').value.trim();
+            if ($('goalSelect').value) body.goal_id = Number($('goalSelect').value);
+            await api('POST', '/v1/fixed_blocks', body);
+            $('title').value = ''; $('firstAction').value = ''; $('location').value = ''; $('lead').value = 10;
             await refreshAll();
         } catch (e) { $('addError').textContent = e.message; }
     };
@@ -358,7 +418,64 @@
     document.addEventListener('click', async ev => {
         const el = ev.target;
         $('taskError').textContent = '';
+        $('goalError').textContent = '';
         try {
+            const d = el.dataset;
+            if (d.goalBlocks) { await showGoalBlocks(d.goalBlocks); return; }
+            if (d.goalBlocksClose) { $('goalBlocks').style.display = 'none'; return; }
+            if (d.goalDeadline || d.goalPriority || d.goalLabel || d.goalComplete || d.goalCancel) {
+                try {
+                    if (d.goalDeadline) {
+                        const v = prompt('새 마감 (YYYY-MM-DDTHH:MM, 비우면 마감 없음)', d.value);
+                        if (v === null) return;
+                        await api('PATCH', '/v1/goals/' + d.goalDeadline, { deadline: v.trim() ? localInputToIso(v.trim()) : null });
+                    } else if (d.goalPriority) {
+                        const v = prompt('우선순위 1~5 (1이 가장 높음)', d.value);
+                        if (!v) return;
+                        await api('PATCH', '/v1/goals/' + d.goalPriority, { priority: Number(v) });
+                    } else if (d.goalLabel) {
+                        const label = prompt('이름표 (6자 이내)', d.label);
+                        if (label === null) return;
+                        const color = prompt('색 (#RRGGBB)', d.color);
+                        if (color === null) return;
+                        await api('PATCH', '/v1/goals/' + d.goalLabel, { label, color });
+                    } else if (d.goalComplete) {
+                        if (!confirm('이 목표를 완료로 할까요? 남은 할 일과 계획 블록이 정리됩니다.')) return;
+                        await api('POST', '/v1/goals/' + d.goalComplete + '/complete');
+                    } else {
+                        if (!confirm('이 목표를 취소할까요? 계획 블록은 지우고, 직접 잡은 고정 블록은 남깁니다.')) return;
+                        await api('POST', '/v1/goals/' + d.goalCancel + '/cancel');
+                    }
+                } catch (e) { $('goalError').textContent = e.message; return; }
+                for (const delay of [3000, 8000, 15000]) setTimeout(() => { loadChat().catch(() => {}); loadTimeline().catch(() => {}); loadGoals().catch(() => {}); }, delay);
+                await refreshAll();
+                return;
+            }
+            if (d.talk) {
+                const input = $('talk-' + d.talk);
+                const text = (input?.value || '').trim();
+                if (!text) return;
+                await api('POST', '/v1/messages', {
+                    client_msg_id: crypto.randomUUID(), text, source: 'fullscreen', intervention_id: Number(d.talk)
+                });
+                for (const delay of [3000, 8000, 15000]) setTimeout(() => loadChat().catch(() => {}), delay);
+                await refreshAll();
+                return;
+            }
+            if (d.fixedDelete) {
+                if (!confirm('이 고정 블록을 삭제할까요?')) return;
+                await api('DELETE', '/v1/fixed_blocks/' + d.fixedDelete);
+                await refreshAll();
+                return;
+            }
+            if (d.fixedEdit) {
+                const start = prompt('새 시작 시각 (YYYY-MM-DDTHH:MM)', (d.startAt || '').substring(0, 16));
+                if (!start) return;
+                const duration = prompt('길이(분)', d.duration);
+                await api('PATCH', '/v1/fixed_blocks/' + d.fixedEdit, { start: localInputToIso(start), duration_min: Number(duration) });
+                await refreshAll();
+                return;
+            }
             if (el.dataset.answer) {
                 await sendChat(el.dataset.answer, Number(el.dataset.qid));
                 return;
@@ -377,24 +494,7 @@
                 for (const delay of [3000, 8000, 15000]) setTimeout(() => loadChat().catch(() => {}), delay);
                 return;
             }
-            if (el.dataset.delete) {
-                if (!confirm('이 할 일을 삭제할까요?')) return;
-                await api('DELETE', '/v1/admin/tasks/' + el.dataset.delete);
-            } else if (el.dataset.edit) {
-                const current = (el.dataset.startAt || '').substring(0, 16);
-                const start = prompt('새 시작 시각 (YYYY-MM-DDTHH:MM)', current);
-                if (!start) return;
-                const duration = prompt('길이(분)', el.dataset.duration);
-                await api('PATCH', '/v1/admin/tasks/' + el.dataset.edit,
-                    { start: localInputToIso(start), duration_min: Number(duration) });
-            } else if (el.dataset.snooze) {
-                await api('POST', '/v1/actions', {
-                    idempotency_key: crypto.randomUUID(), type: 'snooze_request',
-                    intervention_id: Number(el.dataset.snooze), block_id: Number(el.dataset.block),
-                    client_at: new Date().toISOString()
-                });
-                for (const delay of [3000, 8000, 15000]) setTimeout(() => loadChat().catch(() => {}), delay);
-            } else if (el.dataset.start) {
+            if (el.dataset.start) {
                 await api('POST', '/v1/actions', {
                     idempotency_key: crypto.randomUUID(), type: 'start',
                     intervention_id: Number(el.dataset.start), block_id: Number(el.dataset.block),

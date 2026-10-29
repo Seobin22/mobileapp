@@ -43,9 +43,11 @@ class AgentUnitTest extends AssistantTestBase {
                 title, title + " 열기", minutes, minutes);
     }
 
+    /** v3.1: 일정 대신 고정 블록(lead = 출발 준비, buffer_after = 끝난 뒤 이동). */
     long event(String title, String start, String end, int before, int after) {
         return db.insert("""
-                        INSERT INTO events(title, start_at, end_at, buffer_before_min, buffer_after_min) VALUES (?, ?, ?, ?, ?)""",
+                        INSERT INTO blocks(kind, title, start_at, end_at, screen_text, lead_minutes, buffer_after_min)
+                        VALUES ('fixed', ?, ?, ?, '', ?, ?)""",
                 title, at(start), at(end), before, after);
     }
 
@@ -83,7 +85,7 @@ class AgentUnitTest extends AssistantTestBase {
         event("치과", "2026-11-02T15:00", "2026-11-02T16:00", 20, 20);
         // 14:00–14:50 는 버퍼(14:40~) 와 겹친다
         assertThat(check(t, "2026-11-02T14:00", "2026-11-02T14:50")).singleElement().asString()
-                .contains("치과(버퍼 포함 11/02 14:40–16:20");
+                .contains("고정 블록").contains("치과").contains("준비·이동 포함 11/02 14:40–16:20");
         assertThat(check(t, "2026-11-02T16:20", "2026-11-02T17:00")).isEmpty();
     }
 
@@ -105,18 +107,20 @@ class AgentUnitTest extends AssistantTestBase {
     void permissionsTable() {
         long chatEvent = event("치과", "2026-11-05T15:00", "2026-11-05T16:00", 0, 0);
         long calEvent = event("회의", "2026-11-05T10:00", "2026-11-05T11:00", 0, 0);
-        db.update("UPDATE events SET source = 'calendar' WHERE id = ?", calEvent);
+        db.update("UPDATE blocks SET source = 'calendar' WHERE id = ?", calEvent);
         String create = "{\"title\":\"x\",\"start\":\"" + iso("2026-11-05T09:00") + "\",\"end\":\"" + iso("2026-11-05T09:30") + "\"}";
         String move = "{\"id\":" + chatEvent + ",\"start\":\"" + iso("2026-11-06T15:00") + "\"}";
 
-        for (String trigger : List.of("user_message", "confirmation_resolved")) {
-            boolean user = trigger.equals("user_message");
+        for (String trigger : List.of("user_message", "intervention_talk", "confirmation_resolved", "pulse")) {
+            boolean user = trigger.equals("user_message") || trigger.equals("intervention_talk");
             Permissions.Kind changeKind = user ? Permissions.Kind.EXECUTE : Permissions.Kind.CONFIRM;
-            assertThat(permissions.decide(trigger, "upsert_event", Json.parse(create)).kind()).isEqualTo(changeKind);
-            assertThat(permissions.decide(trigger, "upsert_event", Json.parse(move)).kind()).isEqualTo(changeKind);
-            assertThat(permissions.decide(trigger, "upsert_event", Json.parse("{\"id\":" + chatEvent + ",\"buffer_before_min\":10}")).kind())
+            assertThat(permissions.decide(trigger, "upsert_fixed_block", Json.parse(create)).kind()).isEqualTo(changeKind);
+            assertThat(permissions.decide(trigger, "upsert_fixed_block", Json.parse(move)).kind()).isEqualTo(changeKind);
+            assertThat(permissions.decide(trigger, "move_block", Json.parse("{\"block_id\":" + chatEvent + ",\"new_start\":\""
+                    + iso("2026-11-06T15:00") + "\"}")).kind()).isEqualTo(changeKind);
+            assertThat(permissions.decide(trigger, "upsert_fixed_block", Json.parse("{\"id\":" + chatEvent + ",\"title\":\"치과 검진\"}")).kind())
                     .isEqualTo(Permissions.Kind.EXECUTE);
-            assertThat(permissions.decide(trigger, "cancel", Json.parse("{\"entity\":\"event\",\"id\":" + chatEvent + "}")).kind())
+            assertThat(permissions.decide(trigger, "cancel", Json.parse("{\"entity\":\"fixed_block\",\"id\":" + chatEvent + "}")).kind())
                     .isEqualTo(changeKind);
             assertThat(permissions.decide(trigger, "upsert_goal", Json.parse("{\"id\":1,\"deadline\":null}")).kind())
                     .isEqualTo(changeKind);
@@ -125,11 +129,11 @@ class AgentUnitTest extends AssistantTestBase {
             assertThat(permissions.decide(trigger, "cancel", Json.parse("{\"entity\":\"goal\",\"id\":1}")).kind())
                     .isEqualTo(changeKind);
             // 캘린더 출처는 어디서든 거절
-            Permissions.Decision cal = permissions.decide(trigger, "upsert_event",
+            Permissions.Decision cal = permissions.decide(trigger, "upsert_fixed_block",
                     Json.parse("{\"id\":" + calEvent + ",\"start\":\"" + iso("2026-11-05T12:00") + "\"}"));
             assertThat(cal.kind()).isEqualTo(Permissions.Kind.REJECT);
             assertThat(cal.message()).isEqualTo("캘린더에서 바꿔주세요");
-            assertThat(permissions.decide(trigger, "cancel", Json.parse("{\"entity\":\"event\",\"id\":" + calEvent + "}")).kind())
+            assertThat(permissions.decide(trigger, "cancel", Json.parse("{\"entity\":\"fixed_block\",\"id\":" + calEvent + "}")).kind())
                     .isEqualTo(Permissions.Kind.REJECT);
             // 그 외 모든 도구
             for (String other : List.of("upsert_task", "set_schedule", "move_block", "send_message", "upsert_note",
@@ -218,14 +222,14 @@ class AgentUnitTest extends AssistantTestBase {
                         INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes, sensitive) VALUES (?, ?, ?, ?, TRUE)""",
                 "정신과 상담 준비", "메모 열기", 30, 30);
         long ev = event("산부인과", "2026-11-02T15:00", "2026-11-02T16:00", 10, 10);
-        db.update("UPDATE events SET sensitive = TRUE WHERE id = ?", ev);
+        db.update("UPDATE blocks SET sensitive = TRUE WHERE id = ?", ev);
         long t = task("보고서 초안", 60);
         block(t, "2026-11-02T10:00", "2026-11-02T11:00");
 
         String text = tx.run(() -> context.build("user_message", Json.parse("{\"message_id\":0}")));
         assertThat(text).doesNotContain("정신과").doesNotContain("산부인과");
-        assertThat(text).contains("할일#" + sensitive + " 비공개 할 일").contains("일정#" + ev + " 비공개 일정");
-        // 09:00 기준, 10–11 블록·12–13 식사·14:50–16:10 일정(버퍼)·18:30–19:30 식사
+        assertThat(text).contains("할일#" + sensitive + " 비공개 할 일").contains("[고정] 비공개 일정 블록#" + ev);
+        // 09:00 기준, 10–11 블록·12–13 식사·14:50–16:10 고정 블록(준비·이동 포함)·18:30–19:30 식사
         assertThat(text).contains("- 빈 시간: 09:00–10:00, 11:00–12:00, 13:00–14:50, 16:10–18:30, 19:30–23:30");
         assertThat(text).contains("# 목표 없는 할 일").contains("할일#" + t + " 보고서 초안");
     }

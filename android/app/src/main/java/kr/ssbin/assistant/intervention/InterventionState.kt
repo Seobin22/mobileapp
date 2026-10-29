@@ -12,6 +12,9 @@ object InterventionState {
 
         /** 로컬 개입 화면이 서버 개입 id 로 바뀌었다. 화면은 새로 띄우지 않는다. */
         data class Replace(val blockId: Long, val newId: String) : Event
+
+        /** 풀스크린 대화의 비서 답(chat.message 의 intervention_id, v3.1 §3.6-3). */
+        data class Reply(val interventionId: String, val messageId: Long, val text: String) : Event
     }
 
     @Volatile

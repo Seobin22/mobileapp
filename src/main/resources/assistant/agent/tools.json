@@ -1,7 +1,7 @@
 [
   {
     "name": "get_timeline",
-    "description": "기간(최대 14일)의 시간표를 날짜별로 본다. items 의 kind 는 event(고정 일정)·block(작업 배치)·quiet(방해 금지)·meal(식사)·free(빈 시간). 시각은 ISO-8601(오프셋 포함).",
+    "description": "기간(최대 14일)의 시간표를 날짜별로 본다. items 의 kind 는 fixed_block(사용자가 시각을 정한 고정 블록)·planned_block(네가 잡은 계획 블록)·quiet(방해 금지)·meal(식사)·free(빈 시간). 블록마다 goal_id·goal_label·goal_color. 고정 블록은 lead_minutes(출발·준비)·buffer_after_min(끝난 뒤 이동) 구간도 다른 블록 금지. 시각은 ISO-8601(오프셋 포함).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -61,8 +61,16 @@
     }
   },
   {
+    "name": "get_goal_coverage",
+    "description": "활성 목표마다 다음 블록 시각과 상태(ok·missing(앞으로 며칠 안에 블록 없음)·waiting(기다리는 중))를 본다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "upsert_goal",
-    "description": "목표를 만들거나 고친다. id 가 없으면 생성(title 필수). 마감·상태 변경은 사용자가 직접 말한 경우가 아니면 확인 카드가 된다.",
+    "description": "목표를 만들거나 고친다. id 가 없으면 생성(title 필수). 만들 때 label(6자 이내 이름표)·strategy·strategy_summary(목표 탭용 1~2줄)를 함께 정한다. color 는 코드가 정한다. 마감·상태 변경은 사용자가 직접 말한 경우가 아니면 확인 카드가 된다. 외부 결과를 기다리는 중이면 waiting_until(다음 확인 시각)·waiting_reason 을 적는다(그 시각에 goal_waiting_check 로 깨어난다).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -95,6 +103,51 @@
         },
         "sensitive": {
           "type": "boolean"
+        },
+        "label": {
+          "type": "string",
+          "description": "짧은 이름표(6자 이내). 예: 컴활, 쇼핑몰"
+        },
+        "strategy_summary": {
+          "type": "string",
+          "description": "목표 탭에 보일 전략 요약 1~2줄"
+        },
+        "progress": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "진행 측정. 예: {\"unit\":\"챕터\",\"total\":12,\"done\":5}",
+          "properties": {
+            "unit": {
+              "type": "string"
+            },
+            "total": {
+              "type": "number"
+            },
+            "done": {
+              "type": "number"
+            }
+          }
+        },
+        "waiting_until": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "기다리는 중이면 다음 확인 시각 ISO-8601, 끝나면 null"
+        },
+        "waiting_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "무엇을 기다리는지"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
         },
         "confirm_text": {
           "type": "string",
@@ -159,8 +212,8 @@
     }
   },
   {
-    "name": "upsert_event",
-    "description": "고정 일정을 만들거나 고친다. 생성 시 title·start·end 필수. 앞뒤 이동·준비 시간은 buffer 로 둔다. 결과의 conflicting_blocks 는 겹친 블록이므로 set_schedule 로 다시 배치한다.",
+    "name": "upsert_fixed_block",
+    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes 는 출발·준비 시간(개입이 start − lead 에 시작, 생략하면 기본값), buffer_after_min 은 끝난 뒤 이동·회복 시간. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 사용자가 방금 말한 경우가 아니면 확인 카드가 된다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -171,16 +224,39 @@
           "type": "string"
         },
         "start": {
-          "type": "string"
+          "type": "string",
+          "description": "ISO-8601"
         },
         "end": {
-          "type": "string"
+          "type": "string",
+          "description": "ISO-8601"
         },
-        "buffer_before_min": {
-          "type": "integer"
+        "lead_minutes": {
+          "type": "integer",
+          "description": "출발·준비 시간(분). 외출 약속은 이동 시간에 맞게, 집에서 하는 일은 0~5"
         },
         "buffer_after_min": {
-          "type": "integer"
+          "type": "integer",
+          "description": "끝난 뒤 이동·회복 시간(분)"
+        },
+        "location": {
+          "type": "string"
+        },
+        "goal_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "screen_text": {
+          "type": "string",
+          "description": "시작 화면 한 문장. 비우면 '곧 {title}이에요...'"
         },
         "sensitive": {
           "type": "boolean"
@@ -217,7 +293,7 @@
   },
   {
     "name": "cancel",
-    "description": "목표·할 일·일정·메모를 취소한다. 연결된 미래 블록도 취소된다.",
+    "description": "목표·할 일·고정 블록·메모를 취소한다. 할 일·목표를 취소하면 연결된 미래 계획 블록도 취소된다. 목표를 취소해도 연결된 고정 블록은 남고 목표 연결만 풀린다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -226,7 +302,7 @@
           "enum": [
             "goal",
             "task",
-            "event",
+            "fixed_block",
             "note"
           ]
         },
@@ -269,7 +345,7 @@
   },
   {
     "name": "set_schedule",
-    "description": "[from, to) 구간에서 시작하는 planned 블록을 모두 이 blocks 로 바꾼다. 검증에 실패하면 violations 를 돌려주고 아무것도 바꾸지 않는다.",
+    "description": "[from, to) 구간에서 시작하는 계획(planned) 블록을 모두 이 blocks 로 바꾼다. 고정 블록은 건드리지 않으며 그대로 유지된다(고정 블록은 upsert_fixed_block). blocks 항목에는 task_id 가 필요하고 목표는 할 일에서 자동으로 채운다. 검증에 실패하면 violations 를 돌려주고 아무것도 바꾸지 않는다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -315,7 +391,7 @@
   },
   {
     "name": "move_block",
-    "description": "planned 또는 nudging 블록 하나를 옮긴다. new_end 를 생략하면 길이를 유지한다.",
+    "description": "planned 또는 nudging 블록 하나를 옮긴다. new_end 를 생략하면 길이를 유지한다. 계획 블록은 자유롭게, 고정 블록은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 진행 중 개입(시작 화면)의 블록을 옮기면 미룸(snoozed)으로 끝나고 새 시각에 다시 뜬다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -327,6 +403,10 @@
         },
         "new_end": {
           "type": "string"
+        },
+        "confirm_text": {
+          "type": "string",
+          "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
         }
       },
       "required": [
@@ -406,17 +486,17 @@
   },
   {
     "name": "start_now",
-    "description": "지금 바로 할 일을 시작한다. 진행 중 개입이 이 할 일 블록이면 그 블록을 시작 처리하고, 아니면 지금부터 블록을 만들어 바로 started 로 둔다(길이 = 남은 시간과 다음 블록 길이(없으면 60분) 중 작은 값). 겹친 planned 블록은 취소되고 displaced 로 알려주니 다시 배치한다. 일정·방해 금지와 겹치면 거절.",
+    "description": "지금 바로 시작한다. block_id 를 주면 그 블록의 진행 중 개입(시작 화면, 고정 블록 포함)을 시작 처리한다. task_id 를 주면: 진행 중 개입이 이 할 일 블록이면 그 블록을 시작 처리하고, 아니면 지금부터 블록을 만들어 바로 started 로 둔다(길이 = 남은 시간과 다음 블록 길이(없으면 60분) 중 작은 값). 겹친 planned 블록은 취소되고 displaced 로 알려주니 다시 배치한다. 고정 블록·방해 금지와 겹치면 거절.",
     "input_schema": {
       "type": "object",
       "properties": {
         "task_id": {
           "type": "integer"
+        },
+        "block_id": {
+          "type": "integer"
         }
-      },
-      "required": [
-        "task_id"
-      ]
+      }
     }
   },
   {

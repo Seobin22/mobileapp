@@ -159,7 +159,7 @@ class InterventionFlowTest extends AssistantTestBase {
         createBlock("보고서 초안", "2026-11-02T10:00", 60);
         assertThatThrownBy(() -> createBlock("다른 일", "2026-11-02T10:30", 60))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("겹칩니다")
+                .hasMessageContaining("겹쳐요")
                 .satisfies(e -> assertThat(((ApiException) e).status().value()).isEqualTo(422));
     }
 

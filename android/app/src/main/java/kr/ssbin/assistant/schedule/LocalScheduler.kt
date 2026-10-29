@@ -30,7 +30,8 @@ object LocalScheduler {
         val now = System.currentTimeMillis()
         val scheduled = mutableSetOf<String>()
         for (item in InterventionController.upcoming(plan)) {
-            val at = OffsetDateTime.parse(item.start).toInstant().toEpochMilli() + plan.graceSeconds * 1000L
+            // v3.1: 개입 시각(alarm_at = start − lead)에 맞춘다
+            val at = OffsetDateTime.parse(item.alarm_at ?: item.start).toInstant().toEpochMilli() + plan.graceSeconds * 1000L
             val end = OffsetDateTime.parse(item.end).toInstant().toEpochMilli()
             if (end <= now) continue
             Alarms.setExact(context, maxOf(at, now + 1000), pending(context, item.block_id))

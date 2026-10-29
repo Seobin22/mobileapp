@@ -36,7 +36,7 @@ public class Changes {
 
     /** 시각 컬럼(스냅샷에는 ISO 문자열로 둔다). */
     private static final Set<String> TIME_COLUMNS = Set.of(
-            "start_at", "end_at", "deadline", "actual_start", "actual_end");
+            "start_at", "end_at", "deadline", "actual_start", "actual_end", "waiting_until");
 
     public record UndoResult(int restored, int skipped, boolean partial) {
     }

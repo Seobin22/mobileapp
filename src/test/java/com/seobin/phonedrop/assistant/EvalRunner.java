@@ -31,7 +31,7 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * 평가 세트 실행기(빌드문서 v2 §12.3, v3 §9.2). 실제 Claude API 를 부르므로 돈이 든다. 평소 테스트에서는 건너뛴다.
  *   ANTHROPIC_API_KEY=... make eval     (= ./mvnw test -Deval=true -Dtest=EvalRunner)
- *   폴더 고르기: -Deval.dirs=v3 (기본 v2,v3)
+ *   폴더 고르기: -Deval.dirs=v3_1 (기본 v2,v3,v3_1)
  * evals/{dir}/*.yaml 마다 메모리 DB 를 비우고 setup 을 넣은 뒤 trigger(기본: input 을 사용자 메시지로)를 실행하고,
  * inputs 가 있으면 이어서 사용자 메시지로 보낸다. 결과(목표·할 일·블록·일정·메모·wakeup·작업물·대화)를
  * 다른 Claude 호출로 criteria 대로 채점해 evals/report.md 를 만든다. 점수 기준은 없다. 사용자가 읽고 판단한다.
@@ -41,6 +41,10 @@ import tools.jackson.databind.node.ObjectNode;
  *            snooze_request 는 block(setup.blocks 순번)의 진행 중 개입에 [미루기 요청] 액션을 보낸다.
  *            그 외는 ref(task·block 은 setup 순번 → 실제 id)로 turn 을 바로 만든다.
  *   setup.blocks[].status, setup.blocks[].intervention(true 면 running 개입), setup.sql(그대로 실행할 SQL)
+ * v3.1 yaml 확장:
+ *   trigger: {type: intervention_talk, block: 순번, text: "왜 지금 해야 돼?"} 풀스크린 대화(그 블록의 개입에 말함)
+ *   setup.fixed_blocks: [{title, start, end, lead?, buffer_after?, goal?}] 고정 블록(일정 대신)
+ *   setup.goals[].label, setup.blocks[] 는 계획 블록(할 일의 목표·제목을 따름)
  */
 @EnabledIfSystemProperty(named = "eval", matches = "true")
 @SpringBootTest(properties = "assistant.worker.enabled=false")
@@ -83,7 +87,7 @@ class EvalRunner {
             throw new IllegalStateException("ANTHROPIC_API_KEY 환경변수가 필요합니다");
         }
         AnthropicLlm judge = new AnthropicLlm(key, llm.model());
-        String dirs = System.getProperty("eval.dirs", "v2,v3");
+        String dirs = System.getProperty("eval.dirs", "v2,v3,v3_1");
         List<Path> cases = new ArrayList<>();
         for (String dir : dirs.split(",")) {
             try (Stream<Path> files = Files.list(Path.of("evals", dir.trim()))) {
@@ -197,6 +201,16 @@ class EvalRunner {
 
     private void fire(Map<String, Object> trigger, Ids ids) {
         String type = (String) trigger.get("type");
+        if ("intervention_talk".equals(type)) {
+            int block = ((Number) trigger.getOrDefault("block", 0)).intValue();
+            ObjectNode req = Json.object();
+            req.put("client_msg_id", java.util.UUID.randomUUID().toString());
+            req.put("text", String.valueOf(trigger.get("text")));
+            req.put("source", "fullscreen");
+            req.put("intervention_id", ids.interventions().get(block));
+            tx.run(() -> chat.receive(req));
+            return;
+        }
         if ("snooze_request".equals(type)) {
             int block = ((Number) trigger.getOrDefault("block", 0)).intValue();
             ObjectNode req = Json.object();
@@ -233,7 +247,8 @@ class EvalRunner {
         tx.exec(() -> {
             for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
                     "intervention_logs", "interventions", "jobs", "blocks", "work_products", "wakeups", "daily_flags",
-                    "tasks", "goals", "events", "notes", "device_events", "devices", "processed_actions", "settings"}) {
+                    "tasks", "goals", "events", "notes", "data_migrations", "device_events", "devices",
+                    "processed_actions", "settings"}) {
                 db.update("DELETE FROM " + table);
             }
             db.update("UPDATE memory SET content = '' WHERE id = 1");
@@ -251,8 +266,13 @@ class EvalRunner {
         tx.exec(() -> {
             List<Long> goalIds = ids.goals();
             for (Map<String, Object> g : (List<Map<String, Object>>) setup.getOrDefault("goals", List.of())) {
-                goalIds.add(db.insert("INSERT INTO goals(title, deadline, reason, strategy) VALUES (?, ?, ?, ?)",
-                        g.get("title"), time(g.get("deadline")), g.getOrDefault("reason", ""), g.getOrDefault("strategy", "")));
+                goalIds.add(db.insert("""
+                                INSERT INTO goals(title, deadline, reason, strategy, label, color, strategy_summary)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        g.get("title"), time(g.get("deadline")), g.getOrDefault("reason", ""), g.getOrDefault("strategy", ""),
+                        g.getOrDefault("label", GoalCoverage.defaultLabel((String) g.get("title"))),
+                        GoalCoverage.PALETTE.get(goalIds.size() % GoalCoverage.PALETTE.size()),
+                        g.getOrDefault("strategy_summary", "")));
             }
             List<Long> taskIds = ids.tasks();
             for (Map<String, Object> t : (List<Map<String, Object>>) setup.getOrDefault("tasks", List.of())) {
@@ -264,19 +284,28 @@ class EvalRunner {
                         t.get("title"), t.get("first_action"), est, est, time(t.get("deadline")),
                         goal == null ? null : goalIds.get(((Number) goal).intValue())));
             }
-            for (Map<String, Object> e : (List<Map<String, Object>>) setup.getOrDefault("events", List.of())) {
-                db.insert("INSERT INTO events(title, start_at, end_at) VALUES (?, ?, ?)",
-                        e.get("title"), time(e.get("start")), time(e.get("end")));
+            // v3.1: 일정(events) 대신 고정 블록. 예전 yaml 의 events 도 고정 블록으로 넣는다.
+            List<Map<String, Object>> fixed = new ArrayList<>((List<Map<String, Object>>) setup.getOrDefault("fixed_blocks", List.of()));
+            fixed.addAll((List<Map<String, Object>>) setup.getOrDefault("events", List.of()));
+            for (Map<String, Object> f : fixed) {
+                Object goal = f.get("goal");
+                db.insert("""
+                                INSERT INTO blocks(kind, title, goal_id, start_at, end_at, screen_text, lead_minutes, buffer_after_min)
+                                VALUES ('fixed', ?, ?, ?, ?, '', ?, ?)""",
+                        f.get("title"), goal == null ? null : goalIds.get(((Number) goal).intValue()),
+                        time(f.get("start")), time(f.get("end")),
+                        ((Number) f.getOrDefault("lead", 0)).intValue(), ((Number) f.getOrDefault("buffer_after", 0)).intValue());
             }
             List<Map<String, Object>> blocks = (List<Map<String, Object>>) setup.getOrDefault("blocks", List.of());
             for (int i = 0; i < blocks.size(); i++) {
                 Map<String, Object> b = blocks.get(i);
                 String status = (String) b.getOrDefault("status", "planned");
+                long taskId = taskIds.get(((Number) b.get("task")).intValue());
                 long blockId = db.insert("""
-                                INSERT INTO blocks(task_id, start_at, end_at, status, screen_text, actual_start)
-                                VALUES (?, ?, ?, ?, '지금 할 건 하나예요.', ?)""",
-                        taskIds.get(((Number) b.get("task")).intValue()), time(b.get("start")), time(b.get("end")),
-                        status, "started".equals(status) ? time(b.get("start")) : null);
+                                INSERT INTO blocks(kind, task_id, title, goal_id, start_at, end_at, status, screen_text, actual_start)
+                                SELECT 'planned', id, title, goal_id, ?, ?, ?, '지금 할 건 하나예요.', ? FROM tasks WHERE id = ?""",
+                        time(b.get("start")), time(b.get("end")),
+                        status, "started".equals(status) ? time(b.get("start")) : null, taskId);
                 ids.blocks().add(blockId);
                 if (Boolean.TRUE.equals(b.get("intervention"))) {
                     db.update("UPDATE blocks SET status = 'nudging' WHERE id = ?", blockId);
@@ -303,9 +332,15 @@ class EvalRunner {
     private String stateSummary() {
         StringBuilder sb = new StringBuilder();
         sb.append("[목표]\n");
-        db.jdbc().sql("SELECT id, title, deadline, status, reason, strategy FROM goals ORDER BY id").query((rs, n) -> {
-            sb.append("목표#").append(rs.getLong(1)).append(' ').append(rs.getString(2)).append(" 마감=")
-                    .append(rs.getObject(3)).append(" 상태=").append(rs.getString(4)).append(" 이유=").append(rs.getString(5))
+        db.jdbc().sql("""
+                        SELECT id, title, deadline, status, reason, strategy, label, strategy_summary, progress,
+                        waiting_until, waiting_reason FROM goals ORDER BY id""").query((rs, n) -> {
+            sb.append("목표#").append(rs.getLong(1)).append(" [").append(rs.getString(7)).append("] ").append(rs.getString(2))
+                    .append(" 마감=").append(rs.getObject(3)).append(" 상태=").append(rs.getString(4))
+                    .append(" 이유=").append(rs.getString(5))
+                    .append(rs.getObject(10) == null ? "" : " 대기=" + rs.getObject(10) + "(" + rs.getString(11) + ")")
+                    .append(rs.getString(9) == null ? "" : " 진행=" + rs.getString(9))
+                    .append("\n  전략 요약: ").append(rs.getString(8))
                     .append("\n  전략: ").append(rs.getString(6)).append('\n');
             return null;
         }).list();
@@ -319,20 +354,19 @@ class EvalRunner {
                     return null;
                 }).list();
         sb.append("[블록]\n");
-        db.jdbc().sql("SELECT id, task_id, start_at, end_at, status, screen_text FROM blocks ORDER BY start_at").query((rs, n) -> {
-            sb.append("블록#").append(rs.getLong(1)).append(" 할일#").append(rs.getLong(2)).append(' ')
-                    .append(rs.getObject(3)).append(" ~ ").append(rs.getObject(4)).append(' ').append(rs.getString(5))
-                    .append(" \"").append(rs.getString(6)).append("\"\n");
+        db.jdbc().sql("""
+                        SELECT id, kind, title, task_id, goal_id, start_at, end_at, status, screen_text, lead_minutes,
+                        buffer_after_min, location FROM blocks ORDER BY start_at""").query((rs, n) -> {
+            sb.append("블록#").append(rs.getLong(1)).append(" [").append("fixed".equals(rs.getString(2)) ? "고정" : "계획")
+                    .append("] ").append(rs.getString(3))
+                    .append(rs.getObject(4) == null ? "" : " 할일#" + rs.getLong(4))
+                    .append(rs.getObject(5) == null ? "" : " 목표#" + rs.getLong(5)).append(' ')
+                    .append(rs.getObject(6)).append(" ~ ").append(rs.getObject(7)).append(' ').append(rs.getString(8))
+                    .append(" 출발준비=").append(rs.getInt(10)).append("분 끝난뒤=").append(rs.getInt(11)).append('분')
+                    .append(rs.getString(12) == null ? "" : " @" + rs.getString(12))
+                    .append(" \"").append(rs.getString(9)).append("\"\n");
             return null;
         }).list();
-        sb.append("[일정]\n");
-        db.jdbc().sql("SELECT id, title, start_at, end_at, buffer_before_min, buffer_after_min, status FROM events ORDER BY id")
-                .query((rs, n) -> {
-                    sb.append("일정#").append(rs.getLong(1)).append(' ').append(rs.getString(2)).append(' ').append(rs.getObject(3))
-                            .append(" ~ ").append(rs.getObject(4)).append(" 버퍼 앞").append(rs.getInt(5)).append(" 뒤")
-                            .append(rs.getInt(6)).append(' ').append(rs.getString(7)).append('\n');
-                    return null;
-                }).list();
         sb.append("[메모]\n");
         db.jdbc().sql("SELECT id, content, status FROM notes ORDER BY id").query((rs, n) -> {
             sb.append("메모#").append(rs.getLong(1)).append(' ').append(rs.getString(2)).append(' ').append(rs.getString(3)).append('\n');

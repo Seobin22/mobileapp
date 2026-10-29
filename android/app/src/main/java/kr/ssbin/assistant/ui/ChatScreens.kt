@@ -56,6 +56,11 @@ import kr.ssbin.assistant.data.ConfirmRequest
 import kr.ssbin.assistant.data.MessageDto
 import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.TimelineDay
+import kr.ssbin.assistant.data.TimelineItem
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import kr.ssbin.assistant.work.Sync
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -164,7 +169,7 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
         if (negotiationUntil > now) {
             val left = ((negotiationUntil - now + 59_999) / 60_000).coerceAtLeast(1)
             Text(
-                "협상 중 · 답이 없으면 ${left}분 뒤 다시 알려요",
+                "시작 화면에서 대화 중 · 답이 없으면 ${left}분 뒤 다시 알려요",
                 color = Color.White,
                 modifier = Modifier.fillMaxWidth().background(PINK).padding(10.dp),
             )
@@ -259,7 +264,8 @@ private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: 
                     )
                 }
             }
-            Text(time(m.created_at) + if (m.silent) " · 🔕" else "", style = MaterialTheme.typography.labelSmall,
+            Text(time(m.created_at) + (if (m.intervention_id != null) " · 📱 시작 화면에서" else "") +
+                if (m.silent) " · 🔕" else "", style = MaterialTheme.typography.labelSmall,
                 color = if (mine) Color(0xFFFFE0EA) else Color.Gray)
         }
     }
@@ -267,15 +273,21 @@ private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: 
 
 // ------------------------------------------------------------------ 시간표 탭
 
+/**
+ * 시간표(빌드문서 v3.1 §4.1). 모든 칸은 블록이고 모두 알람이 간다.
+ * 왼쪽 색 띠·이름표 = 목표, '고정' = 사용자가 시각을 정한 블록(출발 시각 표시).
+ * 길게 누르면: 고정 블록은 수정·삭제(바로 반영), 계획 블록은 비서에게 바꿔 달라고 말한다.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, onEditTask: (Long) -> Unit) {
+fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, onEditFixed: (TimelineItem) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var days by remember { mutableStateOf<List<TimelineDay>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
-    var menuTask by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    var menuFixed by remember { mutableStateOf<TimelineItem?>(null) }
+    var menuPlanned by remember { mutableStateOf<TimelineItem?>(null) }
 
     LaunchedEffect(Unit) { Chat.refresh.collect { reload++ } }
     LaunchedEffect(tick, reload) {
@@ -286,7 +298,7 @@ fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, 
     Column(modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = { reload++ }) { Text("새로고침") }
-            Button(onClick = onAdd) { Text("+ 직접 추가") }
+            Button(onClick = onAdd) { Text("+ 고정 블록") }
         }
         error?.let { Text(it, color = ERROR, modifier = Modifier.padding(12.dp)) }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
@@ -295,26 +307,46 @@ fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, 
                 val items = day.items.filter { it.kind != "free" }
                 if (items.isEmpty()) Text("일정 없음", style = MaterialTheme.typography.bodySmall)
                 items.forEach { item ->
-                    val label = when (item.kind) {
-                        "event" -> "일정"
-                        "block" -> "할 일"
-                        "quiet" -> "방해 금지"
-                        "meal" -> "식사"
-                        else -> item.kind
-                    }
+                    val isBlock = item.kind == "fixed_block" || item.kind == "planned_block"
+                    val editable = item.status == "planned" || item.status == "nudging"
                     Card(
                         Modifier.fillMaxWidth().padding(vertical = 3.dp).combinedClickable(
                             onClick = {},
                             onLongClick = {
-                                if (item.kind == "block" && item.task_id != null) menuTask = item.task_id to (item.title ?: "")
+                                if (editable && item.kind == "fixed_block") menuFixed = item
+                                if (editable && item.kind == "planned_block") menuPlanned = item
                             },
                         )
                     ) {
-                        Row(Modifier.padding(10.dp)) {
-                            Text("${time(item.start)}–${time(item.end)}", modifier = Modifier.widthIn(min = 96.dp))
-                            Column {
-                                Text("$label ${item.title.orEmpty()}", fontWeight = if (item.kind == "block") FontWeight.Bold else null)
-                                item.status?.let { Text(statusLabel(it), style = MaterialTheme.typography.bodySmall) }
+                        Row(Modifier.height(IntrinsicSize.Min)) {
+                            Box(Modifier.width(5.dp).fillMaxHeight()
+                                .background(if (isBlock && !item.goal_color.isNullOrBlank()) goalColor(item.goal_color) else Color.Transparent))
+                            Row(Modifier.padding(10.dp)) {
+                                Text("${time(item.start)}–${time(item.end)}", modifier = Modifier.widthIn(min = 96.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (item.kind == "fixed_block") {
+                                            Text("고정 ", color = PINK, fontWeight = FontWeight.Bold)
+                                        }
+                                        GoalChip(item.goal_label, item.goal_color)
+                                        if (!item.goal_label.isNullOrBlank()) Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            when (item.kind) {
+                                                "quiet" -> "방해 금지"
+                                                "meal" -> "식사"
+                                                else -> item.title.orEmpty()
+                                            },
+                                            fontWeight = if (isBlock) FontWeight.Bold else null,
+                                        )
+                                    }
+                                    if (item.kind == "fixed_block" && item.lead_minutes > 0) {
+                                        Text("출발 ${leaveTime(item)}" + (item.location?.let { " · $it" } ?: ""),
+                                            style = MaterialTheme.typography.bodySmall)
+                                    } else if (item.kind == "fixed_block" && item.location != null) {
+                                        Text(item.location, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    if (isBlock) item.status?.let { Text(statusLabel(it), style = MaterialTheme.typography.bodySmall) }
+                                }
                             }
                         }
                     }
@@ -323,17 +355,18 @@ fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, 
         }
     }
 
-    menuTask?.let { (taskId, title) ->
+    menuFixed?.let { item ->
         AlertDialog(
-            onDismissRequest = { menuTask = null },
-            title = { Text(title) },
-            text = { Text("이 할 일을 수정하거나 삭제할 수 있어요.") },
-            confirmButton = { TextButton(onClick = { menuTask = null; onEditTask(taskId) }) { Text("수정") } },
+            onDismissRequest = { menuFixed = null },
+            title = { Text(item.title.orEmpty()) },
+            text = { Text("고정 블록은 바로 수정·삭제돼요. 겹친 계획 블록은 비서가 다시 배치해요.") },
+            confirmButton = { TextButton(onClick = { menuFixed = null; onEditFixed(item) }) { Text("수정") } },
             dismissButton = {
                 TextButton(onClick = {
-                    menuTask = null
+                    menuFixed = null
+                    val id = item.id ?: return@TextButton
                     scope.launch {
-                        val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).deleteTask(taskId) } }
+                        val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).deleteFixedBlock(id) } }
                         r.onFailure { error = ApiClient.errorMessage(it) }
                         reload++
                     }
@@ -341,7 +374,16 @@ fun TimelineScreen(tick: Int, modifier: Modifier = Modifier, onAdd: () -> Unit, 
             },
         )
     }
+    menuPlanned?.let { item ->
+        PlannedBlockDialog(item, onDismiss = { menuPlanned = null }, onSent = { menuPlanned = null; reload++ })
+    }
 }
+
+/** 출발(개입) 시각 = start − lead. */
+private fun leaveTime(item: TimelineItem): String = runCatching {
+    OffsetDateTime.parse(item.start).minusMinutes(item.lead_minutes.toLong())
+        .atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))
+}.getOrDefault("")
 
 private fun time(iso: String): String = runCatching {
     OffsetDateTime.parse(iso).atZoneSameInstant(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))

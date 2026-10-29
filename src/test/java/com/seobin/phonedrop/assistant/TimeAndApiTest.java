@@ -97,7 +97,7 @@ class TimeAndApiTest extends AssistantTestBase {
         mvc.perform(post("/api/assistant/v1/admin/tasks").header("Authorization", "Bearer test-token")
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isUnprocessableContent())
-                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("겹칩니다")));
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("겹쳐요")));
         mvc.perform(get("/api/assistant/v1/admin/tasks").header("Authorization", "Bearer test-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tasks[0].blocks[0].start").value("2026-11-02T10:00:00+09:00"));

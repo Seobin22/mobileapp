@@ -61,8 +61,17 @@ public class PlanService {
             o.put("block_id", b.id());
             o.put("start", time.iso(b.start()));
             o.put("end", time.iso(b.end()));
-            o.put("task_title", store.task(b.taskId()).map(Store.Task::title).orElse(""));
+            // v3.1: 앱 로컬 백업 알람은 alarm_at(= start − lead) 기준
+            o.put("alarm_at", time.iso(b.interventionAt()));
+            o.put("kind", b.kind());
+            o.put("task_title", store.blockTitle(b));
             o.put("screen_text", b.screenText());
+            o.put("lead_minutes", b.leadMinutes());
+            Long goalId = b.goalId() != null ? b.goalId()
+                    : b.taskId() == null ? null : store.task(b.taskId()).map(Store.Task::goalId).orElse(null);
+            Store.Goal goal = goalId == null ? null : store.goal(goalId).orElse(null);
+            o.put("goal_label", goal == null ? "" : goal.label());
+            o.put("goal_color", goal == null ? "" : goal.color());
             if (b.workProductId() != null) {
                 o.put("work_product_id", b.workProductId());
             }
@@ -76,7 +85,9 @@ public class PlanService {
         data.put("local_backup_grace_seconds", String.valueOf(settings.getInt("local_backup.grace_seconds")));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
         data.put("expire_grace_minutes", String.valueOf(settings.getInt("intervention.expire_grace_minutes")));
-        data.put("negotiation_timeout_minutes", String.valueOf(settings.getInt("negotiation.timeout_minutes")));
+        data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
+        // 3.0.x 앱 호환(협상 시간 = 대화 시간)
+        data.put("negotiation_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
         return data;
     }
 }

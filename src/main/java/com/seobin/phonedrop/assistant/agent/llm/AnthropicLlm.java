@@ -122,6 +122,11 @@ public class AnthropicLlm implements LlmClient {
                 }
                 builder.addUserMessageOfBlockParams(blocks);
             }
+
+            @Override
+            public void addUserText(String text) {
+                builder.addUserMessage(text);
+            }
         };
     }
 

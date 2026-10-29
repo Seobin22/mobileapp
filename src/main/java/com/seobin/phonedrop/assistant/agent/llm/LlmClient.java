@@ -23,6 +23,9 @@ public interface LlmClient {
 
         /** 이번 응답의 tool_use 에 대한 결과를 한 user 메시지로 붙인다. */
         void addToolResults(List<ToolResult> results);
+
+        /** 도구 호출 없이 끝난 응답 뒤에 코드가 user 메시지를 붙인다(목표 블록 검사 되돌려 보내기, v3.1 §3.4-1). */
+        void addUserText(String text);
     }
 
     record ToolCall(String id, String name, JsonNode input) {

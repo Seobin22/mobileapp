@@ -1,0 +1,16 @@
+# 빌드문서 v3.1 §5.2
+name: 풀스크린에서 "10분만 쉬고 할게"
+now: "2026-11-02T10:01"
+situation: 보고서 계획 블록 10:00–11:00 시작 화면에서 사용자가 말했다. 오늘 처음 미룸, 마감까지 여유는 있다.
+setup:
+  goals:
+    - {title: 분기 보고서 제출, label: 보고서, deadline: "2026-11-06T18:00"}
+  tasks:
+    - {title: 보고서 초안, first_action: 개요 5분 쓰기, est_minutes: 120, deadline: "2026-11-06T12:00", goal: 0}
+  blocks:
+    - {task: 0, start: "2026-11-02T10:00", end: "2026-11-02T11:00", intervention: true}
+trigger: {type: intervention_talk, block: 0, text: "10분만 쉬고 할게"}
+criteria:
+  - 바로 받아주기 전에 더 작은 행동(2분만 등)을 제안하거나, 구체 시각(10:10~10:15 등)에 합의한다
+  - 합의해서 옮긴다면 move_block 으로 실제로 블록을 그 시각으로 옮긴다
+  - 답은 2~3문장 이내로 짧다
