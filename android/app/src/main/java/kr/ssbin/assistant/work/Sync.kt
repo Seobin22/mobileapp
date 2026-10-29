@@ -40,7 +40,8 @@ object Sync {
         if (!prefs.configured) return false
         return try {
             val api = ApiClient.get(context)
-            if (prefs.deviceId < 0) register(context)
+            // 임시 토큰으로 등록된 기기가 Firebase 가 켜진 앱으로 바뀌면 진짜 토큰으로 다시 등록한다.
+            if (prefs.deviceId < 0 || (prefs.fallbackToken != null && firebaseToken() != null)) register(context)
             try {
                 val unlock = prefs.pendingFirstUnlock
                 val events = if (unlock == null) emptyList() else listOf(
@@ -67,15 +68,17 @@ object Sync {
 
     suspend fun register(context: Context, fcmToken: String? = null) {
         val prefs = Prefs.get(context)
-        val token = fcmToken ?: fcmToken(context)
+        val token = fcmToken ?: firebaseToken()
+            ?: prefs.fallbackToken ?: ("nofcm-" + UUID.randomUUID()).also { prefs.fallbackToken = it }
         val response = ApiClient.get(context)
             .register(RegisterRequest(token, BuildConfig.VERSION_NAME, Capabilities.all(context)))
         prefs.deviceId = response.device_id
+        if (!token.startsWith("nofcm-")) prefs.fallbackToken = null
     }
 
-    /** Firebase 가 설정되지 않았으면(google-services.json 없음) 기기별 임시 토큰을 쓴다. */
-    private suspend fun fcmToken(context: Context): String {
-        val token = try {
+    /** Firebase 가 설정되지 않았으면(google-services.json 없음) null → 기기별 임시 토큰을 쓴다. */
+    private suspend fun firebaseToken(): String? {
+        return try {
             suspendCancellableCoroutine<String?> { cont ->
                 FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                     cont.resume(if (task.isSuccessful) task.result else null)
@@ -84,9 +87,6 @@ object Sync {
         } catch (e: Exception) {
             null
         }
-        if (token != null) return token
-        val prefs = Prefs.get(context)
-        return prefs.fallbackToken ?: ("nofcm-" + UUID.randomUUID()).also { prefs.fallbackToken = it }
     }
 
     fun schedulePeriodic(context: Context) {

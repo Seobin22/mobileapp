@@ -59,6 +59,10 @@ public class PushService {
                 .query((rs, n) -> Map.entry(rs.getLong(1), rs.getString(2))).list();
         int delivered = 0;
         for (Map.Entry<Long, String> device : devices) {
+            // Firebase 없던 앱의 임시 토큰. FCM 으로는 못 보내므로 건너뛴다(앱이 진짜 토큰으로 다시 등록한다).
+            if (push instanceof FirebasePush && device.getValue().startsWith("nofcm-")) {
+                continue;
+            }
             try {
                 push.send(device.getValue(), data);
                 delivered++;

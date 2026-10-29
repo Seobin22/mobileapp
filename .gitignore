@@ -36,3 +36,8 @@ uploads/
 data/
 # 안드로이드 소스 패키지 kr.ssbin.assistant.data 는 위 data/ 규칙에서 뺀다
 !android/app/src/main/java/kr/ssbin/assistant/data/
+
+# Firebase 키 파일은 절대 커밋하지 않는다(GitHub Secrets·서버에만 둔다)
+google-services.json
+*firebase-adminsdk*.json
+firebase.json

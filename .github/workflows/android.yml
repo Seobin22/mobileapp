@@ -32,6 +32,18 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      # Firebase 설정은 저장소에 두지 않고 Secrets(GOOGLE_SERVICES_JSON)에서 빌드 때만 만든다. 없으면 FCM 없이 빌드된다.
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            echo "google-services.json written"
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret 없음 - FCM 없이 빌드"
+          fi
+
       - name: Build debug APK
         working-directory: android
         run: |
