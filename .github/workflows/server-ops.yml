@@ -28,6 +28,21 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
+      # Firebase 서비스 계정 키를 Secrets 에서 서버로 옮긴다(권한 600). 값은 출력하지 않는다.
+      - name: Install Firebase service account key
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+          SSH_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT secret 없음"
+            exit 1
+          fi
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" 'umask 077 && mkdir -p /root/data/assistant && cat > /root/data/assistant/firebase.json.tmp && chmod 600 /root/data/assistant/firebase.json.tmp && mv /root/data/assistant/firebase.json.tmp /root/data/assistant/firebase.json'
+
       - name: Check server state
         env:
           SSH_HOST: ${{ secrets.SERVER_HOST }}
