@@ -138,8 +138,11 @@ class InterventionActivity : ComponentActivity() {
         val id = intent.getStringExtra(EXTRA_ID) ?: return finish()
         handled = false
         lifecycleScope.launch {
-            val loaded = withContext(Dispatchers.IO) { AppDatabase.dao(applicationContext).intervention(id) }
-            if (loaded == null || loaded.status != "running") {
+            val loaded = withContext(Dispatchers.IO) {
+                AppDatabase.dao(applicationContext).intervention(id)
+                    ?.takeIf { InterventionController.stillActive(applicationContext, it) }
+            }
+            if (loaded == null) {
                 handled = true
                 finish()
                 return@launch

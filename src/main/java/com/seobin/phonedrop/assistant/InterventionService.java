@@ -206,6 +206,7 @@ public class InterventionService {
         data.put("tts_text", b.screenText());
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
         data.put("block_end", time.iso(b.end()));
+        data.put("expire_at", time.iso(expireAt(b)));
         data.put("plan_version", String.valueOf(plan.version()));
         push.pushAll(data);
         store.log(i.id(), b.id(), i.level(), clock.now(), "sent");

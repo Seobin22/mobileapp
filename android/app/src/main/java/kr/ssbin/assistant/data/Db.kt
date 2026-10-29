@@ -26,6 +26,8 @@ data class InterventionEntity(
     val ttsText: String,
     val reshowMinutes: Int,
     val blockEnd: String?,
+    /** 이 시각이 지나면 서버가 expire 한다. FCM 이 없어도 앱이 스스로 재표시를 멈추는 기준. */
+    val expireAt: String?,
     val status: String,
     val fromServer: Boolean,
     val updatedAt: Long,
@@ -46,6 +48,7 @@ data class PlanSnapshot(
     val quietWindows: String,
     val upcoming: String,
     val graceSeconds: Int,
+    val expireGraceMinutes: Int,
     val reshowMinutes: Int,
 )
 
@@ -85,7 +88,7 @@ interface AssistantDao {
 
 @Database(
     entities = [InterventionEntity::class, PendingAction::class, PlanSnapshot::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

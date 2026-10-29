@@ -34,6 +34,7 @@ object InterventionController {
             ttsText = data["tts_text"] ?: data["screen_text"].orEmpty(),
             reshowMinutes = data["reshow_minutes"]?.toIntOrNull() ?: DEFAULT_RESHOW_MINUTES,
             blockEnd = data["block_end"],
+            expireAt = data["expire_at"],
             status = "running",
             fromServer = true,
             updatedAt = System.currentTimeMillis(),
@@ -69,6 +70,7 @@ object InterventionController {
             quietWindows = data["quiet_windows"] ?: "[]",
             upcoming = data["upcoming"] ?: "[]",
             graceSeconds = data["local_backup_grace_seconds"]?.toIntOrNull() ?: 90,
+            expireGraceMinutes = data["expire_grace_minutes"]?.toIntOrNull() ?: 15,
             reshowMinutes = data["reshow_minutes"]?.toIntOrNull() ?: DEFAULT_RESHOW_MINUTES,
         )
         AppDatabase.dao(context).savePlan(snapshot)
@@ -94,12 +96,14 @@ object InterventionController {
             ttsText = item.screen_text,
             reshowMinutes = plan.reshowMinutes,
             blockEnd = item.end,
+            expireAt = OffsetDateTime.parse(item.end).plusMinutes(plan.expireGraceMinutes.toLong()).toString(),
             status = "running",
             fromServer = false,
             updatedAt = System.currentTimeMillis(),
         )
         dao.upsertIntervention(entity)
         Notifier.showFullScreen(context, entity)
+        Reshow.schedule(context, entity.id, entity.reshowMinutes)
         ActionQueue.enqueue(context, "local_fired", entity.id, blockId)
     }
 
@@ -118,6 +122,24 @@ object InterventionController {
         if (current?.status == "running") {
             Reshow.schedule(context, entity.id, entity.reshowMinutes)
         }
+    }
+
+    /**
+     * 화면을 다시 띄워도 되는지. 서버 expire(블록 끝 + 유예)·suspend(조용한 시간) 시각이 지났으면
+     * FCM 의 intervention.end 를 못 받았더라도 여기서 스스로 끝낸다(알림 제거, 상태 ended).
+     */
+    fun stillActive(context: Context, entity: InterventionEntity): Boolean {
+        if (entity.status != "running") return false
+        val now = Instant.now()
+        val expired = entity.expireAt?.let { !now.isBefore(OffsetDateTime.parse(it).toInstant()) } ?: false
+        val quiet = AppDatabase.dao(context).plan()?.let { inQuiet(it, now) } ?: false
+        if (expired || quiet) {
+            AppDatabase.dao(context).endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
+            Notifier.cancel(context)
+            Reshow.cancel(context)
+            return false
+        }
+        return true
     }
 
     fun localId(blockId: Long) = "local:$blockId"

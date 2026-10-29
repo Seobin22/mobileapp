@@ -23,6 +23,7 @@ class InterventionFlowTest extends AssistantTestBase {
         assertThat(level.get("block_id")).isEqualTo(String.valueOf(ids[1]));
         assertThat(level.get("level")).isEqualTo("3");
         assertThat(level.get("screen_text")).isEqualTo("지금 할 건 하나예요. 보고서 초안 파일 열기");
+        assertThat(level.get("expire_at")).isEqualTo("2026-11-02T11:15:00+09:00");
         assertThat(onlyIntervention().status()).isEqualTo("running");
         assertThat(block(ids[1]).status()).isEqualTo("nudging");
     }
@@ -247,6 +248,7 @@ class InterventionFlowTest extends AssistantTestBase {
         Map<String, String> sync = push.ofType("plan.sync").getLast();
         assertThat(sync.get("plan_version")).isEqualTo(String.valueOf(before + 1));
         assertThat(sync.get("upcoming")).contains("\"block_id\":" + ids[1]);
+        assertThat(sync.get("expire_grace_minutes")).isEqualTo("15");
 
         ObjectNode patch = Json.object();
         patch.put("duration_min", 30);

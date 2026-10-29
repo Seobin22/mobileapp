@@ -72,6 +72,7 @@ public class PlanService {
         data.put("upcoming", Json.write(upcoming));
         data.put("local_backup_grace_seconds", String.valueOf(settings.getInt("local_backup.grace_seconds")));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
+        data.put("expire_grace_minutes", String.valueOf(settings.getInt("intervention.expire_grace_minutes")));
         return data;
     }
 }

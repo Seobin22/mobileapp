@@ -33,7 +33,7 @@ object Notifier {
         val pending = PendingIntent.getActivity(
             context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = NotificationCompat.Builder(context, CHANNEL_INTERVENTION)
+        val builder = NotificationCompat.Builder(context, CHANNEL_INTERVENTION)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(entity.taskTitle)
             .setContentText(entity.screenText)
@@ -43,7 +43,12 @@ object Notifier {
             .setAutoCancel(false)
             .setContentIntent(pending)
             .setFullScreenIntent(pending, true)
-            .build()
+        // 만료 시각이 지나면 intervention.end 를 못 받아도 알림이 스스로 사라진다.
+        entity.expireAt?.let {
+            val left = java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() - System.currentTimeMillis()
+            if (left > 0) builder.setTimeoutAfter(left)
+        }
+        val notification = builder.build()
 
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)

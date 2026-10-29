@@ -38,8 +38,12 @@ class ReshowReceiver : BroadcastReceiver() {
         Thread {
             try {
                 val entity = AppDatabase.dao(context).intervention(id)
-                if (entity != null && entity.status == "running" && InterventionState.visibleId == null) {
+                if (entity != null && InterventionState.visibleId == null &&
+                    InterventionController.stillActive(context, entity)
+                ) {
                     Notifier.showFullScreen(context, entity)
+                    // 서버 reshow 푸시가 오면 이 타이머는 취소된다. FCM 이 없을 때는 이 반복이 서버 reshow 를 대신한다.
+                    Reshow.schedule(context, entity.id, entity.reshowMinutes)
                 }
             } finally {
                 pending.finish()
