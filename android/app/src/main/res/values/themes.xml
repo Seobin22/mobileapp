@@ -4,4 +4,8 @@
         <item name="android:statusBarColor">#FFF4F7</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+    <style name="Theme.Assistant.Translucent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
 </resources>

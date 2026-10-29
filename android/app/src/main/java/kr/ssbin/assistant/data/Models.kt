@@ -74,3 +74,54 @@ data class UpcomingItem(
 /** plan.sync 의 quiet_windows 항목. */
 @Serializable
 data class QuietWindow(val from: String, val to: String)
+
+// ------------------------------------------------------------------ v2 채팅·시간표
+
+@Serializable
+data class PostMessageRequest(
+    val client_msg_id: String,
+    val text: String,
+    val source: String,
+    val answered_question_id: Long? = null,
+)
+
+@Serializable
+data class PostMessageResponse(val message_id: Long, val turn_id: Long? = null)
+
+@Serializable
+data class MessagesResponse(val messages: List<MessageDto>)
+
+@Serializable
+data class MessageDto(
+    val id: Long,
+    val role: String,
+    val content: String,
+    val kind: String,
+    val options: List<String>? = null,
+    val question_id: Long? = null,
+    val question_status: String? = null,
+    val confirmation_id: Long? = null,
+    val confirmation_status: String? = null,
+    val read: Boolean = false,
+    val created_at: String,
+)
+
+@Serializable
+data class ConfirmRequest(val accept: Boolean)
+
+@Serializable
+data class TimelineResponse(val days: List<TimelineDay>)
+
+@Serializable
+data class TimelineDay(val date: String, val wake: String, val sleep: String, val items: List<TimelineItem>)
+
+@Serializable
+data class TimelineItem(
+    val kind: String,
+    val start: String,
+    val end: String,
+    val id: Long? = null,
+    val title: String? = null,
+    val status: String? = null,
+    val task_id: Long? = null,
+)

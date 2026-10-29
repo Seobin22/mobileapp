@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">실행 비서</string>
+    <string name="widget_description">비서에게 바로 말하기</string>
 </resources>

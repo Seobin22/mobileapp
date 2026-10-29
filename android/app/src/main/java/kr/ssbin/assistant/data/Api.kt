@@ -15,6 +15,7 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
 
 interface AssistantApi {
@@ -44,6 +45,21 @@ interface AssistantApi {
 
     @GET("v1/settings")
     suspend fun settings(): SettingsResponse
+
+    @POST("v1/messages")
+    suspend fun postMessage(@Body body: PostMessageRequest): PostMessageResponse
+
+    @GET("v1/messages")
+    suspend fun messages(@Query("after_id") afterId: Long = 0): MessagesResponse
+
+    @POST("v1/messages/{id}/read")
+    suspend fun markRead(@Path("id") id: Long): JsonObject
+
+    @POST("v1/confirmations/{id}")
+    suspend fun confirm(@Path("id") id: Long, @Body body: ConfirmRequest): JsonObject
+
+    @GET("v1/timeline")
+    suspend fun timeline(): TimelineResponse
 
     @PUT("v1/settings")
     suspend fun putSetting(@Body body: JsonObject): JsonObject

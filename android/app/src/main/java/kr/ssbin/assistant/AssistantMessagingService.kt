@@ -3,6 +3,7 @@ package kr.ssbin.assistant
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.runBlocking
+import kr.ssbin.assistant.chat.Chat
 import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.intervention.InterventionController
 import kr.ssbin.assistant.work.Sync
@@ -21,6 +22,8 @@ class AssistantMessagingService : FirebaseMessagingService() {
             "intervention.level" -> InterventionController.onLevel(applicationContext, data)
             "intervention.end" -> InterventionController.onEnd(applicationContext, data)
             "plan.sync" -> InterventionController.onPlanSync(applicationContext, data)
+            "chat.message" -> Chat.onChatPush(applicationContext, data)
+            "confirmation" -> Chat.onConfirmationPush(applicationContext, data)
         }
     }
 }

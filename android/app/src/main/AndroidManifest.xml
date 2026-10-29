@@ -9,6 +9,14 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- v2 음성 입력 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".AssistantApp"
@@ -35,6 +43,25 @@
             android:showWhenLocked="true"
             android:taskAffinity="kr.ssbin.assistant.intervention"
             android:turnScreenOn="true" />
+
+        <activity
+            android:name=".chat.QuickInputActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="kr.ssbin.assistant.quick"
+            android:theme="@style/Theme.Assistant.Translucent"
+            android:windowSoftInputMode="adjustResize" />
+
+        <receiver
+            android:name=".chat.QuickInputWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/quick_input_widget" />
+        </receiver>
 
         <service
             android:name=".AssistantMessagingService"
