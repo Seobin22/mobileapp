@@ -67,7 +67,12 @@ class TimeAndApiTest extends AssistantTestBase {
     void apiRequiresToken() throws Exception {
         mvc.perform(get("/api/assistant/v1/sync")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/assistant/v1/sync").header("Authorization", "Bearer wrong"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("받은 길이 5자")));
+        mvc.perform(get("/api/assistant/v1/sync"))
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("토큰이 없습니다")));
+        mvc.perform(get("/api/assistant/v1/sync").header("Authorization", "Bearer sk-ant-xyz"))
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("Anthropic 키")));
         mvc.perform(get("/api/assistant/v1/sync").header("Authorization", "Bearer test-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.type").value("plan.sync"));
