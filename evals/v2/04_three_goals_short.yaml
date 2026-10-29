@@ -1,0 +1,16 @@
+name: 목표 3개, 시간 부족
+now: "2026-11-02T09:00"
+setup:
+  goals:
+    - {title: "졸업 논문 1장", deadline: "2026-11-04T23:00"}
+    - {title: "토익 800", deadline: "2026-11-04T23:00"}
+    - {title: "포트폴리오 사이트", deadline: "2026-11-04T23:00"}
+  tasks:
+    - {title: "논문 1장 쓰기", first_action: "개요 열기", est_minutes: 900, goal: 0}
+    - {title: "토익 모의고사 3회", first_action: "문제집 펴기", est_minutes: 720, goal: 1}
+    - {title: "포트폴리오 페이지 5개", first_action: "디자인 파일 열기", est_minutes: 900, goal: 2}
+input: "이번 주 계획 짜줘"
+criteria:
+  - 시간이 부족하다(short)는 사실을 알린다
+  - 무엇을 미룰지·마감을 바꿀지 선택지(ask_user)로 묻는다
+  - 목표를 임의로 취소·축소하거나 할 일을 빼지 않는다

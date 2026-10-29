@@ -26,6 +26,18 @@ public class SettingsService {
         d.put("intervention.expire_grace_minutes", "15");
         d.put("local_backup.grace_seconds", "90");
         d.put("jobs.late_threshold_seconds", "120");
+        // v2
+        d.put("life.meals", "[{\"start\":\"12:00\",\"end\":\"13:00\"},{\"start\":\"18:30\",\"end\":\"19:30\"}]");
+        d.put("life.focus_windows", "[{\"days\":[1,2,3,4,5],\"start\":\"09:00\",\"end\":\"12:00\"}]");
+        d.put("persona", "\"다정한 코치\"");
+        d.put("agent.max_tool_calls", "15");
+        d.put("agent.context_messages", "20");
+        d.put("agent.daily_turn_hard", "250");
+        d.put("confirmation.expire_minutes", "1440");
+        d.put("load.ok_ratio", "1.5");
+        d.put("load.tight_ratio", "1.0");
+        d.put("privacy.sensitive_mode", "true");
+        d.put("memory.max_chars", "4000");
         DEFAULTS = Map.copyOf(d);
     }
 
@@ -84,21 +96,21 @@ public class SettingsService {
             switch (key) {
                 case "user.timezone" -> ZoneId.of(value.asString());
                 case "life.wake", "life.sleep" -> LocalTime.parse(value.asString());
-                case "dnd.windows" -> {
-                    if (!value.isArray()) {
+                case "dnd.windows", "life.focus_windows" -> validateWindows(value, true);
+                case "life.meals" -> validateWindows(value, false);
+                case "persona" -> {
+                    if (!value.isString() || value.asString().isBlank()) {
                         throw new IllegalArgumentException();
                     }
-                    for (JsonNode w : value) {
-                        LocalTime.parse(w.path("start").asString());
-                        LocalTime.parse(w.path("end").asString());
-                        if (!w.path("days").isArray()) {
-                            throw new IllegalArgumentException();
-                        }
-                        for (JsonNode day : w.path("days")) {
-                            if (day.asInt() < 1 || day.asInt() > 7) {
-                                throw new IllegalArgumentException();
-                            }
-                        }
+                }
+                case "privacy.sensitive_mode" -> {
+                    if (!value.isBoolean()) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "load.ok_ratio", "load.tight_ratio" -> {
+                    if (!value.isNumber() || value.asDouble() <= 0) {
+                        throw new IllegalArgumentException();
                     }
                 }
                 default -> {
@@ -110,5 +122,32 @@ public class SettingsService {
         } catch (RuntimeException e) {
             throw ApiException.unprocessable("설정 값 형식이 맞지 않습니다: " + key);
         }
+    }
+
+    /** [{"days":[1..7]?, "start":"HH:mm", "end":"HH:mm"}] */
+    private static void validateWindows(JsonNode value, boolean daysRequired) {
+        if (!value.isArray()) {
+            throw new IllegalArgumentException();
+        }
+        for (JsonNode w : value) {
+            LocalTime.parse(w.path("start").asString());
+            LocalTime.parse(w.path("end").asString());
+            if (daysRequired && !w.path("days").isArray()) {
+                throw new IllegalArgumentException();
+            }
+            for (JsonNode day : w.path("days")) {
+                if (day.asInt() < 1 || day.asInt() > 7) {
+                    throw new IllegalArgumentException();
+                }
+            }
+        }
+    }
+
+    public double getDouble(String key) {
+        return get(key).asDouble();
+    }
+
+    public boolean getBoolean(String key) {
+        return get(key).asBoolean();
     }
 }

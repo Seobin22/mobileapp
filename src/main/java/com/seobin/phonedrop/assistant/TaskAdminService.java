@@ -11,6 +11,8 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
+import com.seobin.phonedrop.assistant.agent.Validator;
+
 import tools.jackson.databind.JsonNode;
 
 /** v1 수동 등록(POST/GET/PATCH/DELETE /v1/admin/tasks). 할 일 하나에 블록 하나. */
@@ -25,9 +27,11 @@ public class TaskAdminService {
     private final TimeUtil time;
     private final PlanService plan;
     private final InterventionService interventions;
+    private final Validator validator;
 
     public TaskAdminService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, PlanService plan,
-                            InterventionService interventions) {
+                            InterventionService interventions, Validator validator) {
+        this.validator = validator;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -42,10 +46,11 @@ public class TaskAdminService {
         Instant start = TimeUtil.parse(required(req, "start"));
         int duration = req.path("duration_min").asInt(0);
         Instant end = start.plus(Duration.ofMinutes(duration));
-        validate(start, end, duration, null);
+        validate(start, end, null, null);
 
-        long taskId = db.insert("INSERT INTO tasks(title, first_action, est_minutes) VALUES (?, ?, ?)",
-                title, firstAction, duration);
+        long taskId = db.insert(
+                "INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes) VALUES (?, ?, ?, ?)",
+                title, firstAction, duration, duration);
         long blockId = db.insert("INSERT INTO blocks(task_id, start_at, end_at, screen_text) VALUES (?, ?, ?, ?)",
                 taskId, start, end, SCREEN_PREFIX + firstAction);
         interventions.scheduleBlockJobs(store.block(blockId).orElseThrow());
@@ -57,25 +62,14 @@ public class TaskAdminService {
         return result;
     }
 
-    /** 검증 실패는 422 와 사람이 읽을 사유. */
-    private void validate(Instant start, Instant end, int duration, Long excludeBlockId) {
-        if (start.isBefore(clock.now())) {
-            throw ApiException.unprocessable("시작 시각(" + time.shortText(start) + ")이 이미 지났습니다");
-        }
-        if (duration < 5) {
-            throw ApiException.unprocessable("길이는 5분 이상이어야 합니다");
-        }
-        for (Store.Block other : store.activeBlocksOverlapping(start, end)) {
-            if (excludeBlockId == null || other.id() != excludeBlockId) {
-                String title = store.task(other.taskId()).map(Store.Task::title).orElse("");
-                throw ApiException.unprocessable("다른 블록(" + time.shortText(other.start()) + "–"
-                        + time.hm(other.end()) + ", " + title + ")과 겹칩니다");
-            }
-        }
-        Optional<TimeUtil.Window> quiet = time.firstQuietOverlap(start, end);
-        if (quiet.isPresent()) {
-            throw ApiException.unprocessable("수면·방해 금지 시간(" + time.shortText(quiet.get().start()) + "–"
-                    + time.hm(quiet.get().end()) + ")과 겹칩니다");
+    /** v2 검증기(validator)로 검사한다. 실패는 422 와 사람이 읽을 사유(여럿이면 줄바꿈으로 잇는다). */
+    private void validate(Instant start, Instant end, Long taskId, Long excludeBlockId) {
+        List<Store.Block> keep = store.activeBlocks().stream()
+                .filter(b -> excludeBlockId == null || b.id() != excludeBlockId).toList();
+        List<String> violations = validator.validateBlocks(
+                List.of(new Validator.NewBlock(taskId, start, end)), keep, clock.now());
+        if (!violations.isEmpty()) {
+            throw ApiException.unprocessable(String.join("\n", violations));
         }
     }
 
@@ -150,7 +144,7 @@ public class TaskAdminService {
             if (!List.of("planned", "nudging").contains(b.status())) {
                 throw ApiException.unprocessable("시작했거나 끝난 블록은 시각을 바꿀 수 없습니다");
             }
-            validate(start, end, duration, b.id());
+            validate(start, end, taskId, b.id());
             if ("nudging".equals(b.status())) {
                 interventions.cancelRunningForBlock(b.id());
             }

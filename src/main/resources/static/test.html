@@ -30,7 +30,7 @@
 </head>
 <body>
 <main>
-    <h1>실행 비서 관리 <span class="muted">v1 · 강제 화면 확인</span></h1>
+    <h1>실행 비서 관리 <span class="muted">v2 · 채팅 비서 + 계획</span></h1>
 
     <section id="tokenBox">
         <h2>API 토큰</h2>
@@ -48,7 +48,33 @@
     </section>
 
     <section>
-        <h2>할 일 추가</h2>
+        <h2>AI 연결</h2>
+        <div id="agent" class="muted">-</div>
+        <label>Anthropic API 키 (서버 /root/data/assistant/anthropic_api_key 에 저장, 다시 표시하지 않음)</label>
+        <div class="row">
+            <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off">
+            <button id="saveKey">키 저장</button>
+        </div>
+        <div class="error" id="keyError"></div>
+    </section>
+
+    <section>
+        <h2>채팅 <button class="ghost" id="reloadChat" style="float:right">새로고침</button></h2>
+        <div id="chat" style="max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fffafc">-</div>
+        <div class="row" style="margin-top:8px">
+            <input id="chatInput" placeholder="예: 금요일까지 보고서 써야 해">
+            <button id="send">보내기</button>
+        </div>
+        <div class="error" id="chatError"></div>
+    </section>
+
+    <section>
+        <h2>시간표 (오늘부터 7일)</h2>
+        <div id="timeline" class="muted">-</div>
+    </section>
+
+    <section>
+        <h2>할 일 추가 <span class="muted">(수동 등록)</span></h2>
         <div class="row">
             <div><label>제목</label><input id="title" placeholder="보고서 초안"></div>
             <div><label>첫 행동</label><input id="firstAction" placeholder="문서 파일만 열기"></div>
@@ -174,14 +200,88 @@
         $('dnd').value = JSON.stringify(s['dnd.windows']);
     }
 
+    async function loadAgent() {
+        const a = await api('GET', '/v1/admin/agent');
+        const turns = a.recent_turns.map(t => `#${t.id} ${esc(t.trigger)} <span class="badge">${esc(t.status)}</span>`
+            + ` 도구 ${t.tool_calls} · 토큰 ${t.input_tokens ?? '-'}/${t.output_tokens ?? '-'}`
+            + (t.error ? ` <span style="color:#c92a2a">${esc(t.error)}</span>` : '')).join('<br>') || '아직 없음';
+        $('agent').innerHTML = `모델 <b>${esc(a.model || '(없음)')}</b> · API 키 ${a.api_key_configured ? '✅ 설정됨' : '❌ 없음'}`
+            + ` · 오늘 turn ${a.turns_today}<details style="margin-top:6px"><summary>최근 turn</summary>${turns}</details>`;
+    }
+
+    async function loadChat() {
+        const data = await api('GET', '/v1/messages');
+        const box = $('chat');
+        box.innerHTML = data.messages.map(m => {
+            const mine = m.role === 'user';
+            let extra = '';
+            if (m.kind === 'question' && m.options && m.question_status === 'open') {
+                extra = '<div style="margin-top:4px">' + m.options.map(o =>
+                    `<button class="ghost" data-answer="${esc(o)}" data-qid="${m.question_id}" style="margin:2px">${esc(o)}</button>`).join('') + '</div>';
+            }
+            if (m.kind === 'confirmation') {
+                extra = m.confirmation_status === 'pending'
+                    ? `<div style="margin-top:4px"><button data-confirm="${m.confirmation_id}" data-accept="true">예</button>
+                       <button class="ghost" data-confirm="${m.confirmation_id}" data-accept="false">아니오</button></div>`
+                    : `<div class="muted">확인 카드: ${esc(m.confirmation_status)}</div>`;
+            }
+            return `<div style="text-align:${mine ? 'right' : 'left'};margin:6px 0">
+                <div style="display:inline-block;max-width:85%;text-align:left;padding:7px 10px;border-radius:10px;
+                    background:${mine ? '#d6336c' : '#fff'};color:${mine ? '#fff' : 'inherit'};border:1px solid var(--line);white-space:pre-wrap">${esc(m.content)}${extra}</div>
+                <div class="muted" style="font-size:.7rem">${hm(m.created_at)} ${m.kind !== 'reply' ? esc(m.kind) : ''}</div></div>`;
+        }).join('') || '<span class="muted">대화가 없습니다</span>';
+        box.scrollTop = box.scrollHeight;
+        for (const m of data.messages) {
+            if (m.role === 'assistant' && !m.read) api('POST', '/v1/messages/' + m.id + '/read').catch(() => {});
+        }
+    }
+
+    async function loadTimeline() {
+        const t = await api('GET', '/v1/timeline');
+        const label = { event: '일정', block: '블록', quiet: '방해금지', meal: '식사', free: '빈 시간' };
+        $('timeline').innerHTML = t.days.map(d => `<div style="margin:6px 0"><b>${esc(d.date)}</b><br>` + d.items
+            .filter(i => i.kind !== 'free')
+            .map(i => `${i.start.substring(11, 16)}–${i.end.substring(11, 16)} <span class="badge">${label[i.kind]}</span> `
+                + `${esc(i.title || '')}${i.status ? ' · ' + esc(i.status) : ''}`).join('<br>') + '</div>').join('')
+            || '없음';
+    }
+
+    async function sendChat(text, answeredQuestionId) {
+        $('chatError').textContent = '';
+        await api('POST', '/v1/messages', {
+            client_msg_id: crypto.randomUUID(), text, source: 'chat', answered_question_id: answeredQuestionId || null
+        });
+        await loadChat();
+        // 비서 답은 몇 초 뒤에 온다
+        for (const delay of [3000, 6000, 12000, 20000]) setTimeout(() => { loadChat().catch(() => {}); loadTimeline().catch(() => {}); }, delay);
+    }
+
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadTasks()]);
+            await Promise.all([loadStatus(), loadTasks(), loadAgent(), loadChat(), loadTimeline()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
     }
+
+    $('saveKey').onclick = async () => {
+        $('keyError').textContent = '';
+        try {
+            await api('POST', '/v1/admin/anthropic_key', { key: $('apiKey').value.trim() });
+            $('apiKey').value = '';
+            await loadAgent();
+            $('keyError').textContent = '저장했습니다';
+        } catch (e) { $('keyError').textContent = e.message; }
+    };
+    $('send').onclick = async () => {
+        const text = $('chatInput').value.trim();
+        if (!text) return;
+        $('chatInput').value = '';
+        try { await sendChat(text); } catch (e) { $('chatError').textContent = e.message; }
+    };
+    $('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('send').click(); });
+    $('reloadChat').onclick = () => loadChat().catch(e => $('chatError').textContent = e.message);
 
     $('saveToken').onclick = async () => {
         try { localStorage.setItem('assistantToken', $('token').value.trim()); } catch (e) { /* 저장 불가 */ }
@@ -212,6 +312,16 @@
         const el = ev.target;
         $('taskError').textContent = '';
         try {
+            if (el.dataset.answer) {
+                await sendChat(el.dataset.answer, Number(el.dataset.qid));
+                return;
+            }
+            if (el.dataset.confirm) {
+                await api('POST', '/v1/confirmations/' + el.dataset.confirm, { accept: el.dataset.accept === 'true' });
+                await loadChat();
+                for (const delay of [3000, 8000, 15000]) setTimeout(() => loadChat().catch(() => {}), delay);
+                return;
+            }
             if (el.dataset.delete) {
                 if (!confirm('이 할 일을 삭제할까요?')) return;
                 await api('DELETE', '/v1/admin/tasks/' + el.dataset.delete);
@@ -248,7 +358,7 @@
 
     $('token').value = getToken();
     if (getToken()) { refreshAll(); loadSettings().catch(() => {}); }
-    setInterval(() => { if (getToken()) loadStatus().catch(() => {}); }, 15000);
+    setInterval(() => { if (getToken()) { loadStatus().catch(() => {}); loadChat().catch(() => {}); } }, 15000);
 </script>
 </body>
 </html>

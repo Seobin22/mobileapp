@@ -148,6 +148,41 @@ public class TimeUtil {
         return result;
     }
 
+    /**
+     * 설정의 매일 반복 구간(예 life.meals, life.focus_windows)을 [from, to) 와 겹치는 것만 펼친다.
+     * days 가 없으면 매일. 잘라내지 않는다.
+     */
+    public List<Window> dailyWindows(String settingKey, Instant from, Instant to) {
+        ZoneId z = zone();
+        List<Window> result = new ArrayList<>();
+        JsonNode windows = settings.get(settingKey);
+        LocalDate first = local(from).toLocalDate().minusDays(1);
+        LocalDate last = local(to).toLocalDate().plusDays(1);
+        for (LocalDate d = first; !d.isAfter(last); d = d.plusDays(1)) {
+            int dow = d.getDayOfWeek().getValue();
+            for (JsonNode w : windows) {
+                if (w.has("days")) {
+                    boolean match = false;
+                    for (JsonNode day : w.path("days")) {
+                        match |= day.asInt() == dow;
+                    }
+                    if (!match) {
+                        continue;
+                    }
+                }
+                LocalTime s = LocalTime.parse(w.path("start").asString());
+                LocalTime e = LocalTime.parse(w.path("end").asString());
+                LocalDate endDay = e.isAfter(s) ? d : d.plusDays(1);
+                Window win = new Window(d.atTime(s).atZone(z).toInstant(), endDay.atTime(e).atZone(z).toInstant());
+                if (win.overlaps(from, to)) {
+                    result.add(win);
+                }
+            }
+        }
+        result.sort(Comparator.comparing(Window::start));
+        return result;
+    }
+
     public boolean isQuiet(Instant t) {
         return quietWindows(t, t.plusSeconds(1)).stream().anyMatch(w -> w.contains(t));
     }

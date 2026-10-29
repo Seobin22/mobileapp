@@ -13,6 +13,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 
+import com.seobin.phonedrop.assistant.agent.AgentWorker;
+import com.seobin.phonedrop.assistant.agent.llm.ScriptedLlm;
 import com.seobin.phonedrop.assistant.push.FakePush;
 import com.seobin.phonedrop.assistant.push.Push;
 
@@ -34,7 +36,18 @@ abstract class AssistantTestBase {
         FakeClock fakeClock() {
             return new FakeClock(START);
         }
+
+        @Bean
+        @Primary
+        ScriptedLlm scriptedLlm() {
+            return new ScriptedLlm();
+        }
     }
+
+    @Autowired
+    ScriptedLlm llm;
+    @Autowired
+    AgentWorker agentWorker;
 
     @Autowired
     FakeClock clock;
@@ -68,10 +81,13 @@ abstract class AssistantTestBase {
     @BeforeEach
     void resetState() {
         push = (FakePush) pushBean;
-        for (String table : new String[]{"intervention_logs", "interventions", "jobs", "blocks", "tasks",
+        for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
+                "intervention_logs", "interventions", "jobs", "blocks", "tasks", "goals", "events", "notes",
                 "device_events", "devices", "processed_actions", "settings"}) {
             db.update("DELETE FROM " + table);
         }
+        db.update("UPDATE memory SET content = '' WHERE id = 1");
+        llm.reset();
         db.update("UPDATE plan_state SET plan_version = 0");
         settings.seedDefaults();
         clock.set(START);

@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class Store {
 
-    public record Task(long id, String title, String firstAction, int estMinutes, String status, int version) {
+    public record Task(long id, String title, String firstAction, int estMinutes, String status, int version,
+                       Long goalId, Instant deadline, int remainingMinutes, int priority, String notes,
+                       boolean sensitive) {
     }
 
     public record Block(long id, long taskId, Instant start, Instant end, String status, String screenText,
@@ -27,10 +29,61 @@ public class Store {
         }
     }
 
+    public record Event(long id, String title, Instant start, Instant end, int bufferBeforeMin, int bufferAfterMin,
+                        String source, String externalId, String status, boolean sensitive) {
+
+        /** 버퍼를 포함한 구간 시작. */
+        public Instant blockedStart() {
+            return start.minusSeconds(bufferBeforeMin * 60L);
+        }
+
+        public Instant blockedEnd() {
+            return end.plusSeconds(bufferAfterMin * 60L);
+        }
+    }
+
+    public record Goal(long id, String title, Instant deadline, String reason, String status, String strategy,
+                       boolean sensitive) {
+    }
+
     private final AssistantDb db;
 
     public Store(AssistantDb db) {
         this.db = db;
+    }
+
+    public Optional<Event> event(long id) {
+        return db.jdbc().sql("SELECT * FROM events WHERE id = ?").param(id).query(Store::event).optional();
+    }
+
+    /** 버퍼 포함 구간이 [from, to) 와 겹치는 활성 일정. 버퍼는 최대 하루로 보고 넉넉히 읽은 뒤 거른다. */
+    public List<Event> activeEventsOverlapping(Instant from, Instant to) {
+        return db.jdbc().sql("""
+                        SELECT * FROM events WHERE status = 'active' AND start_at < ? AND end_at > ?
+                        ORDER BY start_at, id""")
+                .param(AssistantDb.ts(to.plusSeconds(86400))).param(AssistantDb.ts(from.minusSeconds(86400)))
+                .query(Store::event).list().stream()
+                .filter(e -> e.blockedStart().isBefore(to) && from.isBefore(e.blockedEnd()))
+                .toList();
+    }
+
+    public Optional<Goal> goal(long id) {
+        return db.jdbc().sql("SELECT * FROM goals WHERE id = ?").param(id).query(Store::goal).optional();
+    }
+
+    public List<Goal> activeGoals() {
+        return db.jdbc().sql("SELECT * FROM goals WHERE status = 'active' ORDER BY id").query(Store::goal).list();
+    }
+
+    public List<Task> activeTasks() {
+        return db.jdbc().sql("SELECT * FROM tasks WHERE status = 'active' ORDER BY id").query(Store::task).list();
+    }
+
+    /** 활성 블록 전부(planned·nudging·started). */
+    public List<Block> activeBlocks() {
+        return db.jdbc().sql("""
+                        SELECT * FROM blocks WHERE status IN ('planned', 'nudging', 'started') ORDER BY start_at, id""")
+                .query(Store::block).list();
     }
 
     public Optional<Task> task(long id) {
@@ -97,7 +150,22 @@ public class Store {
 
     static Task task(ResultSet rs, int n) throws SQLException {
         return new Task(rs.getLong("id"), rs.getString("title"), rs.getString("first_action"),
-                rs.getInt("est_minutes"), rs.getString("status"), rs.getInt("version"));
+                rs.getInt("est_minutes"), rs.getString("status"), rs.getInt("version"),
+                AssistantDb.nullableLong(rs, "goal_id"), AssistantDb.instant(rs, "deadline"),
+                rs.getInt("remaining_minutes"), rs.getInt("priority"), rs.getString("notes"),
+                rs.getBoolean("sensitive"));
+    }
+
+    static Event event(ResultSet rs, int n) throws SQLException {
+        return new Event(rs.getLong("id"), rs.getString("title"), AssistantDb.instant(rs, "start_at"),
+                AssistantDb.instant(rs, "end_at"), rs.getInt("buffer_before_min"), rs.getInt("buffer_after_min"),
+                rs.getString("source"), rs.getString("external_id"), rs.getString("status"),
+                rs.getBoolean("sensitive"));
+    }
+
+    static Goal goal(ResultSet rs, int n) throws SQLException {
+        return new Goal(rs.getLong("id"), rs.getString("title"), AssistantDb.instant(rs, "deadline"),
+                rs.getString("reason"), rs.getString("status"), rs.getString("strategy"), rs.getBoolean("sensitive"));
     }
 
     static Block block(ResultSet rs, int n) throws SQLException {

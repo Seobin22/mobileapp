@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import com.seobin.phonedrop.assistant.agent.llm.ConfiguredLlm;
 import com.seobin.phonedrop.assistant.push.FakePush;
 import com.seobin.phonedrop.assistant.push.FirebasePush;
 import com.seobin.phonedrop.assistant.push.Push;
@@ -42,6 +43,17 @@ public class AssistantConfig {
         }
         log.info("assistant push: fake (FCM 미설정, 발송 내용은 관리 화면에만 보임)");
         return new FakePush();
+    }
+
+    /** 운영 LLM. 키는 ANTHROPIC_API_KEY 또는 관리 화면이 저장한 data/assistant/anthropic_api_key. */
+    @Bean
+    ConfiguredLlm llmClient(@Value("${assistant.data-dir:data/assistant}") String dataDir,
+                            @Value("${ANTHROPIC_API_KEY:}") String envKey,
+                            @Value("${assistant.agent-model:}") String model) {
+        if (model.isBlank()) {
+            log.error("AGENT_MODEL 이 비어 있습니다. 채팅 비서는 동작하지 않습니다(개입 기능은 정상).");
+        }
+        return new ConfiguredLlm(Path.of(dataDir, "anthropic_api_key"), envKey, model);
     }
 
     @Bean

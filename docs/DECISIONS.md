@@ -51,3 +51,50 @@
 - (v1 점검 후 추가) 앱도 서버 expire·suspend 규칙을 스스로 지킨다: intervention.level 에 `expire_at`, plan.sync 에 `expire_grace_minutes` 를 실어 보내고,
   앱은 그 시각이 지났거나 조용한 시간이면 재표시를 멈추고 알림을 지운다(알림에도 timeoutAfter). FCM 유실·미설정 때 화면이 끝없이 뜨는 것을 막는다.
 - (v1 점검 후 추가) 로컬 백업으로 뜬 개입은 앱 타이머가 reshow_minutes 마다 다시 띄운다(서버 reshow 푸시를 대신). 서버 푸시가 오면 이 타이머는 취소된다.
+
+## v2 (2026-10-29)
+
+### 구조
+- **모델**: 사용자가 `claude-sonnet-5-5` 로 정했다. `application.properties` 의 `assistant.agent-model=${AGENT_MODEL:claude-sonnet-5-5}`.
+  비어 있으면 서버 전체를 멈추는 대신(같은 앱에 다른 기능이 있다) 오류 로그를 남기고 채팅 turn 만 실패시킨다.
+- **API 키**: 사용자 선택으로 관리 화면(test.seobin.page)에서 입력 → `data/assistant/anthropic_api_key`(권한 600). 환경변수 `ANTHROPIC_API_KEY` 가 있으면 그걸 쓴다. 키는 다시 표시하지 않는다.
+- **LLM 호출**: 공식 Java SDK `com.anthropic:anthropic-java:2.34.0` 추가(레포 규칙상 의존성 최소지만, Claude 호출은 공식 SDK 사용 원칙을 따름).
+  수동 도구 루프, 응답(Message)을 그대로 다음 요청에 붙여 thinking 블록 보존, system·도구 정의에 프롬프트 캐시,
+  effort `medium`, 거절 시 서버 측 대체 모델(`fallbacks: "default"`, 베타 `server-side-fallback-2026-07-01`). 강제 tool_choice 는 쓰지 않는다(Sonnet 5.5 는 400).
+- **max_tokens**: 문서의 2000 대신 8000. Sonnet 5.5 는 thinking 이 항상 켜져 있고 thinking 도 max_tokens 에 포함돼, 2000 이면 도구 호출 전에 잘릴 수 있다. 타임아웃은 문서대로 60초.
+- **프로세스 분리**: 별도 프로세스·advisory lock 대신 같은 앱 안의 스레드 두 개. timing worker(`@Scheduled`, turn 제외)와 agent worker(전용 스레드, turn 만 priority desc·fire_at asc 로 하나씩).
+  LLM 을 기다리는 동안 락을 잡지 않고 도구마다 따로 트랜잭션이라 개입이 밀리지 않는다(S9 테스트).
+- **turn id**: `POST /v1/messages` 가 turns 행을 `queued` 로 먼저 만들고 그 id 를 돌려준다(문서의 202 {turn_id}). turn 작업의 target_id = turn id. 상태 값에 queued·skipped 추가.
+- 서버가 turn 실행 중에 재시작되면 그 turn 은 failed 로 둔다(같은 답장이 두 번 가지 않도록).
+- `events.start/end` 는 H2 예약어 때문에 `start_at/end_at`, `changes.before/after` 는 `before_value/after_value`.
+- 도구 정의(JSON Schema)는 `src/main/resources/assistant/agent/tools.json`. 시스템 프롬프트는 문서 §9 그대로 `assistant/prompts/system.md`.
+
+### 동작 세부
+- 확인 카드 문구: 도구에 선택 인자 `confirm_text` 를 두어 LLM 이 사유를 넘긴다. 없으면 자동 문장.
+- 확인 카드 수락 시 실행 결과 변경은 trigger=`system` turn 으로 기록한다.
+- 권한: upsert_event 의 버퍼·제목만 바꾸는 것은 trigger 와 무관하게 실행(시각 변경·생성만 확인 카드). 목표 생성 시 마감 지정은 "변경"이 아니라 실행.
+- 캘린더 출처 일정은 v2 에서 어떤 변경도 거절(v5 에서 buffer 만 허용 예정).
+- 목표 취소 시 그 목표의 active 할 일도 취소하고 미래 블록을 취소한다.
+- 할 일 완료(status=done): 미래 planned 블록 취소, remaining 0.
+- 되돌리기: changes 는 행 전체 스냅샷. "이번 변경에서 바뀐 필드" 중 현재 값이 after 와 같은 것만 before 로 되돌린다. 생성 되돌리기는 취소(메모는 dismissed).
+  블록은 되돌릴 모습(before, 생성이면 after)의 시작 시각이 이미 지났으면 손대지 않는다.
+- 하루 turn 수는 logical day(기상 기준) 시작 이후 started_at 으로 센다.
+- LLM 장애: user_message 면 첫 실패 때만 안내 메시지를 보내고 1분 뒤 재시도(최대 3회). 키·모델 미설정은 재시도 없이 "아직 AI 연결이 설정되지 않았어요" 답장.
+- 텍스트만 답한 경우 그 텍스트를 reply 로 보낸다(S10). 거절(refusal)도 같은 경로.
+- get_timeline 의 날짜는 활동일(기상~다음 기상). quiet 항목은 활동 구간 안의 방해 금지만 보인다(수면은 하루 앞뒤).
+- 목표 없는 할 일 그룹의 마감은 그 할 일들 중 가장 이른 마감.
+- progress_minutes_7d: 최근 7일 actual_start 가 있는 블록의 actual_start~actual_end(진행 중이면 now).
+- v1 수동 등록 검증을 v2 검증기로 바꿔 식사 시간 겹침도 거절한다.
+- `GET /v1/messages` 는 after_id 가 없으면 최근 100개, 있으면 그 뒤 200개까지. 질문 options·question_status, 확인 카드 confirmation_status 를 함께 준다.
+- 관리 API 추가: `POST /v1/admin/anthropic_key`, `GET /v1/admin/agent`(모델·키 설정 여부·최근 turn).
+
+### 웹 (test.seobin.page)
+- AI 연결(키 입력·상태), 웹 채팅(질문 버튼·확인 카드 예/아니오), 시간표(7일)를 추가. 휴대폰 없이도 v2 를 확인할 수 있다.
+
+### 안드로이드
+- 메인을 하단 탭 2개(채팅·시간표)로 바꿨다. v1 할 일 목록 화면은 시간표 탭으로 대체하고 [+ 직접 추가]로 v1 수동 등록을 유지. 블록을 길게 누르면 수정·삭제.
+- FCM 이 없는 기기(임시 토큰)는 채팅 화면이 보일 때만 5초마다 메시지를 다시 읽는다. FCM 이 있으면 문서대로 폴링하지 않는다.
+- 채팅 화면을 보고 있을 때는 chat.message 알림을 띄우지 않는다.
+- 음성은 `SpeechRecognizer`(ko-KR), 인식 결과를 바로 전송(source=voice). `RECORD_AUDIO` 권한과 RecognitionService queries 추가.
+- 위젯은 Glance(`glance-appwidget:1.1.1`) 버튼 하나 → 투명 `QuickInputActivity`(입력창 + 마이크) → source=widget 전송 후 닫힘.
+- 평가 세트는 `evals/v2/*.yaml` + `EvalRunner`(JUnit, `-Deval=true` 일 때만) + `Makefile` 의 `make eval`. 채점은 같은 모델로 한 번 더 호출.
