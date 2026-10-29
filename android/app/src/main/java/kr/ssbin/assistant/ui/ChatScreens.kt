@@ -56,6 +56,7 @@ import kr.ssbin.assistant.data.ConfirmRequest
 import kr.ssbin.assistant.data.MessageDto
 import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.TimelineDay
+import kr.ssbin.assistant.work.Sync
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -129,6 +130,13 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
     LaunchedEffect(tick, reload) {
         val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).messages().messages } }
         r.onSuccess { list ->
+            // 새 비서 답장이 왔으면 계획이 바뀌었을 수 있으니 바로 동기화해 로컬 알람을 맞춘다(FCM 없을 때 대비).
+            val prefs = Prefs.get(context)
+            val newestAssistant = list.filter { it.role == "assistant" }.maxOfOrNull { it.id } ?: -1
+            if (newestAssistant > prefs.lastNotifiedMessageId) {
+                prefs.lastNotifiedMessageId = newestAssistant
+                Sync.runSoon(context.applicationContext)
+            }
             messages = list
             // 화면에 보인 비서 메시지는 읽음 보고
             withContext(Dispatchers.IO) {

@@ -36,6 +36,11 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         set(value) = prefs.edit().putLong("negotiation_until", value).apply()
 
     /** 아직 서버에 보내지 않은 오늘 첫 잠금 해제 시각(ISO). 하트비트 events 로 보낸다(v3 §5.2). */
+    /** FCM 없는 기기가 마지막으로 알림을 띄운(또는 화면에서 본) 비서 메시지 id. */
+    var lastNotifiedMessageId: Long
+        get() = prefs.getLong("last_notified_message_id", -1)
+        set(value) = prefs.edit().putLong("last_notified_message_id", value).apply()
+
     var pendingFirstUnlock: String?
         get() = prefs.getString("pending_first_unlock", null)
         set(value) = prefs.edit().putString("pending_first_unlock", value).apply()

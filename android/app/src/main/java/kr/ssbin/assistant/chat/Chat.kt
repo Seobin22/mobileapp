@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kr.ssbin.assistant.R
 import kr.ssbin.assistant.data.ApiClient
+import kr.ssbin.assistant.data.MessageDto
+import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.PostMessageRequest
 import kr.ssbin.assistant.data.PostMessageResponse
 import kr.ssbin.assistant.ui.MainActivity
@@ -79,6 +81,28 @@ object Chat {
         requestRefresh()
         if (ChatVisibility.visible) return
         notify(context, "확인이 필요해요", data["text"].orEmpty())
+    }
+
+    /**
+     * FCM 이 없는 기기(임시 토큰)는 동기화 때 새 비서 메시지를 직접 확인해 알림을 띄운다.
+     * 처음 한 번은 기준 id 만 기록한다(이전 메시지를 한꺼번에 알리지 않도록).
+     */
+    fun notifyUnseen(context: Context, messages: List<MessageDto>) {
+        val prefs = Prefs.get(context)
+        if (prefs.fallbackToken == null) return
+        val assistant = messages.filter { it.role == "assistant" }
+        val maxId = assistant.maxOfOrNull { it.id } ?: return
+        val last = prefs.lastNotifiedMessageId
+        prefs.lastNotifiedMessageId = maxOf(last, maxId)
+        if (last < 0 || ChatVisibility.visible) return
+        val fresh = assistant.filter { it.id > last && !it.read && !it.silent }
+        val latest = fresh.lastOrNull() ?: return
+        requestRefresh()
+        if (latest.kind == "checkin") {
+            notify(context, "진행 확인", latest.content, CHANNEL_CHECKIN, CHECKIN_NOTIFICATION_ID)
+        } else {
+            notify(context, if (fresh.size > 1) "실행 비서 (${fresh.size})" else "실행 비서", latest.content)
+        }
     }
 
     private fun notify(

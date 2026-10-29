@@ -101,6 +101,11 @@ class MainActivity : ComponentActivity() {
         syncNow()
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (Prefs.get(this).configured) Sync.runAfterLeaving(applicationContext)
+    }
+
     private fun syncNow() {
         val app = applicationContext
         if (!Prefs.get(app).configured) return

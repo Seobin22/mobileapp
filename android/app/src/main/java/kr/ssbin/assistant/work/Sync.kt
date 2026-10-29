@@ -15,6 +15,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kr.ssbin.assistant.BuildConfig
 import kr.ssbin.assistant.Capabilities
+import kr.ssbin.assistant.chat.Chat
 import kr.ssbin.assistant.data.ApiClient
 import kr.ssbin.assistant.data.HeartbeatRequest
 import kr.ssbin.assistant.data.Prefs
@@ -53,6 +54,10 @@ object Sync {
             }
             InterventionController.onPlanSync(context, api.sync())
             ActionQueue.flush(context)
+            if (prefs.fallbackToken != null) {
+                runCatching { Chat.notifyUnseen(context, api.messages().messages) }
+                    .onFailure { Log.w(TAG, "message check failed", it) }
+            }
             true
         } catch (e: Exception) {
             Log.w(TAG, "sync failed", e)
@@ -97,6 +102,21 @@ object Sync {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("sync-now", ExistingWorkPolicy.REPLACE, request)
+    }
+
+    /**
+     * 앱을 나갈 때: 비서가 아직 답(계획 변경)을 만드는 중일 수 있어 1분·3분 뒤 한 번씩 더 받는다.
+     * FCM 이 없으면 15분 주기만으로는 "10분 뒤 블록"의 로컬 알람을 못 맞춘다.
+     */
+    fun runAfterLeaving(context: Context) {
+        for (delayMinutes in listOf(1L, 3L)) {
+            val request = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork("sync-after-$delayMinutes", ExistingWorkPolicy.REPLACE, request)
+        }
     }
 }
 

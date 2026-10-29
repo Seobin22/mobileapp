@@ -3,7 +3,7 @@
 ## 사용자 준비 필요
 - **Firebase 미준비 (v1 §1)**: 패키지 `kr.ssbin.assistant` 의 `google-services.json` 과 FCM 서비스 계정 키가 없다.
   지금은 서버 `PUSH_MODE=fake`, 앱은 FCM 없이 동작한다: 개입 화면은 로컬 백업 알람(블록 시작 + 90초), 계획은 15분 주기 동기화,
-  채팅은 채팅 화면이 보일 때 5초 폴링. 채팅 답장 알림(화면을 안 보고 있을 때)은 FCM 이 있어야 온다.
+  채팅은 채팅 화면이 보일 때 5초 폴링. 화면을 안 볼 때의 비서 메시지 알림은 동기화(15분 주기, 앱을 나간 뒤 1·3분) 때 앱이 새 메시지를 확인해 띄운다(최대 15분 늦음). 즉시 알림은 FCM 이 있어야 한다.
   준비되면:
   1. `google-services.json` 을 `android/app/` 에 두고(커밋 금지, .gitignore 됨) APK 를 다시 빌드 — CI 빌드에 넣는 방법은 별도로 정해야 한다(Secrets 사용은 사용자 승인 필요).
   2. 서비스 계정 키를 서버 `/root/data/assistant/firebase.json` 에 두고 systemd 서비스에
