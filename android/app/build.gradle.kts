@@ -19,8 +19,8 @@ android {
         applicationId = "kr.ssbin.assistant"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "3.1.2"
+        versionCode = 9
+        versionName = "3.1.3"
     }
 
     buildTypes {
@@ -49,6 +49,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
     implementation("androidx.room:room-runtime:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")

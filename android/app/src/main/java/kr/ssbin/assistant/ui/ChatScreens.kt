@@ -44,6 +44,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -104,11 +107,25 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
             errorCallback = { msg -> listening = false; error = msg })
     }
     DisposableEffect(Unit) {
-        ChatVisibility.visible = true
-        Chat.clearNotification(context)
+        onDispose { voice.destroy() }
+    }
+    // '채팅을 보는 중'은 앱이 화면에 있을 때만. 홈 버튼으로 나가면 이 화면은 남아 있어도 알림이 떠야 한다.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    ChatVisibility.visible = true
+                    Chat.clearNotification(context)
+                }
+                Lifecycle.Event.ON_PAUSE -> ChatVisibility.visible = false
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             ChatVisibility.visible = false
-            voice.destroy()
         }
     }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
