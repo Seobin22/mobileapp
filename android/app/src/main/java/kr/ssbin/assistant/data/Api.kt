@@ -95,6 +95,22 @@ interface AssistantApi {
 
     @DELETE("v1/fixed_blocks/{id}")
     suspend fun deleteFixedBlock(@Path("id") id: Long): JsonObject
+
+    // AI 모델 선택(제공자 anthropic | factchat)
+    @GET("v1/admin/agent")
+    suspend fun agent(): JsonObject
+
+    @POST("v1/admin/llm")
+    suspend fun saveLlm(@Body body: JsonObject): JsonObject
+
+    @POST("v1/admin/llm_key")
+    suspend fun saveLlmKey(@Body body: JsonObject): JsonObject
+
+    @GET("v1/admin/llm/models")
+    suspend fun llmModels(@Query("provider") provider: String): JsonObject
+
+    @POST("v1/admin/llm/test")
+    suspend fun testLlm(): JsonObject
 }
 
 object ApiClient {

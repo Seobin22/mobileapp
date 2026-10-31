@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -302,11 +303,143 @@ fun SettingsScreen(onBack: () -> Unit, onReconfigure: () -> Unit) {
                     message = r.fold({ "저장했습니다" }, { ApiClient.errorMessage(it) })
                 }
             }) { Text("저장") }
+            AiModelSection()
             Spacer(Modifier.width(1.dp))
             OutlinedButton(onClick = onReconfigure) { Text("서버 주소·토큰 다시 입력") }
         }
     }
 }
+
+// ------------------------------------------------------------------ AI 모델(제공자·모델·키)
+
+private val PROVIDERS = listOf("anthropic" to "Anthropic 공식", "factchat" to "FactChat (영남대)")
+
+@Composable
+private fun AiModelSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var current by remember { mutableStateOf("불러오는 중…") }
+    var provider by remember { mutableStateOf("anthropic") }
+    var model by remember { mutableStateOf("") }
+    var defaultModel by remember { mutableStateOf("") }
+    var keys by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var key by remember { mutableStateOf("") }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    suspend fun reload() {
+        val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).agent() } }
+        r.onSuccess { a ->
+            val p = a.str("provider") ?: "anthropic"
+            val m = a.str("model") ?: ""
+            defaultModel = a.str("default_model") ?: ""
+            provider = p
+            model = if (m == defaultModel) "" else m
+            keys = a["keys"]?.jsonObject?.mapValues { it.value.jsonPrimitive.content == "true" } ?: emptyMap()
+            current = "${PROVIDERS.firstOrNull { it.first == p }?.second ?: p} · ${m.ifBlank { "(없음)" }}"
+        }.onFailure { current = ApiClient.errorMessage(it) }
+    }
+
+    fun act(work: suspend () -> String) {
+        busy = true
+        message = null
+        scope.launch {
+            message = runCatching { work() }.getOrElse { ApiClient.errorMessage(it) }
+            busy = false
+        }
+    }
+
+    LaunchedEffect(Unit) { reload() }
+
+    Spacer(Modifier.width(1.dp))
+    Text("AI 모델", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    Text("지금: $current", style = MaterialTheme.typography.bodyMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PROVIDERS.forEach { (id, name) ->
+            if (provider == id) {
+                Button(onClick = {}) { Text(name) }
+            } else {
+                OutlinedButton(onClick = { provider = id; models = emptyList() }) { Text(name) }
+            }
+        }
+    }
+    OutlinedTextField(
+        model, { model = it.trim() },
+        label = { Text("모델 (비우면 기본: ${defaultModel.ifBlank { "없음" }})") },
+        placeholder = { Text("예: claude-sonnet-5-5, gpt-5") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (models.isNotEmpty()) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) {
+                Text("눌러서 고르기 (${models.size}개)", style = MaterialTheme.typography.bodySmall)
+                models.forEach { m ->
+                    Text(
+                        m,
+                        color = if (m == model) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                        fontWeight = if (m == model) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.fillMaxWidth().clickable { model = m }.padding(vertical = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (provider == "factchat") {
+            OutlinedButton(enabled = !busy, onClick = {
+                act {
+                    val r = withContext(Dispatchers.IO) { ApiClient.get(context).llmModels(provider) }
+                    models = r["models"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+                    "${models.size}개 모델을 불러왔습니다"
+                }
+            }) { Text("모델 목록") }
+        }
+        Button(enabled = !busy, onClick = {
+            act {
+                val body = JsonObject(mapOf("provider" to JsonPrimitive(provider), "model" to JsonPrimitive(model)))
+                val r = withContext(Dispatchers.IO) { ApiClient.get(context).saveLlm(body) }
+                reload()
+                "저장했습니다: ${r.str("model")} (다음 대화부터 적용)"
+            }
+        }) { Text("모델 저장") }
+        OutlinedButton(enabled = !busy, onClick = {
+            act {
+                val r = withContext(Dispatchers.IO) { ApiClient.get(context).testLlm() }
+                if (r.str("ok") == "true") "✅ ${r.str("model")}: ${r.str("text")} (${r.str("ms")}ms)"
+                else "❌ ${r.str("model")}: ${r.str("error")}"
+            }
+        }) { Text("연결 테스트") }
+    }
+    Text(
+        "FactChat 의 claude-* 모델은 Anthropic 방식, 그 밖의 모델(GPT·Gemini 등)은 OpenAI 호환 방식으로 호출합니다. " +
+            "연결 테스트는 저장된 설정으로 보냅니다.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    val providerName = PROVIDERS.firstOrNull { it.first == provider }?.second ?: provider
+    OutlinedTextField(
+        key, { key = it.trim() },
+        label = { Text("$providerName API 키 ${if (keys[provider] == true) "(저장됨)" else "(없음)"}") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedButton(enabled = !busy && key.isNotBlank(), onClick = {
+        act {
+            val body = JsonObject(mapOf("provider" to JsonPrimitive(provider), "key" to JsonPrimitive(key)))
+            withContext(Dispatchers.IO) { ApiClient.get(context).saveLlmKey(body) }
+            key = ""
+            reload()
+            "키를 저장했습니다"
+        }
+    }) { Text("키 저장") }
+    if (busy) Text("처리 중…", style = MaterialTheme.typography.bodySmall)
+    message?.let { Text(it, color = if (it.startsWith("❌")) RED else Color.Unspecified) }
+}
+
+private fun JsonObject.str(name: String): String? =
+    (this[name] as? JsonPrimitive)?.content
 
 private fun setting(key: String, value: JsonElement) =
     JsonObject(mapOf("key" to JsonPrimitive(key), "value" to value))
