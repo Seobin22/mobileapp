@@ -32,6 +32,9 @@ import tools.jackson.databind.JsonNode;
  * - 강제 tool_choice 는 쓰지 않는다(Sonnet 5.5 는 400).
  * - 웹 검색은 서버 측 도구(web_search_20260209, max_uses 5). 서버 루프가 길어 pause_turn 으로 멈추면
  *   응답을 그대로 붙여 다시 요청한다("계속" 같은 사용자 메시지를 넣지 않는다).
+ * - 게이트웨이(FactChat 등 baseUrl 지정): Anthropic 전용 기능(대체 모델 fallbacks, 서버 측 웹 검색)은 쓰지 않는다.
+ *   인증은 x-api-key 와 Authorization: Bearer 를 함께 보낸다(게이트웨이마다 받는 헤더가 다르다).
+ * - effort·웹 검색·fallbacks 는 지원하는 모델에만 붙인다(지원하지 않는 모델은 400).
  */
 public class AnthropicLlm implements LlmClient {
 
@@ -41,14 +44,41 @@ public class AnthropicLlm implements LlmClient {
 
     private final AnthropicClient client;
     private final String model;
+    private final boolean gateway;
 
     public AnthropicLlm(String apiKey, String model) {
+        this(apiKey, model, null);
+    }
+
+    /** baseUrl 이 null 이면 Anthropic 공식 API, 아니면 Anthropic Messages 호환 게이트웨이. */
+    public AnthropicLlm(String apiKey, String model, String baseUrl) {
         this.model = model;
-        this.client = AnthropicOkHttpClient.builder()
+        this.gateway = baseUrl != null;
+        AnthropicOkHttpClient.Builder builder = AnthropicOkHttpClient.builder()
                 .apiKey(apiKey)
-                .timeout(Duration.ofSeconds(60))
-                .maxRetries(1)
-                .build();
+                .timeout(Duration.ofSeconds(gateway ? 120 : 60))
+                .maxRetries(1);
+        if (gateway) {
+            builder.baseUrl(baseUrl).authToken(apiKey);
+        }
+        this.client = builder.build();
+    }
+
+    /** output_config.effort 를 받는 모델(Opus 4.5+, Sonnet 4.6+, 5세대 이후). */
+    static boolean supportsEffort(String model) {
+        return model.matches("claude-(opus|sonnet|haiku|fable|mythos)-([5-9]|[1-9][0-9]).*")
+                || model.matches("claude-opus-4-[5-9].*") || model.matches("claude-sonnet-4-[6-9].*");
+    }
+
+    /** web_search_20260209(동적 필터링)를 받는 모델. */
+    static boolean supportsWebSearch(String model) {
+        return model.matches("claude-(opus|sonnet|fable)-([5-9]|[1-9][0-9]).*")
+                || model.matches("claude-(opus|sonnet)-4-[6-9].*");
+    }
+
+    /** 서버 측 대체 모델(fallbacks: "default")을 받는 모델(Claude API 에서만). */
+    static boolean supportsFallbacks(String model) {
+        return model.matches("claude-(fable-5-1|opus-5-5|opus-5|sonnet-5-5)");
     }
 
     @Override
@@ -59,17 +89,21 @@ public class AnthropicLlm implements LlmClient {
                 .systemOfTextBlockParams(List.of(TextBlockParam.builder()
                         .text(system)
                         .cacheControl(CacheControlEphemeral.builder().build())
-                        .build()))
-                .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.MEDIUM).build())
-                .putAdditionalHeader("anthropic-beta", "server-side-fallback-2026-07-01")
-                .putAdditionalBodyProperty("fallbacks", JsonValue.from("default"));
+                        .build()));
+        if (supportsEffort(model)) {
+            builder.outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.MEDIUM).build());
+        }
+        if (!gateway && supportsFallbacks(model)) {
+            builder.putAdditionalHeader("anthropic-beta", "server-side-fallback-2026-07-01")
+                    .putAdditionalBodyProperty("fallbacks", JsonValue.from("default"));
+        }
 
         List<JsonNode> defs = new ArrayList<>();
         toolDefinitions.forEach(defs::add);
         for (int i = 0; i < defs.size(); i++) {
             builder.addTool(tool(defs.get(i), i == defs.size() - 1));
         }
-        if (webSearch) {
+        if (webSearch && !gateway && supportsWebSearch(model)) {
             // 캐시 지점(마지막 사용자 도구) 뒤에 둔다. 켜고 끄는 것이 앞부분 캐시를 깨지 않도록.
             builder.addTool(WebSearchTool20260209.builder().maxUses(WEB_SEARCH_MAX_USES).build());
         }

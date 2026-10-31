@@ -7,6 +7,8 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.seobin.phonedrop.assistant.agent.llm.ConfiguredLlm;
+
 import tools.jackson.databind.JsonNode;
 
 /** 수치·생활 패턴은 모두 settings 테이블에서 읽는다(값은 JSON). */
@@ -51,6 +53,9 @@ public class SettingsService {
         d.put("goal.min_horizon_days", "2");
         d.put("goal.coverage_retry", "2");
         d.put("talk.timeout_minutes", "5");
+        // 모델 선택(관리 화면). llm.model 이 비면 서버 기본 모델(AGENT_MODEL)
+        d.put("llm.provider", "\"anthropic\"");
+        d.put("llm.model", "\"\"");
 
         DEFAULTS = Map.copyOf(d);
     }
@@ -114,6 +119,16 @@ public class SettingsService {
 
                 case "persona" -> {
                     if (!value.isString() || value.asString().isBlank()) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "llm.provider" -> {
+                    if (!ConfiguredLlm.PROVIDERS.contains(value.asString())) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "llm.model" -> {
+                    if (!value.isString() || !value.asString().matches("[A-Za-z0-9._:/@-]{0,100}")) {
                         throw new IllegalArgumentException();
                     }
                 }

@@ -200,3 +200,14 @@
 - **fixed_block_added**: 앱에서 lead·buffer 없이 고정 블록을 만들면 turn(priority 10, ref block_id). 맥락의 시간표에 "(준비 시간 미정)"·"(준비 시간 사용자가 정함)" 표기.
 - 화면 문구 기본값: lead>0 "곧 {title}이에요. {lead}분 뒤 시작", 0 "지금 {title} 시간이에요".
 - 앱 3.1.1: [+] 의 출발·준비 시간은 비워 둘 수 있다(비우면 비서가 정함). 관리 화면도 같다.
+
+## 모델 선택·FactChat 연결 (2026-10-31, 사용자 요청)
+
+- 제공자·모델은 설정 `llm.provider`(anthropic | factchat)·`llm.model`(빈 값 = `AGENT_MODEL`)에 둔다. 관리 화면 "AI 연결"에서 바꾸고 다음 turn 부터 적용된다(재시작 불필요). 키는 제공자별 파일 `data/assistant/{제공자}_api_key`.
+- FactChat(영남대 크레딧): `claude-*` 모델은 Anthropic 공식 Java SDK 에 baseUrl `https://factchat-cloud.mindlogic.ai/v1/gateway/claude` 로 보낸다. 그 밖의 모델(GPT·Gemini 등)은 OpenAI 호환 Chat Completions(`…/v1/gateway/chat/completions/`)를 JDK HttpClient 로 직접 부른다(의존성 추가 없음, `OpenAiCompatLlm`).
+- 인증: 게이트웨이는 문서상 x-api-key 지만 실제로 Bearer 를 요구해서 둘 다 보낸다. 가짜 키로 두 경로 모두 "Invalid API key"(401)까지 도달하는 것을 확인했다.
+- 게이트웨이에서는 Anthropic 전용 기능을 끈다: 서버 측 대체 모델(fallbacks), 웹 검색. 공식 API 에서도 effort·웹 검색·fallbacks 는 지원 모델에만 붙인다(구형 모델 400 방지).
+- OpenAI 호환 경로: 도구는 function 으로 옮기고, 받은 assistant 메시지(tool_calls 포함)를 그대로 되돌려 보낸다(Gemini thought signature 보존). 출력 토큰 상한은 보내지 않는다(모델마다 파라미터 이름이 달라 400). 프롬프트 캐시 지정이 없고 cached_tokens 만 센다.
+- 모델 목록은 `GET …/v1/gateway/models/`(관리 화면 [모델 목록 불러오기]). [연결 테스트]는 도구 없이 짧은 요청 하나를 보낸다.
+- turns 의 토큰은 제공자와 무관하게 같은 칸에 쌓는다(모델별 단가는 다름).
+

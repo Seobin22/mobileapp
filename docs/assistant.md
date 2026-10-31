@@ -20,13 +20,13 @@
 
 ## 처음 설정
 1. 서버 웹 콘솔에서 API 토큰 확인: `cat /root/data/assistant/api_token`
-2. 관리 화면에 토큰 입력 → "AI 연결"에 Anthropic API 키 입력(서버 `/root/data/assistant/anthropic_api_key` 에 저장, 다시 표시 안 함)
+2. 관리 화면에 토큰 입력 → "AI 연결"에서 제공자(Anthropic 공식 / FactChat)·모델을 고르고 그 제공자의 API 키 입력(서버 `/root/data/assistant/{anthropic|factchat}_api_key` 에 저장, 다시 표시 안 함). [연결 테스트]로 확인
 3. 관리 화면 채팅 또는 앱에서 "금요일까지 보고서 써야 해"처럼 말하기
 
 ## 서버
 - 코드: `src/main/java/com/seobin/phonedrop/assistant/` (v2 에이전트는 `agent/`), 스키마 `src/main/resources/assistant/db/`,
   시스템 프롬프트 `assistant/prompts/system.md`, 도구 정의 `assistant/agent/tools.json`
-- 데이터: `/root/data/assistant/` (H2 DB `assistant.mv.db`, `api_token`, `anthropic_api_key`)
+- 데이터: `/root/data/assistant/` (H2 DB `assistant.mv.db`, `api_token`, `anthropic_api_key`, `factchat_api_key`)
 - 스레드 두 개: timing worker(개입 예약 작업, 1초 폴링) / agent worker(LLM turn 을 하나씩). LLM 을 기다려도 개입이 밀리지 않는다.
 - v3 비서가 먼저 깨어나는 계기(turn): [미루기 요청](snooze_request), 블록 시작·끝·놓침(block_started·block_ended·block_missed), 예약한 wakeup,
   아침(첫 잠금 해제 또는 기상+60분)·저녁(취침−60분), pulse(2시간마다, 조용한 시간·일정·작업 중·직전 30분 turn 이면 건너뜀).
@@ -36,7 +36,7 @@
   | 이름 | 기본 | 설명 |
   |---|---|---|
   | `ASSISTANT_API_TOKEN` | 없음 → 파일 자동 생성 | API 토큰 |
-  | `AGENT_MODEL` | `claude-sonnet-5-5` | 채팅 비서 모델 |
+  | `AGENT_MODEL` | `claude-sonnet-5-5` | 서버 기본 모델(관리 화면의 모델 칸이 비었을 때) |
   | `ANTHROPIC_API_KEY` | 없음 → 관리 화면에서 저장한 파일 | Anthropic API 키 |
   | `ASSISTANT_PUSH_MODE` | `fake` | `firebase` 이면 실제 FCM 발송 |
   | `ASSISTANT_FIREBASE_CREDENTIALS` | 없음 | 서비스 계정 키 JSON 경로 |

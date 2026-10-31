@@ -81,6 +81,39 @@ class TimeAndApiTest extends AssistantTestBase {
     }
 
     @Test
+    void adminChangesProviderAndModel() throws Exception {
+        try {
+            mvc.perform(post("/api/assistant/v1/admin/llm").header("Authorization", "Bearer test-token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"provider\":\"factchat\",\"model\":\"gpt-5\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.model").value("gpt-5"));
+            mvc.perform(get("/api/assistant/v1/admin/agent").header("Authorization", "Bearer test-token"))
+                    .andExpect(jsonPath("$.provider").value("factchat"))
+                    .andExpect(jsonPath("$.protocol").value("openai-chat(factchat)"));
+            mvc.perform(post("/api/assistant/v1/admin/llm").header("Authorization", "Bearer test-token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"provider\":\"openai\",\"model\":\"gpt-5\"}"))
+                    .andExpect(status().isUnprocessableEntity());
+            mvc.perform(post("/api/assistant/v1/admin/llm").header("Authorization", "Bearer test-token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"provider\":\"anthropic\",\"model\":\"bad model\"}"))
+                    .andExpect(status().isUnprocessableEntity());
+            // 빈 모델 = 서버 기본 모델
+            mvc.perform(post("/api/assistant/v1/admin/llm").header("Authorization", "Bearer test-token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"provider\":\"anthropic\",\"model\":\"\"}"))
+                    .andExpect(jsonPath("$.provider").value("anthropic"))
+                    .andExpect(jsonPath("$.model").value(org.hamcrest.Matchers.not("")));
+        } finally {
+            tx.exec(() -> {
+                settings.put("llm.provider", Json.MAPPER.valueToTree("anthropic"));
+                settings.put("llm.model", Json.MAPPER.valueToTree(""));
+            });
+        }
+    }
+
+    @Test
     void registerThenCreateAndRejectOverlapOverHttp() throws Exception {
         mvc.perform(post("/api/assistant/v1/devices/register").header("Authorization", "Bearer test-token")
                         .contentType(MediaType.APPLICATION_JSON)

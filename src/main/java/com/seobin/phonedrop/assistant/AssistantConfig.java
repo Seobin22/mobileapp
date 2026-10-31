@@ -45,15 +45,20 @@ public class AssistantConfig {
         return new FakePush();
     }
 
-    /** 운영 LLM. 키는 ANTHROPIC_API_KEY 또는 관리 화면이 저장한 data/assistant/anthropic_api_key. */
+    /**
+     * 운영 LLM. 제공자·모델은 설정(llm.provider, llm.model — 관리 화면), 비어 있으면 AGENT_MODEL.
+     * 키는 ANTHROPIC_API_KEY 또는 관리 화면이 저장한 data/assistant/{제공자}_api_key.
+     */
     @Bean
     ConfiguredLlm llmClient(@Value("${assistant.data-dir:data/assistant}") String dataDir,
                             @Value("${ANTHROPIC_API_KEY:}") String envKey,
-                            @Value("${assistant.agent-model:}") String model) {
+                            @Value("${assistant.agent-model:}") String model,
+                            SettingsService settings) {
         if (model.isBlank()) {
-            log.error("AGENT_MODEL 이 비어 있습니다. 채팅 비서는 동작하지 않습니다(개입 기능은 정상).");
+            log.error("AGENT_MODEL 이 비어 있습니다. 관리 화면에서 모델을 정하기 전에는 채팅 비서가 동작하지 않습니다(개입 기능은 정상).");
         }
-        return new ConfiguredLlm(Path.of(dataDir, "anthropic_api_key"), envKey, model);
+        return new ConfiguredLlm(Path.of(dataDir), envKey, model,
+                () -> settings.getString("llm.provider"), () -> settings.getString("llm.model"));
     }
 
     @Bean

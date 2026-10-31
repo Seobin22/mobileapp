@@ -29,6 +29,7 @@ import com.seobin.phonedrop.assistant.agent.ChatService;
 import com.seobin.phonedrop.assistant.agent.ConfirmationService;
 import com.seobin.phonedrop.assistant.agent.Timeline;
 import com.seobin.phonedrop.assistant.agent.llm.ConfiguredLlm;
+import com.seobin.phonedrop.assistant.agent.llm.LlmClient;
 
 import tools.jackson.databind.JsonNode;
 
@@ -173,14 +174,77 @@ public class ChatController {
             throw ApiException.badRequest("API 키 형식이 맞지 않습니다");
         }
         llm.saveKey(key);
-        return Map.of("ok", true, "configured", llm.hasKey());
+        return Map.of("ok", true, "configured", llm.hasKey(ConfiguredLlm.ANTHROPIC));
+    }
+
+    /** 관리 화면에서 제공자별 API 키 저장(anthropic | factchat). 값은 다시 돌려주지 않는다. */
+    @PostMapping("/admin/llm_key")
+    public Map<String, Object> saveProviderKey(@RequestBody JsonNode body) throws IOException {
+        String provider = body.path("provider").asString("");
+        String key = body.path("key").asString("").trim();
+        if (!ConfiguredLlm.PROVIDERS.contains(provider)) {
+            throw ApiException.badRequest("알 수 없는 제공자입니다");
+        }
+        if (key.isEmpty() || key.length() > 500 || key.contains("\n") || key.contains(" ")) {
+            throw ApiException.badRequest("API 키 형식이 맞지 않습니다");
+        }
+        llm.saveKey(provider, key);
+        return Map.of("ok", true, "configured", llm.hasKey(provider));
+    }
+
+    /** 관리 화면에서 제공자·모델 변경. model 이 비면 서버 기본 모델. 다음 turn 부터 적용된다. */
+    @PostMapping("/admin/llm")
+    public Map<String, Object> saveLlm(@RequestBody JsonNode body) {
+        String provider = body.path("provider").asString("");
+        String model = body.path("model").asString("").trim();
+        tx.exec(() -> {
+            settings.put("llm.provider", Json.MAPPER.valueToTree(provider));
+            settings.put("llm.model", Json.MAPPER.valueToTree(model));
+        });
+        return Map.of("ok", true, "provider", llm.provider(), "model", llm.model());
+    }
+
+    /** 게이트웨이(FactChat)의 모델 목록. */
+    @GetMapping("/admin/llm/models")
+    public Map<String, Object> llmModels(@RequestParam(defaultValue = ConfiguredLlm.FACTCHAT) String provider) {
+        try {
+            return Map.of("models", llm.listModels(provider));
+        } catch (ConfiguredLlm.NotConfiguredException | LlmClient.LlmException e) {
+            throw ApiException.unprocessable(e.getMessage());
+        }
+    }
+
+    /** 지금 설정으로 짧은 요청을 한 번 보내 본다(도구 없음, 비용 아주 적음). */
+    @PostMapping("/admin/llm/test")
+    public Map<String, Object> testLlm() {
+        long started = System.nanoTime();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("provider", llm.provider());
+        result.put("model", llm.model());
+        try {
+            LlmClient.LlmResponse resp = llm.start("짧게 답한다.", Json.array(), "연결 확인입니다. '연결됨' 한 단어로만 답하세요.")
+                    .next();
+            result.put("ok", true);
+            result.put("text", resp.text().length() > 200 ? resp.text().substring(0, 200) : resp.text());
+            result.put("input_tokens", resp.inputTokens());
+            result.put("output_tokens", resp.outputTokens());
+        } catch (ConfiguredLlm.NotConfiguredException | LlmClient.LlmException e) {
+            result.put("ok", false);
+            result.put("error", e.getMessage());
+        }
+        result.put("ms", (System.nanoTime() - started) / 1_000_000);
+        return result;
     }
 
     /** 관리 화면용: 비서 설정 상태와 최근 turn. */
     @GetMapping("/admin/agent")
     public Map<String, Object> agentStatus() {
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("provider", llm.provider());
         result.put("model", llm.model());
+        result.put("default_model", llm.defaultModel());
+        result.put("protocol", ConfiguredLlm.protocol(llm.provider(), llm.model()));
+        result.put("keys", llm.keyStatus());
         result.put("api_key_configured", llm.hasKey());
         List<Map<String, Object>> turns = tx.run(() -> db.jdbc().sql("""
                         SELECT id, trigger, status, tool_calls, input_tokens, output_tokens, started_at, error
