@@ -3,59 +3,111 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>연결 확인</title>
+    <title>File Archive</title>
     <style>
-        body {
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            font-family: sans-serif;
-            background-color: #e7f5ff;
-            color: #1c2b36;
-            text-align: center;
-            padding: 16px;
-            box-sizing: border-box;
-        }
-        h1 { font-size: 2rem; margin: 0; }
-        #host { font-size: 1.1rem; color: #4a6072; }
-        #time { font-size: 3rem; font-weight: bold; font-variant-numeric: tabular-nums; }
-        #ping { font-size: 1rem; color: #4a6072; min-height: 1.2em; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: sans-serif; background: #f1f3f5; color: #212529; }
+        main { max-width: 640px; margin: 0 auto; padding: 16px; }
+        header { margin: 8px 0 16px; }
+        h1 { font-size: 1.5rem; margin: 0; }
+        .muted { color: #868e96; font-size: .85rem; }
+        .group { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 10px; overflow: hidden; }
+        .group > button { width: 100%; display: flex; justify-content: space-between; align-items: center;
+            padding: 14px 16px; border: 0; background: none; font: inherit; font-weight: bold; cursor: pointer; text-align: left; }
+        .group .arrow { transition: transform .2s; }
+        .group.open .arrow { transform: rotate(180deg); }
+        .items { display: none; border-top: 1px solid #e9ecef; }
+        .group.open .items { display: block; }
+        .item { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            padding: 12px 16px; border-bottom: 1px solid #f1f3f5; }
+        .item:last-child { border-bottom: 0; }
+        .name { overflow-wrap: anywhere; }
+        .dl { flex: none; padding: 7px 12px; border-radius: 6px; background: #1c7ed6; color: #fff;
+            text-decoration: none; font-size: .9rem; }
+        .dl.off { background: #ced4da; pointer-events: none; }
+        #status { padding: 24px 0; text-align: center; }
+        #refresh { padding: 6px 10px; border: 1px solid #1c7ed6; border-radius: 6px; background: #fff; color: #1c7ed6; font: inherit; cursor: pointer; }
     </style>
 </head>
 <body>
-    <h1>✅ 정상 연결</h1>
-    <div id="host"></div>
-    <div id="time"></div>
-    <div id="ping"></div>
+<main>
+    <header>
+        <h1>📦 File Archive</h1>
+        <div class="muted">Seobin22/mobileapp · GitHub Actions 결과물</div>
+        <div class="muted" id="note"></div>
+        <p><button id="refresh">새로고침</button></p>
+    </header>
+    <div id="status">데이터를 불러오는 중...</div>
+    <div id="file-list"></div>
+</main>
 
-    <script>
-        document.getElementById("host").textContent = location.host;
-        const timeEl = document.getElementById("time");
-        const pingEl = document.getElementById("ping");
+<script>
+    const list = document.getElementById("file-list");
+    const status = document.getElementById("status");
+    const note = document.getElementById("note");
 
-        function render() {
-            timeEl.textContent = new Date().toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour12: false });
-        }
+    function size(bytes) {
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+        if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
+        return bytes + " B";
+    }
 
-        async function ping() {
-            const start = performance.now();
-            try {
-                const res = await fetch("/check.html", { method: "HEAD", cache: "no-store" });
-                const ms = Math.round(performance.now() - start);
-                pingEl.textContent = res.ok ? `서버 응답 ${ms}ms` : `서버 응답 오류 (${res.status})`;
-            } catch (e) {
-                pingEl.textContent = "서버에 연결할 수 없음";
+    function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    async function loadFiles() {
+        status.style.display = "";
+        status.textContent = "데이터를 불러오는 중...";
+        list.innerHTML = "";
+        try {
+            const res = await fetch("/api/check/artifacts", { cache: "no-store" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || res.status);
+
+            note.textContent = data.directDownload
+                ? "다운로드를 누르면 zip 파일을 바로 받습니다."
+                : "다운로드는 GitHub 화면으로 연결됩니다(GitHub 로그인 필요).";
+
+            if (!data.groups.length) {
+                status.textContent = "파일이 없습니다.";
+                return;
             }
-        }
+            status.style.display = "none";
 
-        render();
-        ping();
-        setInterval(render, 1000);
-        setInterval(ping, 10000);
-    </script>
+            data.groups.forEach((g, i) => {
+                const group = el("div", "group" + (i === 0 ? " open" : ""));
+                const head = el("button");
+                head.append(el("span", "", `📅 ${g.date} (${g.artifacts.length})`), el("span", "arrow", "▼"));
+                head.onclick = () => group.classList.toggle("open");
+
+                const items = el("div", "items");
+                g.artifacts.forEach(a => {
+                    const row = el("div", "item");
+                    const info = el("div");
+                    const time = new Date(a.createdAt).toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).slice(11, 16);
+                    info.append(el("div", "name", a.name),
+                        el("div", "muted", `${time} · ${size(a.size)}${a.expired ? " · 만료됨" : ""}`));
+                    const link = el("a", "dl" + (a.expired ? " off" : ""), a.expired ? "만료" : "Download ⬇️");
+                    link.href = data.directDownload ? `/api/check/artifacts/${a.id}/download` : a.pageUrl;
+                    link.target = data.directDownload ? "_self" : "_blank";
+                    link.rel = "noopener";
+                    row.append(info, link);
+                    items.append(row);
+                });
+                group.append(head, items);
+                list.append(group);
+            });
+        } catch (e) {
+            status.textContent = "데이터 로드 실패: " + e.message;
+        }
+    }
+
+    document.getElementById("refresh").onclick = loadFiles;
+    loadFiles();
+</script>
 </body>
 </html>
