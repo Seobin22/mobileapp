@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>연결 확인</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-family: sans-serif;
+            background-color: #e7f5ff;
+            color: #1c2b36;
+            text-align: center;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        h1 { font-size: 2rem; margin: 0; }
+        #host { font-size: 1.1rem; color: #4a6072; }
+        #time { font-size: 3rem; font-weight: bold; font-variant-numeric: tabular-nums; }
+        #ping { font-size: 1rem; color: #4a6072; min-height: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>✅ 정상 연결</h1>
+    <div id="host"></div>
+    <div id="time"></div>
+    <div id="ping"></div>
+
+    <script>
+        document.getElementById("host").textContent = location.host;
+        const timeEl = document.getElementById("time");
+        const pingEl = document.getElementById("ping");
+
+        function render() {
+            timeEl.textContent = new Date().toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour12: false });
+        }
+
+        async function ping() {
+            const start = performance.now();
+            try {
+                const res = await fetch("/check.html", { method: "HEAD", cache: "no-store" });
+                const ms = Math.round(performance.now() - start);
+                pingEl.textContent = res.ok ? `서버 응답 ${ms}ms` : `서버 응답 오류 (${res.status})`;
+            } catch (e) {
+                pingEl.textContent = "서버에 연결할 수 없음";
+            }
+        }
+
+        render();
+        ping();
+        setInterval(render, 1000);
+        setInterval(ping, 10000);
+    </script>
+</body>
+</html>
