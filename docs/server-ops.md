@@ -1,7 +1,7 @@
 # 서버·도메인 운영 노트
 
 다른 채팅(세션)에서 이어서 작업할 수 있도록, 서버·도메인·인증서 관련해 지금까지 확인하고 바꾼 내용을 정리한다.
-마지막 갱신: 2026-10-29
+마지막 갱신: 2026-11-01
 
 ## 현재 상태 요약
 
@@ -9,9 +9,9 @@
 |---|---|
 | 서버 | DigitalOcean droplet `phonedrop`, IP `139.59.99.165`, Ubuntu 24.04, nginx 1.24 → Spring 앱(8080) |
 | DNS | `seobin.page`, 와일드카드 `*.seobin.page` 모두 서버 IP로 연결됨 (사용자가 등록) |
-| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, 만료 2027-01-26 |
-| nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
-| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지) |
+| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, 만료 2027-01-26(2026-11-01 재발급, 실제 만료일은 서버에서 확인) |
+| nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`·`check.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
+| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 연결 확인 페이지 `static/check.html` (2026-11-01) |
 | 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`, `firebase.json`). 자세한 내용은 [assistant.md](assistant.md) |
 | 실행 비서 DB 백업 | `/root/data/assistant/backups/` — 스키마 변경 직전 `pre-V*.zip`(보관), 매일 04:00 `daily-*.zip`(7일). 앱이 직접 만든다(cron 아님). 복구: 앱 정지 → zip 안의 `assistant.mv.db` 를 `/root/data/assistant/` 에 덮어쓰기 → 앱 시작 |
 | 실행 비서 푸시 | FCM. systemd drop-in `/etc/systemd/system/phonedrop.service.d/firebase.conf` 에 `ASSISTANT_PUSH_MODE=firebase`, `ASSISTANT_FIREBASE_CREDENTIALS=/root/data/assistant/firebase.json` |
@@ -63,6 +63,7 @@
 | 날짜 | 내용 | 결과 |
 |---|---|---|
 | 2026-10-28 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page` 후 nginx reload | 성공 (run 40637108002) |
+| 2026-11-01 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page` 후 nginx reload | 성공 (run 41279402390) |
 | 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
