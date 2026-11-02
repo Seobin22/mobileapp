@@ -41,12 +41,8 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'SETTINGS' AS q, key, LEFT(value, 60) AS v FROM settings WHERE key IN ('llm.provider','llm.model','web.enabled','agent.max_tool_calls','goal.coverage_retry','agent.context_messages');
-SELECT 'STATUS' AS q, status, COUNT(*) AS n FROM turns WHERE started_at >= DATEADD('DAY', -2, CURRENT_TIMESTAMP) GROUP BY status;
-SELECT 'LAT' AS q, m.id, FORMATDATETIME(m.created_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS kst, m.intervention_id IS NOT NULL AS fs, t.id AS tid, t.status, t.tool_calls AS tc, DATEDIFF('SECOND', m.created_at, t.started_at) AS wait_s, DATEDIFF('SECOND', t.started_at, t.ended_at) AS run_s, (SELECT DATEDIFF('SECOND', m.created_at, MIN(a.created_at)) FROM messages a WHERE a.role = 'assistant' AND a.id > m.id) AS first_reply_s, t.input_tokens AS inp, t.output_tokens AS outp, t.cache_read_tokens AS cr, t.cache_write_tokens AS cw, LEFT(t.error, 120) AS err FROM messages m LEFT JOIN turns t ON t.trigger IN ('user_message','intervention_talk') AND t.trigger_ref LIKE CONCAT('%"message_id":', m.id, '%') WHERE m.role = 'user' AND m.created_at >= DATEADD('DAY', -3, CURRENT_TIMESTAMP) ORDER BY m.id DESC LIMIT 60;
-SELECT 'TURN' AS q, id, FORMATDATETIME(started_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS kst, trigger, status, tool_calls AS tc, DATEDIFF('SECOND', started_at, ended_at) AS run_s, COALESCE(input_tokens,0) AS inp, COALESCE(output_tokens,0) AS outp, cache_read_tokens AS cr, cache_write_tokens AS cw, LEFT(error, 120) AS err FROM turns WHERE started_at >= DATEADD('DAY', -2, CURRENT_TIMESTAMP) ORDER BY id DESC LIMIT 80;
-SELECT 'TRIG' AS q, trigger, COUNT(*) AS n, ROUND(AVG(DATEDIFF('SECOND', started_at, ended_at)),1) AS avg_run_s, MAX(DATEDIFF('SECOND', started_at, ended_at)) AS max_run_s, ROUND(AVG(tool_calls),1) AS avg_tc FROM turns WHERE started_at >= DATEADD('DAY', -3, CURRENT_TIMESTAMP) AND ended_at IS NOT NULL GROUP BY trigger ORDER BY n DESC;
-SELECT 'QUEUE' AS q, status, COUNT(*) AS n, MIN(FORMATDATETIME(fire_at, 'MM-dd HH:mm', 'en', 'Asia/Seoul')) AS oldest FROM jobs WHERE type = 'turn' AND status IN ('scheduled','running') GROUP BY status;
+SELECT 'JOB' AS q, id, status, attempts, FORMATDATETIME(fire_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS fire, FORMATDATETIME(updated_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS upd, LEFT(last_error, 300) AS err FROM jobs WHERE type = 'turn' AND target_id IN (130, 131, 132);
+SELECT 'MSG' AS q, id, role, kind, FORMATDATETIME(created_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS kst, LENGTH(content) AS len FROM messages WHERE id BETWEEN 176 AND 190 ORDER BY id;
 SQL
 
 while IFS= read -r q; do
@@ -54,20 +50,11 @@ while IFS= read -r q; do
   "$JAVA" -cp "$H2" org.h2.tools.Shell -url "$URL" -user sa -password "" -sql "$q" >> "$WORK/out.txt" 2>&1 || echo "QUERY FAILED" >> "$WORK/out.txt"
 done < "$WORK/queries.sql"
 
-# 로그에서 응답 지연·실패와 관련된 줄 수와 최근 실패 요약만(내용·키는 출력하지 않음).
-J=$(journalctl -u phonedrop --since '2 days ago' --no-pager)
-{
-  echo "LOG llm_failure $(echo "$J" | grep -c 'LLM failure' || true)"
-  echo "LOG turn_skipped $(echo "$J" | grep -c 'skipped:' || true)"
-  echo "LOG turn_job_failed $(echo "$J" | grep -c 'turn job .* failed' || true)"
-  echo "LOG worker_loop_failed $(echo "$J" | grep -c 'agent worker loop failed' || true)"
-  echo "LOG tool_failed $(echo "$J" | grep -c 'tool .* failed in turn' || true)"
-  echo "LOG restarts $(echo "$J" | grep -c 'Started PhonedropApplication' || true)"
-  echo "$J" | grep -E 'LLM failure|skipped:|turn job .* failed' | tail -8 | sed -E 's/(sk-|key=)[A-Za-z0-9_-]+/***/g' | cut -c1-220 | sed 's/^/LOGLINE /' || true
-} >> "$WORK/out.txt"
+# 11-02 14:20~14:40 KST 의 비서 경고·오류 줄과 예외 첫 줄들(키 형태 문자열은 가린다).
+journalctl -u phonedrop --since '2026-11-02 05:20' --until '2026-11-02 05:45' --no-pager -o cat   | grep -E 'WARN|ERROR|Exception|Caused by|^\s+at com\.seobin' | grep -v 'at org\.' | head -60   | sed -E 's/(sk-|key=|Bearer )[A-Za-z0-9_.-]+/***/g' | cut -c1-260 | sed 's/^/LOGLINE /' >> "$WORK/out.txt" || true
 
-# 6000자씩 ::notice 주석으로 내보낸다(공개 annotations API 로 읽을 수 있다).
-awk -v max=6000 '
+# 3000자씩 ::notice 주석으로 내보낸다(공개 annotations API 로 읽을 수 있다).
+awk -v max=3000 '
   { line = $0; gsub(/\r/, "", line); gsub(/%/, "%25", line)
     if (length(buf) + length(line) + 3 > max) { print "::notice title=lat" n "::" buf; n++; buf = "" }
     buf = buf line "%0A" }
