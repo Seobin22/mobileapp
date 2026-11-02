@@ -421,7 +421,7 @@
   },
   {
     "name": "send_message",
-    "description": "사용자에게 메시지를 보낸다. 사용자 메시지에 대한 답은 kind=reply. 먼저 말 걸 때는 proactive, 아침·저녁 정리는 briefing, 작업 중 진행 확인은 checkin. 알림을 울릴지(silent)는 코드가 정하고 결과로 알려준다(방해 금지·일정·작업 중·하루 예산 초과면 알림 없이 채팅에만 쌓인다). 정말 중요한 것만 importance=high.",
+    "description": "사용자에게 메시지를 보낸다. 사용자 메시지에 대한 답은 kind=reply. 먼저 말 걸 때는 proactive, 아침·저녁 정리는 briefing, 작업 중 진행 확인은 checkin. 알림을 울릴지(silent)는 코드가 정하고 결과로 알려준다(방해 금지·일정·작업 중·하루 예산 초과면 알림 없이 채팅에만 쌓인다). 정말 중요한 것만 importance=high. 다른 도구 없이 이것만 부르면 turn 이 끝난다(할 일을 다 마친 뒤 마지막에 부른다).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -453,7 +453,7 @@
   },
   {
     "name": "ask_user",
-    "description": "답이 필요한 것을 묻는다. 가능하면 선택지 버튼(최대 4개)을 준다.",
+    "description": "답이 필요한 것을 묻는다. 가능하면 선택지 버튼(최대 4개)을 준다. 다른 도구 없이 이것만 부르면 turn 이 끝난다.",
     "input_schema": {
       "type": "object",
       "properties": {

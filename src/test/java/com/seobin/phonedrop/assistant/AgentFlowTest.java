@@ -100,6 +100,31 @@ class AgentFlowTest extends AssistantTestBase {
     }
 
     @Test
+    void s1b_messageAloneEndsTurnWithoutExtraLlmCall() {
+        llm.then(tools(call("send_message", "{\"text\":\"알겠어요\",\"kind\":\"reply\"}")))
+                .then(tools(call("send_message", "{\"text\":\"한 번 더\",\"kind\":\"reply\"}")));
+        Map<String, Object> r = say("고마워");
+        runAgent();
+
+        assertThat(turnStatus((Long) r.get("turn_id"))).isEqualTo("ok");
+        assertThat(assistantMessages()).containsExactly("알겠어요");
+        assertThat(llm.toolResults).isEmpty();
+    }
+
+    @Test
+    void s1c_messageWithOtherToolStillContinues() {
+        llm.then(tools(call("upsert_task", "{\"title\":\"빨래\",\"est_minutes\":30,\"first_action\":\"세탁기 열기\"}"),
+                        call("send_message", "{\"text\":\"빨래 등록했어요\",\"kind\":\"reply\"}")))
+                .then(text(""));
+        Map<String, Object> r = say("빨래 해야 해");
+        runAgent();
+
+        assertThat(turnStatus((Long) r.get("turn_id"))).isEqualTo("ok");
+        assertThat(llm.toolResults).hasSize(2);
+        assertThat(assistantMessages()).containsExactly("빨래 등록했어요");
+    }
+
+    @Test
     void s2_invalidScheduleChangesNothingThenFixed() {
         long taskId = db.insert("INSERT INTO tasks(title, first_action, est_minutes, remaining_minutes) VALUES ('보고서', '열기', 60, 60)");
         event("치과", "2026-11-02T15:00", "2026-11-02T16:00");

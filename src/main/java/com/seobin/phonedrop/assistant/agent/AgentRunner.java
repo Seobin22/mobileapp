@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,8 @@ public class AgentRunner {
     static final int MAX_LLM_RETRIES = 3;
     static final String OVER_LIMIT = "오늘 처리 한도를 넘었어요. 내일 아침에 이어서 볼게요.";
     static final String LLM_DOWN = "지금 처리가 안 돼요, 곧 다시 볼게요";
+    /** 사용자에게 말하는 도구. 이것만 단독으로 부르면 turn 을 끝낸다. */
+    static final Set<String> MESSAGE_TOOLS = Set.of("send_message", "ask_user");
 
     private final Tx tx;
     private final AssistantDb db;
@@ -133,11 +136,19 @@ public class AgentRunner {
         int toolCalls = 0;
         String lastText = "";
         String status = "partial";
+        // 속도 측정(로그): LLM 왕복 수, 부른 도구, LLM 대기 시간
+        long turnStarted = System.nanoTime();
+        long llmNanos = 0;
+        int rounds = 0;
+        List<String> toolNames = new ArrayList<>();
 
         try {
             LlmClient.Conversation conv = llm.start(system, tools.definitions(), userContent, webSearch);
             for (int i = 0; i < maxCalls; i++) {
+                long callStarted = System.nanoTime();
                 LlmClient.LlmResponse resp = conv.next();
+                llmNanos += System.nanoTime() - callStarted;
+                rounds++;
                 inTokens += resp.inputTokens();
                 outTokens += resp.outputTokens();
                 cache[0] += resp.cacheReadTokens();
@@ -155,9 +166,21 @@ public class AgentRunner {
                     break;
                 }
                 List<LlmClient.ToolResult> results = new ArrayList<>();
+                boolean onlyMessages = true;
+                boolean allOk = true;
                 for (LlmClient.ToolCall call : resp.toolCalls()) {
-                    results.add(runTool(ctx, call));
+                    LlmClient.ToolResult result = runTool(ctx, call);
+                    results.add(result);
                     toolCalls++;
+                    toolNames.add(call.name());
+                    onlyMessages &= MESSAGE_TOOLS.contains(call.name());
+                    allOk &= !result.isError();
+                }
+                // 말하는 도구만 단독으로 불러 성공했으면 여기서 끝낸다("더 할 일 없음"을 받으려는 LLM 왕복을 줄인다).
+                // 누락 목표가 있으면 평소처럼 결과를 돌려주고 다음 응답에서 목표 검사를 한다.
+                if (onlyMessages && allOk && tx.run(() -> missingMessage(ctx)) == null) {
+                    status = "ok";
+                    break;
                 }
                 conv.addToolResults(results);
             }
@@ -188,6 +211,8 @@ public class AgentRunner {
             return retry ? "retry" : "failed";
         }
 
+        log.info("turn {} {} {}: rounds={} tools={} llm_ms={} total_ms={}", turnId, trigger, status, rounds,
+                String.join(",", toolNames), llmNanos / 1_000_000, (System.nanoTime() - turnStarted) / 1_000_000);
         final String finalText = lastText;
         final String finalStatus = status;
         final int calls = toolCalls;
