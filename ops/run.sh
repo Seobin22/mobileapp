@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# check.seobin.page 를 seobin.page 인증서에 추가하고 nginx에 반영한다.
-# 기존 도메인(seobin.page, test.seobin.page)을 목록에서 빼면 인증서에서 빠지므로 모두 나열한다.
+# admin.seobin.page 를 seobin.page 인증서에 추가하고 nginx에 반영한다.
+# 기존 도메인(seobin.page, test.seobin.page, check.seobin.page)을 목록에서 빼면 인증서에서 빠지므로 모두 나열한다.
 set -euo pipefail
 
 certbot certonly --nginx --non-interactive --expand \
-  --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page
+  --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page -d admin.seobin.page
 
 nginx -t
 systemctl reload nginx
