@@ -1,7 +1,7 @@
 # 서버·도메인 운영 노트
 
 다른 채팅(세션)에서 이어서 작업할 수 있도록, 서버·도메인·인증서 관련해 지금까지 확인하고 바꾼 내용을 정리한다.
-마지막 갱신: 2026-11-01
+마지막 갱신: 2026-11-02
 
 ## 현재 상태 요약
 
@@ -9,9 +9,12 @@
 |---|---|
 | 서버 | DigitalOcean droplet `phonedrop`, IP `139.59.99.165`, Ubuntu 24.04, nginx 1.24 → Spring 앱(8080) |
 | DNS | `seobin.page`, 와일드카드 `*.seobin.page` 모두 서버 IP로 연결됨 (사용자가 등록) |
-| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, 만료 2027-01-26(2026-11-01 재발급, 실제 만료일은 서버에서 확인) |
+| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, `admin.seobin.page`, 만료 2027-01-31(2026-11-02 재발급) |
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`·`check.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
 | 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지) |
+| `admin.seobin.page` | 관리자 페이지 `static/admin.html`, API `/api/admin/` (2026-11-02). 아이디·비밀번호 로그인(세션 쿠키 Secure·SameSite=Strict, 30분). 텍스트 기록 날짜별 보기·개별/날짜 단위 삭제, 아이디·비밀번호 변경. 로그인 5번 연속 실패 시 5분 잠금 |
+| 관리자 계정 | `/root/data/admin/account` (아이디 + PBKDF2 해시). 처음 시작할 때 아이디 `admin` 과 무작위 비밀번호를 만들어 `/root/data/admin/initial_password`(600)에 적는다. 관리자 페이지에서 바꾸면 그 파일은 지워진다. 비밀번호를 잊으면 `account` 파일을 지우고 앱 재시작 → 새 initial_password |
+| 텍스트 전송 데이터 | H2 파일 `/root/data/texts/texts.mv.db` (실행 비서 DB와 별도, 백업 없음). `GET /texts?date=YYYY-MM-DD`(없으면 오늘, 한국 시간), `POST /texts`. 공개 삭제 API(`DELETE /texts`)는 없앴고 삭제는 관리자 페이지에서만 |
 | 파일 아카이브 토큰(선택) | 없으면 다운로드 버튼이 GitHub 화면으로 연결(로그인 필요). `/root/data/check/github_token` 파일(권한 600) 또는 환경변수 `CHECK_GITHUB_TOKEN` 에 `actions:read` 권한 토큰을 넣으면 zip 바로 다운로드. 현재 미설정 |
 | 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`, `firebase.json`). 자세한 내용은 [assistant.md](assistant.md) |
 | 실행 비서 DB 백업 | `/root/data/assistant/backups/` — 스키마 변경 직전 `pre-V*.zip`(보관), 매일 04:00 `daily-*.zip`(7일). 앱이 직접 만든다(cron 아님). 복구: 앱 정지 → zip 안의 `assistant.mv.db` 를 `/root/data/assistant/` 에 덮어쓰기 → 앱 시작 |
@@ -65,12 +68,13 @@
 |---|---|---|
 | 2026-10-28 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page` 후 nginx reload | 성공 (run 40637108002) |
 | 2026-11-01 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page` 후 nginx reload | 성공 (run 41279402390) |
+| 2026-11-02 | 위와 같은 명령에 `-d admin.seobin.page` 추가 | 성공 (run 41392538706) |
 | 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
 
 - **인증서 갱신 후 nginx reload 훅 미설치.** `certonly`로 발급했기 때문에 자동 갱신 후 nginx가 예전 인증서를 계속 쓸 수 있다.
-  만료(2027-01-26) 전에 설치해야 한다. Claude가 시도했으나 권한 검사에서 막혀 사용자 결정 대기 중. 서버에서 실행할 명령:
+  만료(2027-01-31) 전에 설치해야 한다. Claude가 시도했으나 권한 검사에서 막혀 사용자 결정 대기 중. 서버에서 실행할 명령:
   ```bash
   printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh && chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
   certbot renew --cert-name seobin.page --dry-run
