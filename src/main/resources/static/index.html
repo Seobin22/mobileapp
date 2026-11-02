@@ -11,7 +11,6 @@
             margin: 30px auto;
             padding: 0 16px;
             font-family: sans-serif;
-            background-color: pink;
         }
 
         section {
@@ -52,6 +51,7 @@
     <h1>PhoneDrop</h1>
     <p><a href="https://test.seobin.page/">실행 비서 관리</a></p>
     <p><a href="https://check.seobin.page/">파일 아카이브 (Actions 결과물)</a></p>
+    <p><a href="https://admin.seobin.page/">관리자 (텍스트 기록)</a></p>
 
     <section>
         <h2>파일 업로드</h2>
@@ -92,9 +92,13 @@
             텍스트 전송
         </button>
 
-        <button type="button" onclick="deleteTexts()">
-            텍스트 전체 삭제
-        </button>
+        <p>
+            <label>
+                날짜
+                <input id="textDate" type="date">
+            </label>
+            <button type="button" onclick="showToday()">오늘</button>
+        </p>
 
         <div id="textList"></div>
     </section>
@@ -231,40 +235,65 @@
             await loadTexts();
         }
 
+        const textDate = document.getElementById("textDate");
+
+        // 날짜를 직접 고르지 않았으면 자정이 지나도 계속 오늘(한국 시간)을 보여준다.
+        let datePicked = false;
+
+        function todayInKorea() {
+            return new Date().toLocaleDateString("sv-SE", {
+                timeZone: "Asia/Seoul"
+            });
+        }
+
+        textDate.addEventListener("change", async () => {
+            datePicked = textDate.value !== "";
+            await loadTexts();
+        });
+
+        async function showToday() {
+            datePicked = false;
+            await loadTexts();
+        }
+
         async function loadTexts() {
-            const response = await fetch("/texts");
+            if (!datePicked) {
+                textDate.value = todayInKorea();
+            }
+
+            const response = await fetch(
+                "/texts?date=" + encodeURIComponent(textDate.value)
+            );
             const texts = await response.json();
 
             const textList = document.getElementById("textList");
             textList.innerHTML = "";
 
-            texts.forEach(text => {
+            if (texts.length === 0) {
+                textList.textContent = "이 날짜에 보낸 텍스트가 없습니다.";
+                return;
+            }
+
+            texts.forEach(entry => {
                 const item = document.createElement("div");
                 item.className = "textItem";
 
+                const time = document.createElement("small");
+                time.textContent = entry.createdAt.slice(11, 16);
+
                 const content = document.createElement("div");
-                content.textContent = text;
+                content.textContent = entry.text;
 
                 const copyButton = document.createElement("button");
                 copyButton.textContent = "복사";
                 copyButton.addEventListener("click", async () => {
-                    await navigator.clipboard.writeText(text);
+                    await navigator.clipboard.writeText(entry.text);
                     alert("복사했습니다.");
                 });
 
-                item.append(content, copyButton);
+                item.append(time, content, copyButton);
                 textList.appendChild(item);
             });
-        }
-
-        async function deleteTexts() {
-            const response = await fetch("/texts", {
-                method: "DELETE"
-            });
-
-            if (response.ok) {
-                await loadTexts();
-            }
         }
 
         loadFiles();

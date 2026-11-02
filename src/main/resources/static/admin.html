@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>PhoneDrop 관리자</title>
+
+    <style>
+        body {
+            max-width: 800px;
+            margin: 30px auto;
+            padding: 0 16px;
+            font-family: sans-serif;
+        }
+
+        section {
+            margin-bottom: 32px;
+        }
+
+        input {
+            padding: 6px;
+            margin: 4px 0;
+        }
+
+        button {
+            margin-left: 5px;
+        }
+
+        .textItem {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #aaa;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .dateLink {
+            margin-right: 8px;
+        }
+
+        .error {
+            color: #c92a2a;
+            min-height: 1.2em;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>PhoneDrop 관리자</h1>
+
+    <section id="loginBox" class="hidden">
+        <h2>로그인</h2>
+        <form id="loginForm">
+            <div><input id="loginUsername" placeholder="아이디" autocomplete="username" required></div>
+            <div><input id="loginPassword" type="password" placeholder="비밀번호" autocomplete="current-password" required></div>
+            <button type="submit">로그인</button>
+        </form>
+        <p class="error" id="loginError"></p>
+    </section>
+
+    <div id="adminBox" class="hidden">
+        <p>
+            <span id="who"></span>
+            <button type="button" onclick="logout()">로그아웃</button>
+        </p>
+
+        <section>
+            <h2>텍스트 기록</h2>
+            <p>
+                <label>
+                    날짜
+                    <input id="textDate" type="date">
+                </label>
+                <button type="button" onclick="showToday()">오늘</button>
+                <button type="button" onclick="deleteDate()">이 날짜 전체 삭제</button>
+            </p>
+            <p class="error" id="textError"></p>
+            <div id="textList"></div>
+        </section>
+
+        <section>
+            <h2>기록이 있는 날짜</h2>
+            <div id="dateList"></div>
+        </section>
+
+        <section>
+            <h2>아이디·비밀번호 변경</h2>
+            <form id="accountForm">
+                <div><input id="currentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" required></div>
+                <div><input id="newUsername" placeholder="새 아이디" autocomplete="username" required></div>
+                <div><input id="newPassword" type="password" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" minlength="8" required></div>
+                <button type="submit">변경</button>
+            </form>
+            <p class="error" id="accountError"></p>
+        </section>
+    </div>
+
+    <script>
+        const textDate = document.getElementById("textDate");
+
+        function todayInKorea() {
+            return new Date().toLocaleDateString("sv-SE", {
+                timeZone: "Asia/Seoul"
+            });
+        }
+
+        async function api(method, path, body) {
+            const options = { method, headers: {} };
+
+            if (body !== undefined) {
+                options.headers["Content-Type"] = "application/json";
+                options.body = JSON.stringify(body);
+            }
+
+            const response = await fetch("/api/admin" + path, options);
+
+            if (response.status === 401 && path !== "/login") {
+                showLogin();
+            }
+
+            return response;
+        }
+
+        function showLogin() {
+            document.getElementById("adminBox").classList.add("hidden");
+            document.getElementById("loginBox").classList.remove("hidden");
+        }
+
+        async function showAdmin(username) {
+            document.getElementById("who").textContent = username + " 로그인됨";
+            document.getElementById("newUsername").value = username;
+            document.getElementById("loginBox").classList.add("hidden");
+            document.getElementById("adminBox").classList.remove("hidden");
+            await refresh();
+        }
+
+        document.getElementById("loginForm").addEventListener("submit", async event => {
+            event.preventDefault();
+
+            const response = await api("POST", "/login", {
+                username: document.getElementById("loginUsername").value,
+                password: document.getElementById("loginPassword").value
+            });
+
+            if (!response.ok) {
+                document.getElementById("loginError").textContent = await response.text();
+                return;
+            }
+
+            document.getElementById("loginPassword").value = "";
+            document.getElementById("loginError").textContent = "";
+            await showAdmin((await response.json()).username);
+        });
+
+        async function logout() {
+            await api("POST", "/logout");
+            showLogin();
+        }
+
+        textDate.addEventListener("change", refresh);
+
+        async function showToday() {
+            textDate.value = todayInKorea();
+            await refresh();
+        }
+
+        async function refresh() {
+            if (!textDate.value) {
+                textDate.value = todayInKorea();
+            }
+            await Promise.all([loadTexts(), loadDates()]);
+        }
+
+        async function loadTexts() {
+            const response = await api("GET", "/texts?date=" + encodeURIComponent(textDate.value));
+
+            if (!response.ok) {
+                return;
+            }
+
+            const texts = await response.json();
+            const textList = document.getElementById("textList");
+            textList.innerHTML = "";
+
+            if (texts.length === 0) {
+                textList.textContent = "이 날짜에 보낸 텍스트가 없습니다.";
+                return;
+            }
+
+            texts.forEach(entry => {
+                const item = document.createElement("div");
+                item.className = "textItem";
+
+                const time = document.createElement("small");
+                time.textContent = entry.createdAt.replace("T", " ");
+
+                const content = document.createElement("div");
+                content.textContent = entry.text;
+
+                const deleteButton = document.createElement("button");
+                deleteButton.textContent = "삭제";
+                deleteButton.addEventListener("click", () => deleteText(entry.id));
+
+                item.append(time, content, deleteButton);
+                textList.appendChild(item);
+            });
+        }
+
+        async function loadDates() {
+            const response = await api("GET", "/texts/dates");
+
+            if (!response.ok) {
+                return;
+            }
+
+            const dates = await response.json();
+            const dateList = document.getElementById("dateList");
+            dateList.innerHTML = "";
+
+            if (dates.length === 0) {
+                dateList.textContent = "아직 기록이 없습니다.";
+                return;
+            }
+
+            dates.forEach(entry => {
+                const link = document.createElement("a");
+                link.href = "#";
+                link.className = "dateLink";
+                link.textContent = entry.date + " (" + entry.count + ")";
+                link.addEventListener("click", async event => {
+                    event.preventDefault();
+                    textDate.value = entry.date;
+                    await refresh();
+                });
+                dateList.appendChild(link);
+            });
+        }
+
+        async function deleteText(id) {
+            if (!confirm("이 텍스트를 삭제할까요?")) {
+                return;
+            }
+
+            const response = await api("DELETE", "/texts/" + id);
+            document.getElementById("textError").textContent = response.ok ? "" : await response.text();
+            await refresh();
+        }
+
+        async function deleteDate() {
+            if (!confirm(textDate.value + " 의 텍스트를 모두 삭제할까요?")) {
+                return;
+            }
+
+            const response = await api("DELETE", "/texts?date=" + encodeURIComponent(textDate.value));
+            document.getElementById("textError").textContent = await response.text();
+            await refresh();
+        }
+
+        document.getElementById("accountForm").addEventListener("submit", async event => {
+            event.preventDefault();
+
+            const response = await api("POST", "/account", {
+                currentPassword: document.getElementById("currentPassword").value,
+                newUsername: document.getElementById("newUsername").value,
+                newPassword: document.getElementById("newPassword").value
+            });
+
+            document.getElementById("accountError").textContent = await response.text();
+
+            if (response.ok) {
+                document.getElementById("currentPassword").value = "";
+                document.getElementById("newPassword").value = "";
+                document.getElementById("who").textContent =
+                    document.getElementById("newUsername").value + " 로그인됨";
+            }
+        });
+
+        (async () => {
+            const response = await api("GET", "/me");
+
+            if (response.ok) {
+                await showAdmin((await response.json()).username);
+            }
+        })();
+    </script>
+</body>
+</html>
