@@ -56,6 +56,11 @@ public class SettingsService {
         // 모델 선택(관리 화면). llm.model 이 비면 서버 기본 모델(AGENT_MODEL)
         d.put("llm.provider", "\"anthropic\"");
         d.put("llm.model", "\"\"");
+        // v3.2
+        d.put("series.horizon_days", "14");
+        d.put("lookahead.days", "28");
+        d.put("memo.urgent_hours", "24");
+        d.put("memo.max_chars", "1000");
 
         DEFAULTS = Map.copyOf(d);
     }

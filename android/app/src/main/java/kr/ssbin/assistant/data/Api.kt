@@ -96,6 +96,40 @@ interface AssistantApi {
     @DELETE("v1/fixed_blocks/{id}")
     suspend fun deleteFixedBlock(@Path("id") id: Long): JsonObject
 
+    // v3.2 달력·마감·처리 중 표시·블록 기록·반복 일정
+    @GET("v1/calendar")
+    suspend fun calendar(@Query("from") from: String, @Query("to") to: String): CalendarResponse
+
+    @GET("v1/tasks/{id}")
+    suspend fun task(@Path("id") id: Long): TaskDetailDto
+
+    @PATCH("v1/tasks/{id}")
+    suspend fun patchTaskDeadline(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @GET("v1/turns/{id}/status")
+    suspend fun turnStatus(@Path("id") id: Long): TurnStatusDto
+
+    @GET("v1/blocks/{id}")
+    suspend fun block(@Path("id") id: Long): BlockDetailDto
+
+    @POST("v1/fixed_series")
+    suspend fun createSeries(@Body body: SeriesRequest): JsonObject
+
+    @PATCH("v1/fixed_series/{id}")
+    suspend fun patchSeries(
+        @Path("id") id: Long,
+        @Body body: SeriesRequest,
+        @Query("scope") scope: String,
+        @Query("from_date") fromDate: String? = null,
+    ): JsonObject
+
+    @DELETE("v1/fixed_series/{id}")
+    suspend fun deleteSeries(
+        @Path("id") id: Long,
+        @Query("scope") scope: String,
+        @Query("from_date") fromDate: String? = null,
+    ): JsonObject
+
     // AI 모델 선택(제공자 anthropic | factchat)
     @GET("v1/admin/agent")
     suspend fun agent(): JsonObject

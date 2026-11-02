@@ -81,8 +81,10 @@ abstract class AssistantTestBase {
     @BeforeEach
     void resetState() {
         push = (FakePush) pushBean;
+        db.update("UPDATE blocks SET linked_fixed_block_id = NULL");
         for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
-                "intervention_logs", "interventions", "jobs", "blocks", "work_products", "wakeups", "daily_flags", "tasks",
+                "intervention_logs", "interventions", "jobs", "block_logs", "series_exceptions", "blocks", "fixed_series",
+                "work_products", "wakeups", "daily_flags", "tasks",
                 "goals", "events", "notes", "data_migrations",
                 "device_events", "devices", "processed_actions", "settings"}) {
             db.update("DELETE FROM " + table);

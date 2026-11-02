@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.BlockLogs;
 import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.SettingsService;
 import com.seobin.phonedrop.assistant.Store;
@@ -36,9 +37,14 @@ public class ContextBuilder {
     private final Facts facts;
     private final ChatService chat;
     private final GoalCoverage coverage;
+    private final UserState userState;
+    private final Deadlines deadlines;
+    private final MemoService memos;
+    private final BlockLogs logs;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
-                          Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage) {
+                          Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
+                          Deadlines deadlines, MemoService memos, BlockLogs logs) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -48,6 +54,10 @@ public class ContextBuilder {
         this.facts = facts;
         this.chat = chat;
         this.coverage = coverage;
+        this.userState = userState;
+        this.deadlines = deadlines;
+        this.memos = memos;
+        this.logs = logs;
     }
 
     public String build(String trigger, JsonNode ref) {
@@ -70,6 +80,13 @@ public class ContextBuilder {
                 .append(" / 방해 금지: ").append(windows(settings.get("dnd.windows"))).append("\n\n");
 
         sb.append("# 이번 실행 이유\n").append(reason(trigger, ref)).append("\n\n");
+
+        // v3.2 P2.2·P1.2
+        sb.append("# 지금 상태\n").append(userState.contextSection()).append('\n');
+        sb.append("# 다가오는 마감(").append(Deadlines.CONTEXT_DAYS).append("일 안, 지난 미완료 포함)\n")
+                .append(deadlines.contextSection()).append('\n');
+        appendMemos(sb, trigger, ref, now);
+        appendBlockLogs(sb, ref);
 
         // v3.1 §3.6-2: 풀스크린 대화면 이 개입에서 오간 말
         if ("intervention_talk".equals(trigger)) {
@@ -264,6 +281,14 @@ public class ContextBuilder {
             case "fixed_block_added" -> "fixed_block_added: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 준비 시간 없이 넣었다. 장소·거리·준비물·일의 성격을 보고 lead_minutes·buffer_after_min 을 정하거나"
                     + " 앞에 준비용 계획 블록을 만든다(upsert_fixed_block 에 id 와 두 값만)";
+            case "fixed_memo_changed" -> "fixed_memo_changed: 사용자가 곧 시작하는 고정 블록#" + ref.path("block_id").asLong()
+                    + "의 메모를 바꿨다. 메모를 읽고 알릴 것·준비할 것이 있으면 처리한다(없으면 말하지 않는다)";
+            case "fixed_changed" -> "fixed_changed: 고정 블록#" + ref.path("block_id").asLong()
+                    + ("cancelled".equals(ref.path("change").asString("")) ? "이 삭제되어 연결 블록 " + ref.path("linked")
+                    + "과 그 할 일을 코드가 취소했다. 사용자에게 짧게 알린다"
+                    : "의 시각이 바뀌었다. 연결 블록 " + ref.path("linked") + "을 다시 배치하거나 알린다");
+            case "task_changed_by_user" -> "task_changed_by_user: 사용자가 앱에서 할일#" + ref.path("task_id").asLong()
+                    + "을 직접 바꿈(" + ref.path("fields").asString("") + "). 이미 반영된 결정이니 시간표를 맞추고 짧게 알린다";
             case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 넣어 계획 블록 " + ref.path("displaced") + "이 취소됐다. 재배치하고 알린다";
             case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
@@ -287,6 +312,61 @@ public class ContextBuilder {
             case "evening" -> "evening: 저녁 회고(" + ref.path("logical_day").asString("") + ")";
             default -> trigger + ": " + ref;
         };
+    }
+
+    /**
+     * v3.2 §3.2: morning 은 앞으로 lookahead.days 의 고정 일정 전부(메모·고지), 고정 블록 관련 turn 은 그 블록 메모 전체,
+     * 그 밖에는 48시간 안 메모가 있는 일정만.
+     */
+    private void appendMemos(StringBuilder sb, String trigger, JsonNode ref, Instant now) {
+        if ("morning".equals(trigger)) {
+            int days = settings.getInt("lookahead.days");
+            sb.append("# 앞으로 ").append(days).append("일 고정 일정(메모·고지)\n");
+            List<MemoService.Entry> list = memos.entries(now, now.plus(Duration.ofDays(days)), true);
+            sb.append(list.isEmpty() ? "없음" : String.join("\n", list.stream().map(memos::line).toList())).append("\n\n");
+            return;
+        }
+        Store.Block fixed = ref.hasNonNull("block_id") ? store.block(ref.get("block_id").asLong()).filter(Store.Block::fixed)
+                .orElse(null) : null;
+        if (fixed != null) {
+            sb.append("# 이 고정 일정의 메모(블록#").append(fixed.id()).append(")\n")
+                    .append(memos.line(new MemoService.Entry(fixed.id(), fixed.seriesId(), fixed.start(),
+                            timeline.blockTitle(fixed), memos.fullMemo(fixed), logs.notices(fixed.id()))))
+                    .append("\n\n");
+            return;
+        }
+        sb.append("# 고정 일정 메모(48시간 안)\n");
+        List<MemoService.Entry> list = memos.entries(now, now.plus(Duration.ofHours(48)), false);
+        sb.append(list.isEmpty() ? "없음" : String.join("\n", list.stream().map(memos::line).toList())).append("\n\n");
+    }
+
+    /** v3.2 §4.3: 진행 중 개입 블록의 기록, 이번 turn 블록과 같은 목표의 직전 블록 3개 기록(블록당 최근 5줄). */
+    private void appendBlockLogs(StringBuilder sb, JsonNode ref) {
+        List<String> lines = new java.util.ArrayList<>();
+        for (Store.Intervention i : store.runningInterventions()) {
+            lines.add("블록#" + i.blockId() + "(진행 중 개입):");
+            logs.ofBlock(i.blockId(), 10).forEach(l -> lines.add("  " + logLine(l)));
+        }
+        Store.Block b = ref.hasNonNull("block_id") ? store.block(ref.get("block_id").asLong()).orElse(null) : null;
+        Store.Goal g = b == null ? null : timeline.goalOf(b);
+        if (g != null) {
+            List<Store.Block> prev = db.jdbc().sql("""
+                            SELECT b.* FROM blocks b LEFT JOIN tasks t ON t.id = b.task_id
+                            WHERE (b.goal_id = ? OR t.goal_id = ?) AND b.id <> ? AND b.start_at < ? AND b.status <> 'cancelled'
+                            ORDER BY b.start_at DESC LIMIT 3""")
+                    .param(g.id()).param(g.id()).param(b.id()).param(AssistantDb.ts(b.start())).query(Store::block).list();
+            for (Store.Block p : prev) {
+                lines.add("블록#" + p.id() + " " + time.dayText(p.start()) + " " + timeline.blockTitle(p) + " (" + p.status() + "):");
+                logs.ofBlock(p.id(), 5).forEach(l -> lines.add("  " + logLine(l)));
+            }
+        }
+        if (!lines.isEmpty()) {
+            sb.append("# 블록 기록\n").append(String.join("\n", lines)).append("\n\n");
+        }
+    }
+
+    private String logLine(BlockLogs.Log l) {
+        return mdHm(l.at()) + " [" + l.type() + "/" + l.actor() + "] " + l.content();
     }
 
     /** snooze_request·block_missed·block_ended·wakeup(task_id 있음)이면 그 할 일. */
@@ -327,6 +407,7 @@ public class ContextBuilder {
                                 .append(item.get("prep_set_by") == null ? " (준비 시간 미정)"
                                         : "user".equals(item.get("prep_set_by")) ? " (준비 시간 사용자가 정함)" : "")
                                 .append("calendar".equals(item.get("source")) ? " (캘린더)" : "")
+                                .append(item.get("series_id") == null ? "" : " (반복 일정#" + item.get("series_id") + ")")
                                 .append(" ").append(item.get("status")).append('\n');
                     }
                     case "planned_block" -> sb.append("- ").append(range)
@@ -334,6 +415,8 @@ public class ContextBuilder {
                             .append(" 블록#").append(item.get("id")).append(' ').append(nz(item.get("title")))
                             .append(" (할일#").append(item.get("task_id")).append(") ").append(item.get("status"))
                             .append(item.get("work_product_id") == null ? "" : " (작업물#" + item.get("work_product_id") + " 첨부)")
+                            .append(item.get("linked_fixed_block_id") == null ? ""
+                                    : " (→ 고정 블록#" + item.get("linked_fixed_block_id") + " 준비)")
                             .append('\n');
                     case "quiet" -> sb.append("- ").append(range).append(" 방해금지\n");
 

@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import com.seobin.phonedrop.assistant.ApiException;
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.BlockLogs;
 import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.InterventionService;
 import com.seobin.phonedrop.assistant.Jobs;
@@ -52,6 +53,8 @@ public class Tools {
         public Long interventionId;
         /** 이 turn 에서 만들거나 바꾼 목표·할 일·블록의 목표(turn 끝 목표 검사, v3.1 §3.4-1). */
         public final Set<Long> touchedGoals = new LinkedHashSet<>();
+        /** v3.2 P1.2: turn 끝에 보낼 '저장됨' 줄(마감·고정 일정 변경). */
+        public final List<String> savedLines = new ArrayList<>();
 
         public Context(long turnId, String trigger, boolean bypassPermissions) {
             this.turnId = turnId;
@@ -79,13 +82,16 @@ public class Tools {
     private final FixedBlockService fixedBlocks;
     private final GoalService goals;
     private final GoalCoverage coverage;
+    private final SeriesService series;
+    private final MemoService memos;
+    private final BlockLogs logs;
     private final JsonNode definitions;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
                  InterventionService interventions, PlanService plan, PushService push, Jobs jobs, Facts facts,
                  ProactiveService proactive, FixedBlockService fixedBlocks, GoalService goals,
-                 GoalCoverage coverage) {
+                 GoalCoverage coverage, SeriesService series, MemoService memos, BlockLogs logs) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -105,6 +111,9 @@ public class Tools {
         this.fixedBlocks = fixedBlocks;
         this.goals = goals;
         this.coverage = coverage;
+        this.series = series;
+        this.memos = memos;
+        this.logs = logs;
         try (InputStream in = new ClassPathResource("assistant/agent/tools.json").getInputStream()) {
             this.definitions = Json.parse(new String(in.readAllBytes(), StandardCharsets.UTF_8));
         } catch (IOException e) {
@@ -153,6 +162,10 @@ public class Tools {
                 case "create_work_product" -> createWorkProduct(input);
                 case "attach_work_product" -> attachWorkProduct(ctx, input);
                 case "get_work_products" -> getWorkProducts(input);
+                case "upsert_fixed_series" -> upsertFixedSeries(ctx, input);
+                case "append_fixed_memo" -> appendFixedMemo(input);
+                case "add_block_log" -> addBlockLog(input);
+                case "get_block_history" -> getBlockHistory(input);
                 default -> error("알 수 없는 도구입니다: " + name);
             };
         } catch (ApiException | IllegalArgumentException e) {
@@ -189,12 +202,17 @@ public class Tools {
 
     private String autoConfirmText(String kind, JsonNode args) {
         return switch (kind) {
-            case "fixed_change" -> args.hasNonNull("block_id")
+            case "fixed_change" -> args.hasNonNull("freq") || args.hasNonNull("start_time")
+                    ? "반복 일정 '" + args.path("title").asString("") + "'(" + args.path("freq").asString("")
+                    + " " + args.path("start_time").asString("") + ")을 " + (args.hasNonNull("id") ? "바꿀까요?" : "만들까요?")
+                    : args.hasNonNull("block_id")
                     ? "고정 블록#" + args.get("block_id").asLong() + "을 " + describeMove(args) + "(으)로 옮길까요?"
                     : args.hasNonNull("id")
                     ? "고정 블록#" + args.get("id").asLong() + " 시각을 " + describeRange(args) + "(으)로 바꿀까요?"
                     : "'" + args.path("title").asString("") + "'(" + describeRange(args) + ")을 시간표에 넣을까요?";
-            case "fixed_cancel" -> "고정 블록#" + args.path("id").asLong() + "을 취소할까요?";
+            case "fixed_cancel" -> "fixed_series".equals(args.path("entity").asString(""))
+                    ? "반복 일정#" + args.path("id").asLong() + "을 취소할까요?"
+                    : "고정 블록#" + args.path("id").asLong() + "을 취소할까요?";
             case "goal_cancel" -> "목표#" + args.path("id").asLong() + "을 취소할까요?";
             default -> "목표#" + args.path("id").asLong() + "의 마감·상태를 바꿀까요?";
         };
@@ -316,6 +334,7 @@ public class Tools {
                     text(in, "strategy_summary"), progress, optTime(in, "waiting_until"),
                     in.hasNonNull("waiting_reason") ? text(in, "waiting_reason") : null, in.path("priority").asInt(3));
             changes.record(ctx.turnId, "goal", id, null, changes.snapshot("goal", id));
+            savedDeadline(ctx, title, optTime(in, "deadline"));
             coverage.scheduleWaitingCheck(id, optTime(in, "waiting_until"));
             ctx.touchedGoals.add(id);
             return okWithId(id);
@@ -346,6 +365,9 @@ public class Tools {
         if (in.hasNonNull("priority")) set.put("priority", in.get("priority").asInt());
         update("goals", id, set);
         changes.record(ctx.turnId, "goal", id, before, changes.snapshot("goal", id));
+        if (set.containsKey("deadline") && !java.util.Objects.equals(set.get("deadline"), g.deadline())) {
+            savedDeadline(ctx, g.title(), (Instant) set.get("deadline"));
+        }
         if (in.has("waiting_until")) {
             coverage.scheduleWaitingCheck(id, optTime(in, "waiting_until"));
         }
@@ -394,6 +416,7 @@ public class Tools {
             if (goalId != null) {
                 ctx.touchedGoals.add(goalId);
             }
+            savedDeadline(ctx, title, optTime(in, "deadline"));
             return okWithId(id);
         }
         long id = in.get("id").asLong();
@@ -454,6 +477,9 @@ public class Tools {
             }
         }
         changes.record(ctx.turnId, "task", id, before, changes.snapshot("task", id));
+        if (set.containsKey("deadline") && !java.util.Objects.equals(set.get("deadline"), t.deadline())) {
+            savedDeadline(ctx, set.containsKey("title") ? (String) set.get("title") : t.title(), (Instant) set.get("deadline"));
+        }
         if (!cancelled.isEmpty()) {
             plan.bumpAndSync();
         }
@@ -465,9 +491,16 @@ public class Tools {
     }
 
     private ObjectNode upsertFixedBlock(Context ctx, JsonNode in) {
+        Store.Block before = in.hasNonNull("id") ? store.block(in.get("id").asLong()).orElse(null) : null;
         FixedBlockService.Result r = fixedBlocks.upsert(in, ctx.turnId);
         if (!r.ok()) {
             return error(r.error());
+        }
+        Store.Block after = store.block(r.id()).orElseThrow();
+        if (before == null || !before.start().equals(after.start()) || !before.end().equals(after.end())
+                || !before.title().equals(after.title())) {
+            ctx.savedLines.add("저장됨: 고정 · " + time.dayText(after.start()) + " " + after.title()
+                    + (after.seriesId() != null ? " (이 날만)" : ""));
         }
         store.block(r.id()).flatMap(coverage::goalOf).ifPresent(ctx.touchedGoals::add);
         ObjectNode out = okWithId(r.id());
@@ -545,16 +578,34 @@ public class Tools {
             }
             case "fixed_block" -> {
                 Store.Block b = store.block(id).orElse(null);
-                if (b != null) coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+                if (b == null || !b.fixed()) return error("고정 블록#" + id + "이 없습니다");
+                coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+                List<Long> linked = fixedBlocks.linkedFuture(id);
                 FixedBlockService.Result r = fixedBlocks.cancel(id, ctx.turnId);
                 if (!r.ok()) return error(r.error());
+                ctx.savedLines.add("저장됨: 고정 삭제 · " + time.dayText(b.start()) + " " + b.title()
+                        + (b.seriesId() != null ? " (이 날만)" : ""));
+                cancelledBlocks.addAll(linked);
+            }
+            case "fixed_series" -> {
+                SeriesService.Series sr = series.series(id).orElse(null);
+                if (sr == null) return error("반복 일정#" + id + "이 없습니다");
+                String scope = in.path("scope").asString("all");
+                java.time.LocalDate from = in.hasNonNull("from_date") ? java.time.LocalDate.parse(in.get("from_date").asString()) : null;
+                SeriesService.Result r = series.cancel(id, scope, from, ctx.turnId);
+                if (!r.ok()) return error(r.error());
+                ctx.savedLines.add("저장됨: 반복 삭제 · " + SeriesService.describe(sr) + " " + sr.title()
+                        + ("following".equals(scope) ? " (" + (from == null ? "오늘" : from.toString()) + "부터)" : ""));
+                ObjectNode out = okWithId(id);
+                if (r.note() != null) out.put("note", r.note());
+                return out;
             }
             case "note" -> {
                 if (changes.snapshot("note", id) == null) return error("메모#" + id + "이 없습니다");
                 setStatus(ctx, "note", "notes", id, "dismissed");
             }
             default -> {
-                return error("entity 는 goal·task·fixed_block·note 중 하나입니다");
+                return error("entity 는 goal·task·fixed_block·fixed_series·note 중 하나입니다");
             }
         }
         if (!cancelledBlocks.isEmpty()) {
@@ -584,6 +635,7 @@ public class Tools {
         store.setBlockStatus(b.id(), "cancelled");
         interventions.cancelBlockJobs(b.id());
         changes.record(ctx.turnId, "block", b.id(), before, changes.snapshot("block", b.id()));
+        logs.add(b.id(), "note", "assistant", "비서가 취소");
     }
 
     private void setStatus(Context ctx, String entity, String table, long id, String status) {
@@ -631,7 +683,7 @@ public class Tools {
                 .toList();
         List<Store.Block> keep = active.stream().filter(b -> !replaced.contains(b)).toList();
 
-        record Planned(long taskId, Instant start, Instant end, String screenText) {
+        record Planned(long taskId, Instant start, Instant end, String screenText, Long linkedFixedBlockId) {
         }
         List<Planned> planned = new ArrayList<>();
         for (JsonNode b : in.path("blocks")) {
@@ -639,10 +691,12 @@ public class Tools {
                 return error("set_schedule 의 blocks 항목에는 task_id 가 필요합니다(고정 블록은 upsert_fixed_block)");
             }
             planned.add(new Planned(b.path("task_id").asLong(), TimeUtil.parse(b.path("start").asString(null)),
-                    TimeUtil.parse(b.path("end").asString(null)), b.path("screen_text").asString("").trim()));
+                    TimeUtil.parse(b.path("end").asString(null)), b.path("screen_text").asString("").trim(),
+                    b.hasNonNull("linked_fixed_block_id") ? b.get("linked_fixed_block_id").asLong() : null));
         }
         List<String> violations = validator.validateBlocks(
-                planned.stream().map(p -> new Validator.NewBlock(p.taskId(), p.start(), p.end())).toList(),
+                planned.stream().map(p -> new Validator.NewBlock(p.taskId(), p.start(), p.end(), p.linkedFixedBlockId()))
+                        .toList(),
                 keep, clock.now());
         if (!violations.isEmpty()) {
             ObjectNode r = Json.object();
@@ -661,9 +715,14 @@ public class Tools {
             Store.Task t = store.task(p.taskId()).orElseThrow();
             String screen = p.screenText().isEmpty() ? SCREEN_PREFIX + t.firstAction() : p.screenText();
             long id = db.insert("""
-                            INSERT INTO blocks(kind, task_id, title, goal_id, start_at, end_at, screen_text)
-                            VALUES ('planned', ?, ?, ?, ?, ?, ?)""",
-                    p.taskId(), t.title(), t.goalId(), p.start(), p.end(), screen);
+                            INSERT INTO blocks(kind, task_id, title, goal_id, start_at, end_at, screen_text, linked_fixed_block_id)
+                            VALUES ('planned', ?, ?, ?, ?, ?, ?, ?)""",
+                    p.taskId(), t.title(), t.goalId(), p.start(), p.end(), screen, p.linkedFixedBlockId());
+            logs.add(id, "created", "assistant", "비서가 할일#" + p.taskId() + "로 생성"
+                    + (p.linkedFixedBlockId() == null ? "" : " (고정 일정#" + p.linkedFixedBlockId() + " 준비)"));
+            if (p.linkedFixedBlockId() != null) {
+                logs.add(p.linkedFixedBlockId(), "linked_created", "assistant", "준비 블록#" + id + " 연결됨");
+            }
             if (t.goalId() != null) {
                 ctx.touchedGoals.add(t.goalId());
             }
@@ -734,6 +793,12 @@ public class Tools {
                 start, end, id);
         interventions.scheduleBlockJobs(store.block(id).orElseThrow());
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        ObjectNode data = Json.object();
+        data.put("from_start", time.iso(b.start()));
+        data.put("to_start", time.iso(start));
+        data.put("reason", in.path("reason").asString(""));
+        logs.add(id, "moved", "assistant", time.hm(b.start()) + "→" + time.hm(start)
+                + ("intervention_talk".equals(ctx.trigger) ? " (사용자 미루기 합의)" : " (비서)"), data);
         plan.bumpAndSync();
         return okWithId(id);
     }
@@ -878,6 +943,8 @@ public class Tools {
         }
         jobs.schedule(InterventionService.BLOCK_END, id, end, null);
         changes.record(ctx.turnId, "block", id, null, changes.snapshot("block", id));
+        logs.add(id, "created", "assistant", "비서가 할일#" + taskId + "로 지금 시작");
+        logs.add(id, "started", "user", "시작");
         plan.bumpAndSync();
         ObjectNode r = okWithId(id);
         r.put("block_id", id);
@@ -934,6 +1001,7 @@ public class Tools {
         jobs.cancelForTarget(InterventionService.BLOCK_END, id);
         jobs.schedule(InterventionService.BLOCK_END, id, newEnd, null);
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        logs.add(id, "moved", "assistant", "끝 " + time.hm(b.end()) + "→" + time.hm(newEnd) + " (연장)");
         plan.bumpAndSync();
         return okWithId(id);
     }
@@ -953,6 +1021,8 @@ public class Tools {
                 outcome, clock.now(), id);
         interventions.cancelBlockJobs(id);
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        logs.add(id, "ended", "assistant", "done".equals(outcome) ? "완료"
+                : "부분 완료" + (in.hasNonNull("remaining_minutes") ? "(남은 " + in.get("remaining_minutes").asInt() + "분)" : ""));
         coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
         if (in.hasNonNull("remaining_minutes") && b.taskId() != null) {
             JsonNode taskBefore = changes.snapshot("task", b.taskId());
@@ -1084,6 +1154,76 @@ public class Tools {
         r.put("ok", true);
         r.set("work_products", Json.MAPPER.valueToTree(rows));
         return r;
+    }
+
+    // ------------------------------------------------------------------ v3.2: 반복 일정·메모·블록 기록
+
+    private ObjectNode upsertFixedSeries(Context ctx, JsonNode in) {
+        SeriesService.Result r = series.upsert(in, ctx.turnId);
+        if (!r.ok()) {
+            return error(r.error());
+        }
+        SeriesService.Series s = series.series(r.id()).orElseThrow();
+        if (s.goalId() != null) {
+            ctx.touchedGoals.add(s.goalId());
+        }
+        ctx.savedLines.add("저장됨: 반복 · " + SeriesService.describe(s) + " " + s.title());
+        ObjectNode out = okWithId(r.id());
+        out.put("rule", SeriesService.describe(s));
+        out.set("created_blocks", Json.MAPPER.valueToTree(r.created()));
+        return out;
+    }
+
+    private ObjectNode appendFixedMemo(JsonNode in) {
+        Long blockId = in.hasNonNull("block_id") ? in.get("block_id").asLong() : null;
+        Long seriesId = in.hasNonNull("series_id") ? in.get("series_id").asLong() : null;
+        long id = memos.append(blockId, seriesId, in.path("text").asString(""));
+        return okWithId(id);
+    }
+
+    private ObjectNode addBlockLog(JsonNode in) {
+        long blockId = in.path("block_id").asLong(-1);
+        if (store.block(blockId).isEmpty()) {
+            return error("블록#" + blockId + "이 없습니다");
+        }
+        String type = in.path("type").asString("");
+        if (!BlockLogs.ASSISTANT_TYPES.contains(type)) {
+            return error("type 은 talk_summary·progress·snooze_reason·notice·note 중 하나입니다");
+        }
+        String content = in.path("content").asString("").trim();
+        if (content.isEmpty()) {
+            return error("content 가 비었습니다");
+        }
+        if (content.length() > BlockLogs.ASSISTANT_MAX_CHARS) {
+            return error("content 는 " + BlockLogs.ASSISTANT_MAX_CHARS + "자 이하여야 합니다(지금 " + content.length()
+                    + "자). 줄여서 다시 남기세요");
+        }
+        return okWithId(logs.add(blockId, type, "assistant", content));
+    }
+
+    private ObjectNode getBlockHistory(JsonNode in) {
+        int limit = Math.min(Math.max(in.path("limit").asInt(20), 1), 100);
+        List<BlockLogs.Log> rows;
+        if (in.hasNonNull("block_id")) {
+            rows = logs.ofBlock(in.get("block_id").asLong(), limit);
+        } else if (in.hasNonNull("goal_id")) {
+            rows = logs.ofGoal(in.get("goal_id").asLong(), limit);
+        } else if (in.hasNonNull("fixed_block_id")) {
+            rows = logs.ofFixed(in.get("fixed_block_id").asLong(), limit);
+        } else {
+            return error("block_id·goal_id·fixed_block_id 중 하나가 필요합니다");
+        }
+        ObjectNode r = Json.object();
+        r.put("ok", true);
+        r.set("logs", Json.MAPPER.valueToTree(rows.stream().map(l -> BlockLogs.toMap(l, time)).toList()));
+        return r;
+    }
+
+    /** v3.2 P1.2: 마감이 생기거나 바뀌면 '저장됨' 줄. */
+    private void savedDeadline(Context ctx, String title, Instant deadline) {
+        if (deadline != null) {
+            ctx.savedLines.add("저장됨: " + title + " · 마감 " + time.dayText(deadline));
+        }
     }
 
     // ------------------------------------------------------------------ 도우미

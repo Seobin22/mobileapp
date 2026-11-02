@@ -18,6 +18,8 @@ public class TurnQueue {
     public static final int PRIORITY_USER = 10;
     public static final int PRIORITY_DEFAULT = 5;
     public static final int PRIORITY_PULSE = 1;
+    /** v3.2 P3.2: 대기열에 있는 turn 의 진행 문구 */
+    public static final String STAGE_QUEUED_TEXT = "앞의 작업을 마치는 중…";
 
     private final AssistantDb db;
     private final AssistantClock clock;
@@ -36,8 +38,10 @@ public class TurnQueue {
 
     /** at 에 실행할 turn. */
     public long enqueueAt(String trigger, JsonNode ref, int priority, Instant at) {
-        long turnId = db.insert("INSERT INTO turns(trigger, trigger_ref, status, started_at) VALUES (?, ?, 'queued', ?)",
-                trigger, Json.write(ref), clock.now());
+        long turnId = db.insert("""
+                        INSERT INTO turns(trigger, trigger_ref, status, started_at, queued_at, stage, stage_text, updated_at)
+                        VALUES (?, ?, 'queued', ?, ?, 'queued', ?, ?)""",
+                trigger, Json.write(ref), clock.now(), clock.now(), STAGE_QUEUED_TEXT, clock.now());
         jobs.schedule(TURN_JOB, turnId, at, null, Json.object(), priority);
         return turnId;
     }

@@ -36,6 +36,8 @@ data class InterventionEntity(
     /** 목표 이름표·색(v3.1 §3.5). 목표 없는 블록은 빈 값. */
     val goalLabel: String = "",
     val goalColor: String = "",
+    /** v3.2 §3.3: 고정 블록 메모(화면에 그대로 보여준다). */
+    val memo: String = "",
 )
 
 @Entity(tableName = "pending_actions")
@@ -97,7 +99,7 @@ interface AssistantDao {
 
 @Database(
     entities = [InterventionEntity::class, PendingAction::class, PlanSnapshot::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

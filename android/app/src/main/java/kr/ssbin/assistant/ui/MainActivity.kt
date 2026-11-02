@@ -114,15 +114,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 채팅(메인) · 시간표 · 목표 세 탭(v3.1 §4). 시간표의 [+] 는 고정 블록 만들기. */
+/** 채팅(메인) · 달력 · 목표 세 탭(v3.2 §8.1, 시간표 탭을 달력으로 바꿈). 달력의 [+]·길게 누르기는 고정 일정 만들기. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableIntStateOf(0) }
-    var adding by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<TimelineItem?>(null) }
     var localTick by remember { mutableIntStateOf(0) }
     val allGranted = remember(tick) { Capabilities.allGranted(context) }
     LaunchedEffect(openChat) { if (openChat > 0) tab = 0 }
@@ -130,7 +128,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "시간표"; else -> "목표" }) },
+                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; else -> "목표" }) },
                 actions = {
                     TextButton(onClick = { navigate(Screen.Permissions) }) { Text("권한") }
                     TextButton(onClick = { navigate(Screen.Settings) }) { Text("설정") }
@@ -140,7 +138,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("💬") }, label = { Text("채팅") })
-                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("📅") }, label = { Text("시간표") })
+                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("📅") }, label = { Text("달력") })
                 NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎯") }, label = { Text("목표") })
             }
         },
@@ -156,20 +154,9 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
             }
             when (tab) {
                 0 -> ChatScreen(tick = tick + localTick)
-                1 -> TimelineScreen(
-                    tick = tick + localTick,
-                    onAdd = { adding = true },
-                    onEditFixed = { item -> editing = item },
-                )
+                1 -> CalendarScreen(tick = tick + localTick)
                 else -> GoalsScreen(tick = tick + localTick)
             }
         }
-    }
-
-    if (adding) {
-        FixedBlockDialog(initial = null, onDismiss = { adding = false }, onSaved = { adding = false; localTick++ })
-    }
-    editing?.let { item ->
-        FixedBlockDialog(initial = item, onDismiss = { editing = null }, onSaved = { editing = null; localTick++ })
     }
 }

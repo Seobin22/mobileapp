@@ -18,6 +18,7 @@ import com.seobin.phonedrop.assistant.Json;
 import com.seobin.phonedrop.assistant.Tx;
 import com.seobin.phonedrop.assistant.agent.FixedBlockService;
 import com.seobin.phonedrop.assistant.agent.GoalService;
+import com.seobin.phonedrop.assistant.agent.MemoService;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -33,11 +34,13 @@ public class GoalController {
     private final Tx tx;
     private final GoalService goals;
     private final FixedBlockService fixedBlocks;
+    private final MemoService memos;
 
-    public GoalController(Tx tx, GoalService goals, FixedBlockService fixedBlocks) {
+    public GoalController(Tx tx, GoalService goals, FixedBlockService fixedBlocks, MemoService memos) {
         this.tx = tx;
         this.goals = goals;
         this.fixedBlocks = fixedBlocks;
+        this.memos = memos;
     }
 
     @GetMapping("/goals")
@@ -83,8 +86,17 @@ public class GoalController {
     public Map<String, Object> patchFixed(@PathVariable long id, @RequestBody JsonNode body) {
         ObjectNode in = body.isObject() ? ((ObjectNode) body).deepCopy() : Json.object();
         in.put("id", id);
+        // v3.2 §3: 메모만 바꾸면 블록 시각·상태와 상관없이 메모만 저장한다(비서는 부르지 않는다, 곧 시작이면 예외).
+        boolean memoOnly = in.has("memo") && in.size() == 2;
         return tx.run(() -> {
+            if (memoOnly) {
+                memos.setBlockMemo(id, in.path("memo").asString(""));
+                return Map.<String, Object>of("ok", true, "id", id);
+            }
             FixedBlockService.Result r = fixedBlocks.upsert(in, null);
+            if (r.ok() && in.has("memo")) {
+                memos.setBlockMemo(id, in.path("memo").asString(""));
+            }
             fixedBlocks.notifyDisplaced(r);
             return fixedBlocks.toResponse(r);
         });

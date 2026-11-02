@@ -213,7 +213,7 @@
   },
   {
     "name": "upsert_fixed_block",
-    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes(출발·준비 시간, 개입이 start − lead 에 시작)와 buffer_after_min(끝난 뒤 이동·회복)은 기본값이 없다: 장소·거리·준비물·일의 성격을 보고 네가 정한다(집에서 바로 하는 일이면 0). 사용자가 준비 시간을 직접 말했으면 prep_from_user=true. 사용자가 정한 준비 시간은 바꿀 수 없다(거절된다). 네가 정한 준비 시간(prep_set_by=assistant)은 새 정보가 생기면 id 와 두 값만 보내 확인 카드 없이 다시 정할 수 있다. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 시작·끝 시각 변경과 생성은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다.",
+    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes(출발·준비 시간, 개입이 start − lead 에 시작)와 buffer_after_min(끝난 뒤 이동·회복)은 기본값이 없다: 장소·거리·준비물·일의 성격을 보고 네가 정한다(집에서 바로 하는 일이면 0). 사용자가 준비 시간을 직접 말했으면 prep_from_user=true. 사용자가 정한 준비 시간은 바꿀 수 없다(거절된다). 네가 정한 준비 시간(prep_set_by=assistant)은 새 정보가 생기면 id 와 두 값만 보내 확인 카드 없이 다시 정할 수 있다. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 시작·끝 시각 변경과 생성은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 반복 일정의 회차 블록을 고치면 그 날만 바뀐다('이 날만'). 메모는 사용자만 쓴다(채팅으로 요청하면 append_fixed_memo).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -297,7 +297,7 @@
   },
   {
     "name": "cancel",
-    "description": "목표·할 일·고정 블록·메모를 취소한다. 할 일·목표를 취소하면 연결된 미래 계획 블록도 취소된다. 목표를 취소해도 연결된 고정 블록은 남고 목표 연결만 풀린다.",
+    "description": "목표·할 일·고정 블록·반복 일정·메모를 취소한다. 할 일·목표를 취소하면 연결된 미래 계획 블록도 취소된다. 목표를 취소해도 연결된 고정 블록은 남고 목표 연결만 풀린다. 고정 블록을 취소하면 연결된 준비 블록과 그 할 일도 취소된다. 반복 일정의 한 회차만 없애려면 그 회차 블록을 fixed_block 으로 취소한다('이 날만'). 반복 일정 전체는 fixed_series(scope all), 어느 날부터 끝내려면 scope following + from_date.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -307,6 +307,7 @@
             "goal",
             "task",
             "fixed_block",
+            "fixed_series",
             "note"
           ]
         },
@@ -316,6 +317,18 @@
         "confirm_text": {
           "type": "string",
           "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "all",
+            "following"
+          ],
+          "description": "fixed_series 만: all=전체, following=from_date 부터"
+        },
+        "from_date": {
+          "type": "string",
+          "description": "YYYY-MM-DD (fixed_series scope=following)"
         }
       },
       "required": [
@@ -349,7 +362,7 @@
   },
   {
     "name": "set_schedule",
-    "description": "[from, to) 구간에서 시작하는 계획(planned) 블록을 모두 이 blocks 로 바꾼다. 고정 블록은 건드리지 않으며 그대로 유지된다(고정 블록은 upsert_fixed_block). blocks 항목에는 task_id 가 필요하고 목표는 할 일에서 자동으로 채운다. 검증에 실패하면 violations 를 돌려주고 아무것도 바꾸지 않는다.",
+    "description": "[from, to) 구간에서 시작하는 계획(planned) 블록을 모두 이 blocks 로 바꾼다. 고정 블록은 건드리지 않으며 그대로 유지된다(고정 블록은 upsert_fixed_block). blocks 항목에는 task_id 가 필요하고 목표는 할 일에서 자동으로 채운다. 검증에 실패하면 violations 를 돌려주고 아무것도 바꾸지 않는다. 마감이 있는 할 일의 블록은 마감 전에 끝나야 한다. 고정 일정을 위한 준비 블록은 linked_fixed_block_id 를 넣는다(그 고정 일정의 출발·준비 시작 전에 끝나야 한다).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -376,6 +389,10 @@
               "screen_text": {
                 "type": "string",
                 "description": "시작 화면 한 문장. 비우면 '지금 할 건 하나예요. {first_action}'"
+              },
+              "linked_fixed_block_id": {
+                "type": "integer",
+                "description": "이 블록이 준비하는 고정 블록 id(예: KTX 예매 → 결혼식)"
               }
             },
             "required": [
@@ -671,6 +688,170 @@
       "required": [
         "task_id"
       ]
+    }
+  },
+  {
+    "name": "upsert_fixed_series",
+    "description": "반복 고정 일정(매일·매주·격주·매월)을 만들거나 고친다. \"매주 화목 저녁 7시 헬스\" → freq=weekly, by_days=[2,4], start_time=\"19:00\". 앞으로 14일치 회차가 고정 블록으로 만들어진다(다른 고정 일정과 겹치는 날은 빠지고 사용자에게 알림). 고칠 때 scope=all(전체, 기본) 또는 following(from_date 부터, 그 전은 그대로). 한 회차만 바꾸려면 그 회차 블록에 upsert_fixed_block. 권한은 고정 블록과 같다(사용자가 방금 말한 경우가 아니면 확인 카드). lead_minutes·buffer_after_min 규칙은 upsert_fixed_block 과 같다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "freq": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly"
+          ]
+        },
+        "interval": {
+          "type": "integer",
+          "description": "1=매번, 2=격주(격월)"
+        },
+        "by_days": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "weekly 요일: 월=1 … 일=7"
+        },
+        "month_day": {
+          "type": "integer",
+          "description": "monthly 날짜 1~31(없는 달은 마지막 날)"
+        },
+        "start_time": {
+          "type": "string",
+          "description": "HH:mm"
+        },
+        "duration_min": {
+          "type": "integer"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "YYYY-MM-DD, 비우면 오늘"
+        },
+        "until_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "YYYY-MM-DD, 없으면 계속"
+        },
+        "lead_minutes": {
+          "type": "integer"
+        },
+        "buffer_after_min": {
+          "type": "integer"
+        },
+        "prep_from_user": {
+          "type": "boolean"
+        },
+        "location": {
+          "type": "string"
+        },
+        "goal_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "first_action": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "all",
+            "following"
+          ]
+        },
+        "from_date": {
+          "type": "string",
+          "description": "scope=following 일 때 YYYY-MM-DD"
+        },
+        "confirm_text": {
+          "type": "string",
+          "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        }
+      }
+    }
+  },
+  {
+    "name": "append_fixed_memo",
+    "description": "사용자가 채팅으로 \"치과 메모에 보험증 추가해 줘\"처럼 직접 요청했을 때만 고정 일정 메모 끝에 한 줄을 덧붙인다. 지우거나 고치지 못한다. 반복 일정의 '매번' 메모는 series_id, 한 회차('이번만')나 단발 일정은 block_id.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "series_id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "add_block_log",
+    "description": "블록에 기록을 남긴다(200자 이내). 풀스크린 대화 요약(talk_summary), 진행 보고(progress, 예: \"3챕터까지, 도입부에서 막힘\"), 미룬 이유(snooze_reason), 사용자에게 미리 알린 것(notice, 고정 블록에), 그 밖의 판단(note). 답장과 같은 응답에서 함께 부른다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "talk_summary",
+            "progress",
+            "snooze_reason",
+            "notice",
+            "note"
+          ]
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "block_id",
+        "type",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "get_block_history",
+    "description": "블록 기록을 시간순으로 본다. block_id(그 블록), goal_id(그 목표 블록들), fixed_block_id(그 고정 일정과 연결 블록) 중 하나.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "goal_id": {
+          "type": "integer"
+        },
+        "fixed_block_id": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
     }
   }
 ]

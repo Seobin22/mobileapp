@@ -21,6 +21,7 @@ import com.seobin.phonedrop.assistant.Store;
 import com.seobin.phonedrop.assistant.Json;
 import com.seobin.phonedrop.assistant.SettingsService;
 import com.seobin.phonedrop.assistant.Tx;
+import com.seobin.phonedrop.assistant.TurnQueue;
 import com.seobin.phonedrop.assistant.agent.llm.ConfiguredLlm;
 import com.seobin.phonedrop.assistant.agent.llm.LlmClient;
 
@@ -40,6 +41,7 @@ public class AgentRunner {
     static final String LLM_DOWN = "지금 처리가 안 돼요, 곧 다시 볼게요";
     /** 사용자에게 말하는 도구. 이것만 단독으로 부르면 turn 을 끝낸다. */
     static final Set<String> MESSAGE_TOOLS = Set.of("send_message", "ask_user");
+    static final String STAGE_THINKING = "생각하는 중…";
 
     private final Tx tx;
     private final AssistantDb db;
@@ -96,6 +98,25 @@ public class AgentRunner {
         }
     }
 
+    /** turn 하나의 집계(P0.2 turn 기록: 토큰·도구 이름·소요 시간). */
+    private static final class Stats {
+        final long started = System.nanoTime();
+        long llmNanos;
+        int rounds;
+        long inTokens;
+        long outTokens;
+        final long[] cache = {0, 0}; // 캐시 읽기, 캐시 쓰기
+        final List<String> toolNames = new ArrayList<>();
+
+        int toolCalls() {
+            return toolNames.size();
+        }
+
+        long elapsedMs() {
+            return (System.nanoTime() - started) / 1_000_000;
+        }
+    }
+
     /** @return ok | partial | failed | retry | skipped */
     String runTurn(long turnId, String trigger, JsonNode ref, int attempts) {
         // 풀스크린 대화도 사용자가 직접 한 말이다(답이 있어야 하고, 한도 초과 안내도 한다).
@@ -106,17 +127,18 @@ public class AgentRunner {
                 if (fromUser) {
                     chat.sendAssistant(OVER_LIMIT, "reply", "normal", null, null);
                 }
-                endTurn(turnId, "skipped", 0, 0, 0, "daily_turn_hard");
+                endTurn(turnId, "skipped", new Stats(), "daily_turn_hard");
             });
             return "skipped";
         }
         // v3 §2: pulse 를 실행하려는 순간 대기열에 다른 turn 이 있으면 pulse 는 건너뛴다.
         if ("pulse".equals(trigger) && tx.run(this::otherTurnsWaiting)) {
-            tx.exec(() -> endTurn(turnId, "skipped", 0, 0, 0, "other turn queued"));
+            tx.exec(() -> endTurn(turnId, "skipped", new Stats(), "other turn queued"));
             return "skipped";
         }
         tx.exec(() -> db.update("UPDATE turns SET status = 'running', started_at = ? WHERE id = ?",
                 clock.now(), turnId));
+        setStage(turnId, "thinking", STAGE_THINKING);
 
         String system = systemTemplate.replace("{persona}", settings.getString("persona"))
                 .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")));
@@ -130,29 +152,24 @@ public class AgentRunner {
         int maxCalls = settings.getInt("agent.max_tool_calls");
         int coverageRetries = settings.getInt("goal.coverage_retry");
         int coverageSent = 0;
-        long inTokens = 0;
-        long outTokens = 0;
-        long[] cache = {0, 0}; // 캐시 읽기, 캐시 쓰기
-        int toolCalls = 0;
+        Stats stats = new Stats();
         String lastText = "";
         String status = "partial";
-        // 속도 측정(로그): LLM 왕복 수, 부른 도구, LLM 대기 시간
-        long turnStarted = System.nanoTime();
-        long llmNanos = 0;
-        int rounds = 0;
-        List<String> toolNames = new ArrayList<>();
 
         try {
             LlmClient.Conversation conv = llm.start(system, tools.definitions(), userContent, webSearch);
             for (int i = 0; i < maxCalls; i++) {
+                if (i > 0) {
+                    setStage(turnId, "thinking", STAGE_THINKING);
+                }
                 long callStarted = System.nanoTime();
                 LlmClient.LlmResponse resp = conv.next();
-                llmNanos += System.nanoTime() - callStarted;
-                rounds++;
-                inTokens += resp.inputTokens();
-                outTokens += resp.outputTokens();
-                cache[0] += resp.cacheReadTokens();
-                cache[1] += resp.cacheWriteTokens();
+                stats.llmNanos += System.nanoTime() - callStarted;
+                stats.rounds++;
+                stats.inTokens += resp.inputTokens();
+                stats.outTokens += resp.outputTokens();
+                stats.cache[0] += resp.cacheReadTokens();
+                stats.cache[1] += resp.cacheWriteTokens();
                 lastText = resp.text() == null ? "" : resp.text();
                 if (resp.toolCalls().isEmpty()) {
                     // v3.1 §3.4-1: 이 turn 에서 손댄 목표에 블록이 없으면 turn 을 끝내지 않고 되돌려 보낸다.
@@ -165,75 +182,87 @@ public class AgentRunner {
                     status = "ok";
                     break;
                 }
+                setStage(turnId, "working", workingText(resp.toolCalls()));
                 List<LlmClient.ToolResult> results = new ArrayList<>();
-                boolean onlyMessages = true;
+                boolean messaged = false;
+                boolean onlyActions = true;
                 boolean allOk = true;
                 for (LlmClient.ToolCall call : resp.toolCalls()) {
                     LlmClient.ToolResult result = runTool(ctx, call);
                     results.add(result);
-                    toolCalls++;
-                    toolNames.add(call.name());
-                    onlyMessages &= MESSAGE_TOOLS.contains(call.name());
+                    stats.toolNames.add(call.name());
+                    messaged |= MESSAGE_TOOLS.contains(call.name());
+                    onlyActions &= !call.name().startsWith("get_");
                     allOk &= !result.isError();
                 }
-                // 말하는 도구만 단독으로 불러 성공했으면 여기서 끝낸다("더 할 일 없음"을 받으려는 LLM 왕복을 줄인다).
-                // 누락 목표가 있으면 평소처럼 결과를 돌려주고 다음 응답에서 목표 검사를 한다.
-                if (onlyMessages && allOk && tx.run(() -> missingMessage(ctx)) == null) {
-                    status = "ok";
-                    break;
+                // v3.2 P0.1: 답장(send_message·ask_user)을 보낸 응답이고 모두 성공했으면 여기서 끝낸다.
+                // 같은 응답의 기록·변경 도구도 이미 실행됐다. 조회 도구가 섞였으면 결과를 보고 이어가야 하므로 계속한다.
+                if (messaged && onlyActions && allOk) {
+                    String missing = coverageSent < coverageRetries ? tx.run(() -> missingMessage(ctx)) : null;
+                    if (missing == null) {
+                        status = "ok";
+                        break;
+                    }
+                    // v3.1 목표 블록 검사: 누락이면 turn 을 끝내지 않고 되돌려 보낸다(P0.2).
+                    coverageSent++;
+                    conv.addToolResults(results);
+                    conv.addUserText(missing);
+                    continue;
                 }
                 conv.addToolResults(results);
             }
         } catch (ConfiguredLlm.NotConfiguredException e) {
             log.warn("turn {} skipped: {}", turnId, e.getMessage());
-            final int calls = toolCalls;
             tx.exec(() -> {
                 if (fromUser) {
                     chat.sendAssistant("아직 AI 연결이 설정되지 않았어요(" + e.getMessage()
                             + "). 관리 화면에서 설정하면 바로 답할게요.", "reply", "normal", null, null);
                 }
-                endTurn(turnId, "failed", calls, 0, 0, e.getMessage());
+                endTurn(turnId, "failed", stats, e.getMessage());
             });
             return "failed";
         } catch (LlmClient.LlmException e) {
             log.warn("turn {} LLM failure (attempt {}): {}", turnId, attempts + 1, e.getMessage());
-            final int calls = toolCalls;
-            final long in = inTokens;
-            final long out = outTokens;
             boolean retry = fromUser && attempts + 1 < MAX_LLM_RETRIES;
             tx.exec(() -> {
                 if (fromUser && attempts == 0) {
                     chat.sendAssistant(LLM_DOWN, "reply", "normal", null, null);
                 }
-                endTurn(turnId, retry ? "queued" : "failed", calls, in, out, e.getMessage());
-                recordCache(turnId, cache);
+                endTurn(turnId, retry ? "queued" : "failed", stats, e.getMessage());
             });
             return retry ? "retry" : "failed";
         }
 
-        log.info("turn {} {} {}: rounds={} tools={} llm_ms={} total_ms={}", turnId, trigger, status, rounds,
-                String.join(",", toolNames), llmNanos / 1_000_000, (System.nanoTime() - turnStarted) / 1_000_000);
         final String finalText = lastText;
         final String finalStatus = status;
-        final int calls = toolCalls;
-        final long in = inTokens;
-        final long out = outTokens;
-        tx.exec(() -> {
-            // 텍스트로만 답하고 send_message 를 안 했으면 그 텍스트를 reply 로 보낸다.
-            // 풀스크린 대화(구 [미루기 요청] 포함)도 사용자가 말한 것이라 답이 있어야 한다.
-            boolean replyExpected = fromUser || "snooze_request".equals(trigger);
-            if (replyExpected && !ctx.sentReply && !finalText.isBlank()) {
-                chat.sendAssistant(finalText.trim(), "reply", "normal", null, null, false, ctx.interventionId);
-            }
-            // 되돌려 보내기를 다 써도 누락이면 turn 은 끝내고 30분 뒤 goal_needs_blocks (§3.4-1).
-            for (long goalId : ctx.touchedGoals) {
-                store.goal(goalId).filter(g -> coverage.isMissing(g, clock.now()))
-                        .ifPresent(g -> coverage.giveUpForNow(g.id(), turnId));
-            }
-            endTurn(turnId, finalStatus, calls, in, out, null);
-            recordCache(turnId, cache);
-        });
+        tx.exec(() -> finish(turnId, trigger, ctx, finalStatus, finalText, stats));
         return finalStatus;
+    }
+
+    /**
+     * 정상 종료 공통 마무리(v3.2 P0.2). 답장으로 일찍 끝난 turn 도, 텍스트로 끝난 turn 도 모두 여기를 지난다.
+     * 텍스트 답 보내기 → 목표 누락 정리 → '저장됨' 한 줄 → turn 기록(토큰·도구·시간) → 진행 상태 done.
+     * (목표 누락 되돌려 보내기는 turn 을 끝내지 않는 경로라 루프 안에서 한다.)
+     */
+    private void finish(long turnId, String trigger, Tools.Context ctx, String status, String text, Stats stats) {
+        boolean fromUser = Permissions.fromUser(trigger);
+        // 텍스트로만 답하고 send_message 를 안 했으면 그 텍스트를 reply 로 보낸다.
+        // 풀스크린 대화(구 [미루기 요청] 포함)도 사용자가 말한 것이라 답이 있어야 한다.
+        boolean replyExpected = fromUser || "snooze_request".equals(trigger);
+        if (replyExpected && !ctx.sentReply && !text.isBlank()) {
+            chat.sendAssistant(text.trim(), "reply", "normal", null, null, false, ctx.interventionId);
+        }
+        // 되돌려 보내기를 다 써도 누락이면 turn 은 끝내고 30분 뒤 goal_needs_blocks (§3.4-1).
+        for (long goalId : ctx.touchedGoals) {
+            store.goal(goalId).filter(g -> coverage.isMissing(g, clock.now()))
+                    .ifPresent(g -> coverage.giveUpForNow(g.id(), turnId));
+        }
+        // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
+        if (fromUser && !ctx.savedLines.isEmpty()) {
+            chat.sendAssistant(String.join("\n", ctx.savedLines), "system", "normal", null, null, true,
+                    ctx.interventionId);
+        }
+        endTurn(turnId, status, stats, null);
     }
 
     /** 이 turn 에서 손댄 목표 중 누락 목표가 있으면 LLM 에게 돌려보낼 문장, 없으면 null. */
@@ -268,16 +297,50 @@ public class AgentRunner {
                 .param(AssistantDb.ts(clock.now())).query(Integer.class).single() > 0;
     }
 
-    private void recordCache(long turnId, long[] cache) {
-        db.update("UPDATE turns SET cache_read_tokens = ?, cache_write_tokens = ? WHERE id = ?",
-                (int) cache[0], (int) cache[1], turnId);
+    /** 진행 상태(v3.2 P3.2). 문구는 코드가 정한다. 별도 트랜잭션이라 앱이 바로 볼 수 있다. */
+    private void setStage(long turnId, String stage, String text) {
+        tx.exec(() -> db.update("UPDATE turns SET stage = ?, stage_text = ?, updated_at = ? WHERE id = ?",
+                stage, text, clock.now(), turnId));
     }
 
-    private void endTurn(long turnId, String status, int toolCalls, long in, long out, String error) {
+    /** 실행 중인 도구의 대표 문구. 여러 개면 일정 관련을 먼저 고른다. */
+    public static String workingText(List<LlmClient.ToolCall> calls) {
+        List<String> names = calls.stream().map(LlmClient.ToolCall::name).toList();
+        if (names.stream().anyMatch(n -> n.equals("set_schedule") || n.equals("move_block"))) {
+            return "일정 짜는 중…";
+        }
+        if (names.stream().anyMatch(n -> n.startsWith("upsert_fixed"))) {
+            return "고정 일정 저장하는 중…";
+        }
+        if (names.contains("get_timeline")) {
+            return "일정 확인하는 중…";
+        }
+        if (names.stream().anyMatch(n -> n.equals("upsert_task") || n.equals("upsert_goal"))) {
+            return "할 일 정리하는 중…";
+        }
+        if (names.contains("add_block_log")) {
+            return "기록하는 중…";
+        }
+        if (names.stream().allMatch(MESSAGE_TOOLS::contains)) {
+            return "답장 쓰는 중…";
+        }
+        return "처리하는 중…";
+    }
+
+    private void endTurn(long turnId, String status, Stats stats, String error) {
+        boolean queued = "queued".equals(status);
+        String stage = queued ? "queued" : "failed".equals(status) ? "failed" : "done";
+        String names = String.join(",", stats.toolNames);
+        log.info("turn {} {}: rounds={} tools={} llm_ms={} total_ms={}", turnId, status, stats.rounds, names,
+                stats.llmNanos / 1_000_000, stats.elapsedMs());
         db.update("""
                         UPDATE turns SET status = ?, tool_calls = ?, input_tokens = ?, output_tokens = ?, ended_at = ?,
-                        error = ? WHERE id = ?""",
-                status, toolCalls, (int) in, (int) out, "queued".equals(status) ? null : clock.now(),
-                error == null ? null : error.substring(0, Math.min(error.length(), 1900)), turnId);
+                        error = ?, cache_read_tokens = ?, cache_write_tokens = ?, tool_names = ?, duration_ms = ?,
+                        stage = ?, stage_text = ?, updated_at = ? WHERE id = ?""",
+                status, stats.toolCalls(), (int) stats.inTokens, (int) stats.outTokens, queued ? null : clock.now(),
+                error == null ? null : error.substring(0, Math.min(error.length(), 1900)),
+                (int) stats.cache[0], (int) stats.cache[1],
+                names.length() > 1900 ? names.substring(0, 1900) : names, (int) stats.elapsedMs(),
+                stage, queued ? TurnQueue.STAGE_QUEUED_TEXT : null, clock.now(), turnId);
     }
 }

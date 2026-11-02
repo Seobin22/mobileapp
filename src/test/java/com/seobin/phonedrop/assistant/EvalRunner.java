@@ -45,6 +45,9 @@ import tools.jackson.databind.node.ObjectNode;
  *   trigger: {type: intervention_talk, block: 순번, text: "왜 지금 해야 돼?"} 풀스크린 대화(그 블록의 개입에 말함)
  *   setup.fixed_blocks: [{title, start, end, lead?, buffer_after?, goal?}] 고정 블록(일정 대신)
  *   setup.goals[].label, setup.blocks[] 는 계획 블록(할 일의 목표·제목을 따름)
+ * v3.2 yaml 확장:
+ *   setup.fixed_blocks[].memo(사용자 메모), setup.blocks[].actual_start(제시간 시작 등 '지금 상태' 재현)
+ *   결과 상태에 블록 메모·연결·반복 일정·블록 기록이 들어간다.
  */
 @EnabledIfSystemProperty(named = "eval", matches = "true")
 @SpringBootTest(properties = "assistant.worker.enabled=false")
@@ -87,7 +90,7 @@ class EvalRunner {
             throw new IllegalStateException("ANTHROPIC_API_KEY 환경변수가 필요합니다");
         }
         AnthropicLlm judge = new AnthropicLlm(key, llm.model());
-        String dirs = System.getProperty("eval.dirs", "v2,v3,v3_1");
+        String dirs = System.getProperty("eval.dirs", "v2,v3,v3_1,v3_2");
         List<Path> cases = new ArrayList<>();
         for (String dir : dirs.split(",")) {
             try (Stream<Path> files = Files.list(Path.of("evals", dir.trim()))) {
@@ -196,7 +199,7 @@ class EvalRunner {
     }
 
     /** setup 순번 → 실제 id */
-    record Ids(List<Long> goals, List<Long> tasks, List<Long> blocks, Map<Integer, Long> interventions) {
+    record Ids(List<Long> goals, List<Long> tasks, List<Long> blocks, Map<Integer, Long> interventions, List<Long> fixed) {
     }
 
     private void fire(Map<String, Object> trigger, Ids ids) {
@@ -228,6 +231,7 @@ class EvalRunner {
                 }
                 case "task" -> ref.put("task_id", ids.tasks().get(((Number) v).intValue()));
                 case "block" -> ref.put("block_id", ids.blocks().get(((Number) v).intValue()));
+                case "fixed" -> ref.put("block_id", ids.fixed().get(((Number) v).intValue()));
                 default -> ref.put(k, String.valueOf(v));
             }
         });
@@ -245,8 +249,10 @@ class EvalRunner {
 
     private void reset(String now) {
         tx.exec(() -> {
+            db.update("UPDATE blocks SET linked_fixed_block_id = NULL");
             for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
-                    "intervention_logs", "interventions", "jobs", "blocks", "work_products", "wakeups", "daily_flags",
+                    "intervention_logs", "interventions", "jobs", "block_logs", "series_exceptions", "blocks",
+                    "fixed_series", "work_products", "wakeups", "daily_flags",
                     "tasks", "goals", "events", "notes", "data_migrations", "device_events", "devices",
                     "processed_actions", "settings"}) {
                 db.update("DELETE FROM " + table);
@@ -259,7 +265,7 @@ class EvalRunner {
 
     @SuppressWarnings("unchecked")
     private Ids applySetup(Map<String, Object> setup) {
-        Ids ids = new Ids(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new java.util.HashMap<>());
+        Ids ids = new Ids(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new java.util.HashMap<>(), new ArrayList<>());
         if (setup == null) {
             return ids;
         }
@@ -289,12 +295,13 @@ class EvalRunner {
             fixed.addAll((List<Map<String, Object>>) setup.getOrDefault("events", List.of()));
             for (Map<String, Object> f : fixed) {
                 Object goal = f.get("goal");
-                db.insert("""
-                                INSERT INTO blocks(kind, title, goal_id, start_at, end_at, screen_text, lead_minutes, buffer_after_min)
-                                VALUES ('fixed', ?, ?, ?, ?, '', ?, ?)""",
+                ids.fixed().add(db.insert("""
+                                INSERT INTO blocks(kind, title, goal_id, start_at, end_at, screen_text, lead_minutes, buffer_after_min, memo)
+                                VALUES ('fixed', ?, ?, ?, ?, '', ?, ?, ?)""",
                         f.get("title"), goal == null ? null : goalIds.get(((Number) goal).intValue()),
                         time(f.get("start")), time(f.get("end")),
-                        ((Number) f.getOrDefault("lead", 0)).intValue(), ((Number) f.getOrDefault("buffer_after", 0)).intValue());
+                        ((Number) f.getOrDefault("lead", 0)).intValue(), ((Number) f.getOrDefault("buffer_after", 0)).intValue(),
+                        String.valueOf(f.getOrDefault("memo", ""))));
             }
             List<Map<String, Object>> blocks = (List<Map<String, Object>>) setup.getOrDefault("blocks", List.of());
             for (int i = 0; i < blocks.size(); i++) {
@@ -305,7 +312,8 @@ class EvalRunner {
                                 INSERT INTO blocks(kind, task_id, title, goal_id, start_at, end_at, status, screen_text, actual_start)
                                 SELECT 'planned', id, title, goal_id, ?, ?, ?, '지금 할 건 하나예요.', ? FROM tasks WHERE id = ?""",
                         time(b.get("start")), time(b.get("end")),
-                        status, "started".equals(status) ? time(b.get("start")) : null, taskId);
+                        status, b.get("actual_start") != null ? time(b.get("actual_start"))
+                                : "started".equals(status) ? time(b.get("start")) : null, taskId);
                 ids.blocks().add(blockId);
                 if (Boolean.TRUE.equals(b.get("intervention"))) {
                     db.update("UPDATE blocks SET status = 'nudging' WHERE id = ?", blockId);
@@ -356,7 +364,7 @@ class EvalRunner {
         sb.append("[블록]\n");
         db.jdbc().sql("""
                         SELECT id, kind, title, task_id, goal_id, start_at, end_at, status, screen_text, lead_minutes,
-                        buffer_after_min, location FROM blocks ORDER BY start_at""").query((rs, n) -> {
+                        buffer_after_min, location, memo, linked_fixed_block_id, series_id FROM blocks ORDER BY start_at""").query((rs, n) -> {
             sb.append("블록#").append(rs.getLong(1)).append(" [").append("fixed".equals(rs.getString(2)) ? "고정" : "계획")
                     .append("] ").append(rs.getString(3))
                     .append(rs.getObject(4) == null ? "" : " 할일#" + rs.getLong(4))
@@ -364,7 +372,25 @@ class EvalRunner {
                     .append(rs.getObject(6)).append(" ~ ").append(rs.getObject(7)).append(' ').append(rs.getString(8))
                     .append(" 출발준비=").append(rs.getInt(10)).append("분 끝난뒤=").append(rs.getInt(11)).append('분')
                     .append(rs.getString(12) == null ? "" : " @" + rs.getString(12))
-                    .append(" \"").append(rs.getString(9)).append("\"\n");
+                    .append(" \"").append(rs.getString(9)).append("\"")
+                    .append(rs.getString(13) == null || rs.getString(13).isBlank() ? "" : " 메모=" + rs.getString(13))
+                    .append(rs.getObject(14) == null ? "" : " 연결=고정블록#" + rs.getLong(14))
+                    .append(rs.getObject(15) == null ? "" : " 반복일정#" + rs.getLong(15)).append('\n');
+            return null;
+        }).list();
+        sb.append("[반복 일정]\n");
+        db.jdbc().sql("SELECT id, title, freq, interval_n, by_days, month_day, start_time, duration_min, active FROM fixed_series ORDER BY id")
+                .query((rs, n) -> {
+                    sb.append("반복#").append(rs.getLong(1)).append(' ').append(rs.getString(2)).append(" freq=").append(rs.getString(3))
+                            .append(" interval=").append(rs.getInt(4)).append(" by_days=").append(rs.getString(5))
+                            .append(" month_day=").append(rs.getObject(6)).append(' ').append(rs.getObject(7))
+                            .append(' ').append(rs.getInt(8)).append("분 active=").append(rs.getBoolean(9)).append('\n');
+                    return null;
+                }).list();
+        sb.append("[블록 기록]\n");
+        db.jdbc().sql("SELECT block_id, type, actor, content FROM block_logs ORDER BY at, id").query((rs, n) -> {
+            sb.append("블록#").append(rs.getLong(1)).append(" [").append(rs.getString(2)).append('/').append(rs.getString(3))
+                    .append("] ").append(rs.getString(4)).append('\n');
             return null;
         }).list();
         sb.append("[메모]\n");

@@ -112,15 +112,17 @@ class AgentFlowTest extends AssistantTestBase {
     }
 
     @Test
-    void s1c_messageWithOtherToolStillContinues() {
+    void s1c_messageWithOtherToolRunsBothAndEndsTurn() {
         llm.then(tools(call("upsert_task", "{\"title\":\"빨래\",\"est_minutes\":30,\"first_action\":\"세탁기 열기\"}"),
                         call("send_message", "{\"text\":\"빨래 등록했어요\",\"kind\":\"reply\"}")))
                 .then(text(""));
         Map<String, Object> r = say("빨래 해야 해");
         runAgent();
 
+        // v3.2 P0.1(Z1): 답장과 변경 도구를 한 응답에서 부르면 둘 다 실행하고 turn 을 끝낸다(다음 LLM 호출 없음).
         assertThat(turnStatus((Long) r.get("turn_id"))).isEqualTo("ok");
-        assertThat(llm.toolResults).hasSize(2);
+        assertThat(count("SELECT COUNT(*) FROM tasks WHERE title = '빨래'")).isEqualTo(1);
+        assertThat(llm.toolResults).isEmpty();
         assertThat(assistantMessages()).containsExactly("빨래 등록했어요");
     }
 

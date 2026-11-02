@@ -80,6 +80,8 @@ class InterventionActivity : ComponentActivity() {
     private val lines = mutableStateListOf<Line>()
     private val input = mutableStateOf("")
     private val thinking = mutableStateOf(false)
+    /** v3.2 P3.2: 서버가 정한 진행 문구("일정 짜는 중…"). */
+    private val stageText = mutableStateOf("생각하는 중…")
     private val listening = mutableStateOf(false)
     private val error = mutableStateOf<String?>(null)
     private var tts: TextToSpeech? = null
@@ -176,6 +178,17 @@ class InterventionActivity : ComponentActivity() {
                 textAlign = TextAlign.Center,
                 lineHeight = if (lines.isEmpty()) 30.sp else 24.sp,
             )
+            // v3.2 §3.3: 고정 블록이면 사용자가 쓴 메모를 그대로 보여준다.
+            if (!current?.memo.isNullOrBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "📝 " + current!!.memo,
+                    color = Color(0xFFE9DDE2),
+                    fontSize = if (lines.isEmpty()) 17.sp else 14.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.background(Color(0xFF3A3135), RoundedCornerShape(10.dp)).padding(10.dp),
+                )
+            }
             Spacer(Modifier.height(if (lines.isEmpty()) 40.dp else 16.dp))
             Button(
                 onClick = { onStartPressed() },
@@ -189,7 +202,7 @@ class InterventionActivity : ComponentActivity() {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                 items(lines, key = { it.id }) { line -> Bubble(line.mine, line.text) }
                 if (thinking.value) {
-                    item(key = "thinking") { Bubble(false, "생각 중…") }
+                    item(key = "thinking") { Bubble(false, "··· " + stageText.value) }
                 }
             }
             error.value?.let { Text(it, color = Color(0xFFFF8787), fontSize = 13.sp) }
@@ -303,6 +316,7 @@ class InterventionActivity : ComponentActivity() {
         val localId = -System.nanoTime()
         lines.add(Line(localId, true, text))
         thinking.value = true
+        stageText.value = "생각하는 중…"
         val app = applicationContext
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -317,6 +331,7 @@ class InterventionActivity : ComponentActivity() {
             result.onSuccess { r ->
                 val i = lines.indexOfFirst { it.id == localId }
                 if (i >= 0) lines[i] = Line(r.message_id, true, text)
+                r.turn_id?.let { turnId -> launch { pollStage(turnId) } }
                 pollReplies(current.id, r.message_id)
             }.onFailure {
                 thinking.value = false
@@ -337,6 +352,28 @@ class InterventionActivity : ComponentActivity() {
             replies.forEach { addReply(it.id, it.content) }
         }
         thinking.value = false
+    }
+
+    /** 답을 기다리는 동안 1.5초마다 진행 문구를 갱신한다(P3.2). 20초가 넘으면 오래 걸린다고 붙인다. */
+    private suspend fun pollStage(turnId: Long) {
+        while (thinking.value) {
+            val status = withContext(Dispatchers.IO) {
+                runCatching { ApiClient.get(applicationContext).turnStatus(turnId) }.getOrNull()
+            }
+            if (status != null) {
+                when (status.stage) {
+                    "failed" -> {
+                        thinking.value = false
+                        error.value = "처리하지 못했어요. 다시 말해 주세요"
+                        return
+                    }
+                    "done" -> return
+                    else -> stageText.value = status.stage_text.ifBlank { "생각하는 중…" } +
+                        if (status.elapsed_sec > 20) " (조금 오래 걸리고 있어요)" else ""
+                }
+            }
+            delay(1_500)
+        }
     }
 
     private fun addReply(messageId: Long, text: String) {

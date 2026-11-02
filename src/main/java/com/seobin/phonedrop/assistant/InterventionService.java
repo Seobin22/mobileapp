@@ -47,10 +47,11 @@ public class InterventionService {
     private final PushService push;
     private final TurnQueue turns;
     private final GoalCoverage coverage;
+    private final BlockLogs logs;
 
     public InterventionService(AssistantDb db, AssistantClock clock, Jobs jobs, Store store, TimeUtil time,
                                SettingsService settings, PlanService plan, PushService push, TurnQueue turns,
-                               GoalCoverage coverage) {
+                               GoalCoverage coverage, BlockLogs logs) {
         this.db = db;
         this.clock = clock;
         this.jobs = jobs;
@@ -61,6 +62,7 @@ public class InterventionService {
         this.push = push;
         this.turns = turns;
         this.coverage = coverage;
+        this.logs = logs;
         jobs.register(START, this::onStartIntervention);
         jobs.register(RESHOW, this::onReshow);
         jobs.register(EXPIRE, this::onExpire);
@@ -109,6 +111,7 @@ public class InterventionService {
         db.update("UPDATE blocks SET status = 'partial', actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 clock.now(), b.id());
         jobs.cancelForTarget(BLOCK_END, b.id());
+        logs.add(b.id(), "ended", "system", "부분 완료(고정 일정 준비 시간이 되어 끝남)");
         ObjectNode ref = Json.object();
         ref.put("block_id", b.id());
         ref.put("reason", "fixed_block");
@@ -137,6 +140,9 @@ public class InterventionService {
 
         for (Store.Intervention running : store.runningInterventions()) {
             end(running, "expired", "superseded", "superseded");
+            if (store.block(running.blockId()).filter(x -> "nudging".equals(x.status())).isPresent()) {
+                logs.add(running.blockId(), "missed", "system", "다음 블록 개입이 시작되어 놓침");
+            }
             markMissedIfNudging(running.blockId());
             coverage.onBlockClosed(running.blockId());
         }
@@ -148,6 +154,7 @@ public class InterventionService {
                                 WHERE id = ?""",
                         now, started.id());
                 cancelBlockJobs(started.id());
+                logs.add(started.id(), "ended", "system", "부분 완료(다음 블록이 시작됨)");
                 coverage.onBlockClosed(started.id());
             }
         }
@@ -161,6 +168,7 @@ public class InterventionService {
         Store.Intervention intervention = store.intervention(id).orElseThrow();
 
         sendLevel(intervention);
+        logs.add(b.id(), "intervention_shown", "system", "L" + LEVEL + " 표시");
 
         jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(settings.getInt("fullscreen.reshow_minutes"))), null);
         Instant expireAt = expireAt(b);
@@ -187,6 +195,7 @@ public class InterventionService {
         }
         end(i, "expired", "no_response", "expired");
         store.setBlockStatus(i.blockId(), "missed");
+        logs.add(i.blockId(), "missed", "system", "무응답으로 놓침");
         enqueueMissed(i.blockId(), "no_response");
         coverage.onBlockClosed(i.blockId());
         return true;
@@ -199,6 +208,7 @@ public class InterventionService {
         }
         end(i, "suspended", "quiet", "suspended");
         store.setBlockStatus(i.blockId(), "missed");
+        logs.add(i.blockId(), "missed", "system", "방해 금지·수면 시간이라 중단");
         enqueueMissed(i.blockId(), "quiet");
         coverage.onBlockClosed(i.blockId());
         return true;
@@ -227,6 +237,7 @@ public class InterventionService {
         switch (b.status()) {
             case "planned" -> {
                 store.setBlockStatus(b.id(), "missed");
+                logs.add(b.id(), "missed", "system", "시작하지 않고 끝 시각이 지남");
                 enqueueMissed(b.id(), "never_started");
                 coverage.onBlockClosed(b.id());
             }
@@ -387,7 +398,10 @@ public class InterventionService {
         data.put("goal_color", goal == null ? "" : goal.color());
         data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
         data.put("screen_text", b.screenText());
-        data.put("tts_text", b.screenText());
+        // v3.2 §3.3: 고정 블록 메모를 화면에 그대로 보여주고, TTS 는 screen_text 다음에 메모 첫 문장까지 읽는다.
+        String memo = b.fixed() ? store.fullMemo(b) : "";
+        data.put("memo", memo);
+        data.put("tts_text", memo.isBlank() ? b.screenText() : b.screenText() + " " + firstSentence(memo));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
         data.put("block_end", time.iso(b.end()));
         data.put("expire_at", time.iso(expireAt(b)));
@@ -397,6 +411,12 @@ public class InterventionService {
         data.put("plan_version", String.valueOf(plan.version()));
         push.pushAll(data);
         store.log(i.id(), b.id(), i.level(), clock.now(), "sent");
+    }
+
+    static String firstSentence(String text) {
+        String t = text.strip();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("[.!?。\\n]").matcher(t);
+        return m.find() ? t.substring(0, m.end()).strip() : t;
     }
 
     /** 설정(수면·방해 금지)이 바뀌면 진행 중 개입의 suspend_check 를 다시 계산한다. */
@@ -500,6 +520,7 @@ public class InterventionService {
         Instant now = clock.now();
         end(i, "acked", "acked", "acked");
         store.log(i.id(), i.blockId(), i.level(), now, "acked");
+        logs.add(i.blockId(), "started", "user", "시작(반응 " + Math.max(0, java.time.Duration.between(i.startedAt(), now).toSeconds()) + "초)");
         db.update("""
                         UPDATE blocks SET status = 'started', actual_start = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?""",
@@ -507,6 +528,7 @@ public class InterventionService {
     }
 
     private void startBlockNow(Store.Block b, Store.Task t, Instant now) {
+        logs.add(b.id(), "started", "user", "시작(개입이 끝난 뒤 [시작])");
         if (now.isBefore(b.end())) {
             db.update("""
                             UPDATE blocks SET status = 'started', actual_start = ?, updated_at = CURRENT_TIMESTAMP
@@ -534,6 +556,12 @@ public class InterventionService {
 
     private String dismiss(Long interventionId, Long blockId) {
         Optional<Store.Intervention> i = resolve(interventionId, blockId);
+        Long target = i.map(Store.Intervention::blockId).orElse(blockId);
+        if (target != null && store.block(target).isPresent()) {
+            String reaction = i.map(x -> "(반응 " + Math.max(0, Duration.between(x.startedAt(), clock.now()).toSeconds()) + "초)")
+                    .orElse("");
+            logs.add(target, "dismissed", "user", "닫음" + reaction);
+        }
         store.log(i.map(Store.Intervention::id).orElse(null),
                 i.map(Store.Intervention::blockId).orElse(blockId), i.map(Store.Intervention::level).orElse(null),
                 clock.now(), "dismissed");

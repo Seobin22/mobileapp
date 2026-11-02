@@ -33,6 +33,8 @@ public class Permissions {
     }
 
     public static final String CALENDAR_REJECT = "캘린더에서 바꿔주세요";
+    public static final String MEMO_USER_ONLY =
+            "고정 일정 메모는 사용자 것이다. 사용자가 채팅으로 직접 요청했을 때만 append_fixed_memo 로 덧붙일 수 있다. 네 판단은 add_block_log 에 남긴다";
     public static final String WORK_PRODUCT_ASK_FIRST =
             "작업물은 사용자 허락을 받은 뒤에 만든다. ask_user로 만들지 묻고, 사용자가 원한다고 답하면 그때 만든다";
 
@@ -88,6 +90,9 @@ public class Permissions {
                 if ("goal".equals(entity)) {
                     return fromUser ? Decision.execute() : Decision.confirm("goal_cancel");
                 }
+                if ("fixed_series".equals(entity)) {
+                    return fromUser ? Decision.execute() : Decision.confirm("fixed_cancel");
+                }
                 return Decision.execute();
             }
             case "upsert_goal" -> {
@@ -97,6 +102,14 @@ public class Permissions {
                     return Decision.confirm("goal_change");
                 }
                 return Decision.execute();
+            }
+            case "upsert_fixed_series" -> {
+                // v3.2 §2.3: 반복 일정은 고정 블록과 같은 권한(사용자 말이면 반영, 그 외 확인 카드).
+                return fromUser ? Decision.execute() : Decision.confirm("fixed_change");
+            }
+            case "append_fixed_memo" -> {
+                // v3.2 §3.1: 메모는 사용자 것. 채팅으로 직접 요청한 turn 에서만 덧붙일 수 있다.
+                return fromUser ? Decision.execute() : Decision.reject(MEMO_USER_ONLY);
             }
             case "create_work_product" -> {
                 // 사용자 요청(2026-11-02): 작업물은 허락받은 뒤에만 만든다. 허락은 사용자의 답(user_message)으로 온다.

@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +77,16 @@ private val WORK_PRODUCT_LINK = Regex("작업물\\s?#(\\d+)")
 
 // ------------------------------------------------------------------ 채팅(메인 탭)
 
+/** 보낸 메시지의 처리 상태(v3.2 P3.2). turn 이 끝나면 목록에서 빠진다. */
+private data class PendingTurn(
+    val turnId: Long,
+    val messageId: Long,
+    val text: String,
+    val stage: String = "queued",
+    val stageText: String = "앞의 작업을 마치는 중…",
+    val elapsedSec: Long = 0,
+)
+
 @Composable
 fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -86,6 +97,10 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
     var sending by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
     var listening by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<List<PendingTurn>>(emptyList()) }
+    var resumed by remember { mutableStateOf(true) }
+    var firstLoad by remember { mutableStateOf(true) }
+    var unseen by remember { mutableIntStateOf(0) }
     val listState = rememberLazyListState()
 
     fun send(text: String, source: String, questionId: Long? = null) {
@@ -97,7 +112,12 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
                 runCatching { Chat.send(context.applicationContext, text.trim(), source, questionId) }
             }
             sending = false
-            r.onSuccess { input = ""; reload++ }.onFailure { error = ApiClient.errorMessage(it) }
+            r.onSuccess { resp ->
+                input = ""
+                // 처리 중에도 입력은 막지 않는다. 보낸 순서대로 서버 대기열과 같이 보인다.
+                resp.turn_id?.let { pending = pending + PendingTurn(it, resp.message_id, text.trim()) }
+                reload++
+            }.onFailure { error = ApiClient.errorMessage(it) }
         }
     }
 
@@ -116,9 +136,13 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     ChatVisibility.visible = true
+                    resumed = true
                     Chat.clearNotification(context)
                 }
-                Lifecycle.Event.ON_PAUSE -> ChatVisibility.visible = false
+                Lifecycle.Event.ON_PAUSE -> {
+                    ChatVisibility.visible = false
+                    resumed = false
+                }
                 else -> {}
             }
         }
@@ -149,6 +173,23 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
             }
         }
     }
+    // v3.2 P3.2: 처리 중인 turn 이 있고 화면이 보이는 동안 1.5초마다 진행 상태를 읽는다. 화면을 벗어나면 멈춘다.
+    val hasActive = pending.any { it.stage != "failed" }
+    LaunchedEffect(hasActive, resumed) {
+        while (hasActive && resumed) {
+            val updated = withContext(Dispatchers.IO) {
+                pending.map { p ->
+                    if (p.stage == "failed") p
+                    else runCatching { ApiClient.get(context).turnStatus(p.turnId) }.getOrNull()
+                        ?.let { s -> p.copy(stage = s.stage, stageText = s.stage_text, elapsedSec = s.elapsed_sec) } ?: p
+                }
+            }
+            if (updated.any { it.stage == "done" }) reload++
+            pending = updated.filter { it.stage != "done" }
+            if (pending.none { it.stage != "failed" }) break
+            delay(1_500)
+        }
+    }
     LaunchedEffect(tick, reload) {
         val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).messages().messages } }
         r.onSuccess { list ->
@@ -168,9 +209,32 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
             }
         }.onFailure { error = ApiClient.errorMessage(it) }
     }
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+
+    // v3.2 P3.1: 열면 항상 최신 위치. 맨 아래에 있으면 새 메시지를 따라가고, 위를 보고 있으면 [↓ n] 버튼만 띄운다.
+    val pendingBubbles = pending.count { it.stage == "failed" } + if (pending.any { it.stage != "failed" }) 1 else 0
+    val totalItems = messages.size + pendingBubbles
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
+        }
     }
+    var lastCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(totalItems) {
+        if (totalItems == 0) return@LaunchedEffect
+        if (firstLoad) {
+            listState.scrollToItem(totalItems - 1)
+            firstLoad = false
+        } else if (atBottom || lastCount == 0) {
+            listState.animateScrollToItem(totalItems - 1)
+            unseen = 0
+        } else if (totalItems > lastCount) {
+            unseen += totalItems - lastCount
+        }
+        lastCount = totalItems
+    }
+    LaunchedEffect(atBottom) { if (atBottom) unseen = 0 }
 
     // 미루기 협상 중 배너(v3 §8.1). 남은 분은 15초마다 다시 계산한다.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -181,6 +245,7 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
         }
     }
     val negotiationUntil = remember(now, reload) { Prefs.get(context).negotiationUntil }
+    val firstActiveTurn = pending.firstOrNull { it.stage != "failed" }?.turnId
 
     Column(modifier.fillMaxSize()) {
         if (negotiationUntil > now) {
@@ -191,22 +256,47 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth().background(PINK).padding(10.dp),
             )
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp), state = listState) {
-            if (messages.isEmpty()) {
-                item { Text("말을 걸어 보세요. 예: \"금요일까지 보고서 써야 해\"", Modifier.padding(16.dp)) }
-            }
-            items(messages, key = { it.id }) { m ->
-                MessageBubble(m,
-                    onOption = { option -> send(option, "chat", m.question_id) },
-                    onConfirm = { accept ->
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) {
-                                runCatching { ApiClient.get(context).confirm(m.confirmation_id!!, ConfirmRequest(accept)) }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 10.dp), state = listState) {
+                if (messages.isEmpty()) {
+                    item { Text("말을 걸어 보세요. 예: \"금요일까지 보고서 써야 해\"", Modifier.padding(16.dp)) }
+                }
+                items(messages, key = { it.id }) { m ->
+                    val waiting = pending.firstOrNull { it.messageId == m.id }
+                        ?.let { it.stage == "queued" && it.turnId != firstActiveTurn } == true
+                    MessageBubble(m, waiting = waiting,
+                        onOption = { option -> send(option, "chat", m.question_id) },
+                        onConfirm = { accept ->
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) {
+                                    runCatching { ApiClient.get(context).confirm(m.confirmation_id!!, ConfirmRequest(accept)) }
+                                }
+                                r.onFailure { error = ApiClient.errorMessage(it) }
+                                reload++
                             }
-                            r.onFailure { error = ApiClient.errorMessage(it) }
-                            reload++
-                        }
+                        })
+                }
+                pending.firstOrNull { it.stage != "failed" }?.let { p ->
+                    item(key = "typing") {
+                        TypingBubble(p.stageText.ifBlank { "생각하는 중…" } +
+                            if (p.elapsedSec > 20) " (조금 오래 걸리고 있어요)" else "")
+                    }
+                }
+                items(pending.filter { it.stage == "failed" }, key = { "failed-" + it.turnId }) { p ->
+                    FailedBubble(onRetry = {
+                        pending = pending.filter { it.turnId != p.turnId }
+                        send(p.text, "chat")
                     })
+                }
+            }
+            if (!atBottom && totalItems > 0) {
+                Button(
+                    onClick = {
+                        scope.launch { listState.animateScrollToItem(totalItems - 1) }
+                        unseen = 0
+                    },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                ) { Text(if (unseen > 0) "↓ $unseen" else "↓") }
             }
         }
         error?.let { Text(it, color = ERROR, modifier = Modifier.padding(horizontal = 12.dp)) }
@@ -234,9 +324,46 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
     }
 }
 
+/** 비서 쪽 말풍선 자리 표시: 점 세 개 애니메이션 + 서버 진행 문구. */
 @Composable
-private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: (Boolean) -> Unit) {
+private fun TypingBubble(text: String) {
+    var dots by remember { mutableIntStateOf(1) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400)
+            dots = dots % 3 + 1
+        }
+    }
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.CenterStart) {
+        Text(
+            "●".repeat(dots) + "○".repeat(3 - dots) + "  " + text,
+            color = Color.Gray,
+            modifier = Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(10.dp),
+        )
+    }
+}
+
+@Composable
+private fun FailedBubble(onRetry: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.CenterStart) {
+        Column(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(10.dp)) {
+            Text("처리하지 못했어요", color = ERROR)
+            OutlinedButton(onClick = onRetry) { Text("다시 시도") }
+        }
+    }
+}
+
+@Composable
+private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (String) -> Unit, onConfirm: (Boolean) -> Unit) {
     val mine = m.role == "user"
+    // v3.2 P1.2: 코드가 덧붙인 '저장됨' 줄(kind=system)은 작은 회색 띠로 보여준다.
+    if (m.kind == "system") {
+        Box(Modifier.fillMaxWidth().padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
+            Text(m.content, style = MaterialTheme.typography.labelMedium, color = Color(0xFF495057),
+                modifier = Modifier.background(Color(0xFFE9ECEF), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+        }
+        return
+    }
     Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Column(
             Modifier.widthIn(max = 300.dp)
@@ -282,7 +409,7 @@ private fun MessageBubble(m: MessageDto, onOption: (String) -> Unit, onConfirm: 
                 }
             }
             Text(time(m.created_at) + (if (m.intervention_id != null) " · 📱 시작 화면에서" else "") +
-                if (m.silent) " · 🔕" else "", style = MaterialTheme.typography.labelSmall,
+                (if (m.silent) " · 🔕" else "") + (if (waiting) " · 대기 중" else ""), style = MaterialTheme.typography.labelSmall,
                 color = if (mine) Color(0xFFFFE0EA) else Color.Gray)
         }
     }

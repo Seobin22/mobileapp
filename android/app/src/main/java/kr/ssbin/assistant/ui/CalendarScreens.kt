@@ -1,0 +1,796 @@
+package kr.ssbin.assistant.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kr.ssbin.assistant.chat.Chat
+import kr.ssbin.assistant.data.ApiClient
+import kr.ssbin.assistant.data.BlockDetailDto
+import kr.ssbin.assistant.data.CalendarBlock
+import kr.ssbin.assistant.data.CalendarResponse
+import kr.ssbin.assistant.data.DeadlineDto
+import kr.ssbin.assistant.data.FixedBlockRequest
+import kr.ssbin.assistant.data.GoalDto
+import kr.ssbin.assistant.data.SeriesRequest
+import kr.ssbin.assistant.data.TaskDetailDto
+import kr.ssbin.assistant.data.TimelineItem
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAdjusters
+
+private val CAL_PINK = Color(0xFFD6336C)
+private val CAL_ERR = Color(0xFFC92A2A)
+private val FIXED_BG = Color(0xFFDEE2E6)
+private val FIXED_TEXT = Color(0xFF343A40)
+private val FLAG = Color(0xFFE03131)
+private const val DAY_NAMES = "월화수목금토일"
+
+enum class CalMode { Month, Week, Day }
+
+private fun zoned(iso: String): ZonedDateTime = OffsetDateTime.parse(iso).atZoneSameInstant(ZoneId.systemDefault())
+private fun hm(iso: String?): String = iso?.let { runCatching { zoned(it).format(DateTimeFormatter.ofPattern("HH:mm")) }.getOrNull() } ?: ""
+private fun mdHm(iso: String?): String = iso?.let { runCatching { zoned(it).format(DateTimeFormatter.ofPattern("M/d(E) HH:mm")) }.getOrNull() } ?: ""
+private fun isoOf(t: LocalDateTime): String = t.atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
+
+/** 반복 규칙 표시용 */
+private fun freqLabel(freq: String, interval: Int): String = when (freq) {
+    "daily" -> "매일"
+    "weekly" -> if (interval == 2) "격주" else "매주"
+    "monthly" -> "매월"
+    else -> "안 함"
+}
+
+// ------------------------------------------------------------------ 달력 탭 (§8.1)
+
+/**
+ * 달력(빌드문서 v3.2 §8.1). 월·주·일 보기. 고정은 회색·'고정'·반복 아이콘·메모 첫 줄, 계획은 목표 색·이름표,
+ * 마감은 빨간 깃발(월 보기는 빨간 점). 빈 시간을 길게 누르면 그 시각으로 고정 일정 추가.
+ */
+@Composable
+fun CalendarScreen(tick: Int, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var mode by remember { mutableStateOf(CalMode.Week) }
+    var anchor by remember { mutableStateOf(LocalDate.now()) }
+    var data by remember { mutableStateOf<CalendarResponse?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+    var openBlock by remember { mutableStateOf<Long?>(null) }
+    var openTask by remember { mutableStateOf<Long?>(null) }
+    var addAt by remember { mutableStateOf<LocalDateTime?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var editBlock by remember { mutableStateOf<Long?>(null) }
+
+    val from: LocalDate = when (mode) {
+        CalMode.Month -> anchor.withDayOfMonth(1).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        CalMode.Week -> anchor.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        CalMode.Day -> anchor
+    }
+    val days = when (mode) {
+        CalMode.Month -> 42
+        CalMode.Week -> 7
+        CalMode.Day -> 1
+    }
+
+    LaunchedEffect(Unit) { Chat.refresh.collect { reload++ } }
+    LaunchedEffect(tick, reload, from, days) {
+        loading = true
+        val r = withContext(Dispatchers.IO) {
+            runCatching {
+                ApiClient.get(context).calendar(isoOf(from.atStartOfDay()), isoOf(from.plusDays(days.toLong()).atStartOfDay()))
+            }
+        }
+        loading = false
+        r.onSuccess { data = it; error = null }.onFailure { error = ApiClient.errorMessage(it) }
+    }
+
+    Column(modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = {
+                anchor = when (mode) {
+                    CalMode.Month -> anchor.minusMonths(1)
+                    CalMode.Week -> anchor.minusWeeks(1)
+                    CalMode.Day -> anchor.minusDays(1)
+                }
+            }) { Text("◀") }
+            Text(
+                when (mode) {
+                    CalMode.Month -> anchor.format(DateTimeFormatter.ofPattern("yyyy년 M월"))
+                    CalMode.Week -> from.format(DateTimeFormatter.ofPattern("M/d")) + " – " +
+                        from.plusDays(6).format(DateTimeFormatter.ofPattern("M/d"))
+                    CalMode.Day -> anchor.format(DateTimeFormatter.ofPattern("M/d(E)"))
+                },
+                fontWeight = FontWeight.Bold,
+            )
+            TextButton(onClick = {
+                anchor = when (mode) {
+                    CalMode.Month -> anchor.plusMonths(1)
+                    CalMode.Week -> anchor.plusWeeks(1)
+                    CalMode.Day -> anchor.plusDays(1)
+                }
+            }) { Text("▶") }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { anchor = LocalDate.now() }) { Text("오늘") }
+            Button(onClick = { addAt = null; adding = true }) { Text("+") }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(CalMode.Month to "월", CalMode.Week to "주", CalMode.Day to "일").forEach { (m, label) ->
+                val selected = mode == m
+                Text(
+                    label,
+                    color = if (selected) Color.White else CAL_PINK,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(if (selected) CAL_PINK else Color.Transparent, RoundedCornerShape(50))
+                        .clickable { mode = m }.padding(horizontal = 14.dp, vertical = 4.dp),
+                )
+            }
+        }
+        if (loading && data == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else if (error != null && data == null) {
+            Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("불러오지 못했어요", color = CAL_ERR)
+                Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = { reload++ }) { Text("다시 시도") }
+            }
+        } else {
+            val d = data ?: CalendarResponse(emptyList(), emptyList())
+            if (loading) Text("불러오는 중…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 12.dp))
+            when (mode) {
+                CalMode.Month -> MonthView(anchor, from, d, onDay = { anchor = it; mode = CalMode.Day })
+                CalMode.Week -> TimeGrid((0 until 7).map { from.plusDays(it.toLong()) }, d, compact = true,
+                    onBlock = { openBlock = it }, onTask = { openTask = it },
+                    onLongPress = { addAt = it; adding = true }, onDay = { anchor = it; mode = CalMode.Day })
+                CalMode.Day -> TimeGrid(listOf(anchor), d, compact = false,
+                    onBlock = { openBlock = it }, onTask = { openTask = it },
+                    onLongPress = { addAt = it; adding = true }, onDay = {})
+            }
+        }
+    }
+
+    openBlock?.let { id ->
+        BlockDetailDialog(id, onDismiss = { openBlock = null }, onChanged = { reload++ },
+            onEdit = { openBlock = null; editBlock = id })
+    }
+    openTask?.let { id -> TaskDetailDialog(id, onDismiss = { openTask = null }, onChanged = { reload++ }) }
+    if (adding) {
+        FixedEditDialog(blockId = null, presetStart = addAt, onDismiss = { adding = false }, onSaved = { adding = false; reload++ })
+    }
+    editBlock?.let { id ->
+        FixedEditDialog(blockId = id, presetStart = null, onDismiss = { editBlock = null }, onSaved = { editBlock = null; reload++ })
+    }
+}
+
+@Composable
+private fun MonthView(anchor: LocalDate, from: LocalDate, data: CalendarResponse, onDay: (LocalDate) -> Unit) {
+    val today = LocalDate.now()
+    Column(Modifier.fillMaxSize().padding(horizontal = 6.dp)) {
+        Row(Modifier.fillMaxWidth()) {
+            DAY_NAMES.forEach { n ->
+                Text(n.toString(), Modifier.weight(1f).padding(4.dp), style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray)
+            }
+        }
+        for (week in 0 until 6) {
+            Row(Modifier.fillMaxWidth()) {
+                for (dow in 0 until 7) {
+                    val date = from.plusDays((week * 7 + dow).toLong())
+                    val blocks = data.blocks.filter { zoned(it.start).toLocalDate() == date }
+                    val hasDeadline = data.deadlines.any { zoned(it.at).toLocalDate() == date }
+                    Column(
+                        Modifier.weight(1f).aspectRatio(0.8f).padding(1.dp)
+                            .background(if (date == today) Color(0xFFFFE3EC) else Color.White, RoundedCornerShape(6.dp))
+                            .clickable { onDay(date) }.padding(3.dp),
+                    ) {
+                        Text(
+                            date.dayOfMonth.toString(),
+                            fontSize = 12.sp,
+                            color = if (date.month != anchor.month) Color.LightGray else Color.Unspecified,
+                            fontWeight = if (date == today) FontWeight.Bold else null,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            val colors = blocks.map { if (it.kind == "fixed") "fixed" else it.goal_color }.distinct().take(4)
+                            colors.forEach { c ->
+                                Box(Modifier.size(6.dp).background(if (c == "fixed") Color.Gray else goalColor(c), CircleShape))
+                            }
+                            if (hasDeadline) Box(Modifier.size(6.dp).background(FLAG, CircleShape))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 주·일 보기: 시간 축(0~24시)에 블록 칸. 빈 곳을 길게 누르면 그 시각(30분 단위)으로 고정 일정 추가. */
+@Composable
+private fun TimeGrid(
+    dates: List<LocalDate>,
+    data: CalendarResponse,
+    compact: Boolean,
+    onBlock: (Long) -> Unit,
+    onTask: (Long) -> Unit,
+    onLongPress: (LocalDateTime) -> Unit,
+    onDay: (LocalDate) -> Unit,
+) {
+    val hourHeight: Dp = if (compact) 44.dp else 60.dp
+    val density = LocalDensity.current
+    val hourPx = with(density) { hourHeight.toPx() }
+    val scroll = rememberScrollState()
+    LaunchedEffect(Unit) { scroll.scrollTo((hourPx * 7).toInt()) }
+    val today = LocalDate.now()
+    Column(Modifier.fillMaxSize()) {
+        if (dates.size > 1) {
+            Row(Modifier.fillMaxWidth().padding(start = 34.dp)) {
+                dates.forEach { date ->
+                    Text(
+                        "${DAY_NAMES[date.dayOfWeek.value - 1]}\n${date.dayOfMonth}",
+                        Modifier.weight(1f).clickable { onDay(date) }.padding(2.dp),
+                        fontSize = 11.sp,
+                        fontWeight = if (date == today) FontWeight.Bold else null,
+                        color = if (date == today) CAL_PINK else Color.Unspecified,
+                    )
+                }
+            }
+        }
+        Row(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            Column(Modifier.width(34.dp)) {
+                for (h in 0 until 24) {
+                    Text("%02d".format(h), Modifier.height(hourHeight), fontSize = 10.sp, color = Color.Gray)
+                }
+            }
+            dates.forEach { date ->
+                Box(
+                    Modifier.weight(1f).height(hourHeight * 24).padding(horizontal = 1.dp)
+                        .background(if (date == today && dates.size > 1) Color(0xFFFFF0F5) else Color.White)
+                        .pointerInput(date) {
+                            detectTapGestures(onLongPress = { offset ->
+                                val minutes = ((offset.y / hourPx) * 60).toInt() / 30 * 30
+                                onLongPress(date.atStartOfDay().plusMinutes(minutes.toLong().coerceIn(0, 23 * 60 + 30)))
+                            })
+                        },
+                ) {
+                    for (h in 1 until 24) {
+                        Box(Modifier.offset(y = hourHeight * h).fillMaxWidth().height(1.dp).background(Color(0xFFF1F3F5)))
+                    }
+                    val dayStart = date.atStartOfDay(ZoneId.systemDefault())
+                    val dayEnd = dayStart.plusDays(1)
+                    data.blocks.filter { zoned(it.start).isBefore(dayEnd) && zoned(it.end).isAfter(dayStart) }.forEach { b ->
+                        val s = zoned(b.start).let { if (it.isBefore(dayStart)) dayStart else it }
+                        val e = zoned(b.end).let { if (it.isAfter(dayEnd)) dayEnd else it }
+                        val top = java.time.Duration.between(dayStart, s).toMinutes()
+                        val len = java.time.Duration.between(s, e).toMinutes().coerceAtLeast(20)
+                        BlockCell(b, compact, Modifier.offset(y = hourHeight * (top / 60f)).height(hourHeight * (len / 60f))
+                            .fillMaxWidth().clickable { onBlock(b.id) })
+                    }
+                    data.deadlines.filter { zoned(it.at).toLocalDate() == date }.forEach { dl ->
+                        val top = java.time.Duration.between(dayStart, zoned(dl.at)).toMinutes()
+                        DeadlineFlag(dl, compact, Modifier.offset(y = hourHeight * (top / 60f) - 10.dp)
+                            .clickable { dl.task_id?.let(onTask) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
+    val fixed = b.kind == "fixed"
+    val bg = if (fixed) FIXED_BG else goalColor(b.goal_color.ifBlank { null }).copy(alpha = 0.22f)
+    val done = b.status in listOf("done", "partial", "missed")
+    Column(
+        modifier.padding(1.dp).background(bg, RoundedCornerShape(4.dp)).padding(horizontal = 3.dp, vertical = 1.dp),
+    ) {
+        val head = buildString {
+            if (fixed) append("고정 ")
+            if (b.series_id != null) append("🔁 ")
+            if (!compact) append(hm(b.start)).append(' ')
+            if (!fixed && b.goal_label.isNotBlank()) append('[').append(b.goal_label).append("] ")
+            append(b.title)
+        }
+        Text(head, fontSize = if (compact) 10.sp else 13.sp, fontWeight = FontWeight.Bold,
+            color = if (done) Color.Gray else FIXED_TEXT, maxLines = if (compact) 2 else 1, overflow = TextOverflow.Ellipsis)
+        if (fixed && b.memo.isNotBlank()) {
+            // 메모 첫 줄(일 보기는 2~3줄, 주 보기는 잘라서)
+            Text(b.memo.lines().first(), fontSize = if (compact) 9.sp else 12.sp, color = FIXED_TEXT,
+                maxLines = if (compact) 1 else 3, overflow = TextOverflow.Ellipsis)
+        }
+        if (fixed) {
+            b.linked_prep.filter { it.status != "cancelled" }.take(2).forEach { p ->
+                Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 9.sp else 11.sp, color = CAL_PINK,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            if (b.linked_title != null) Text("→ ${b.linked_title}", fontSize = if (compact) 9.sp else 11.sp, maxLines = 1)
+            if (b.deadline != null) {
+                Text("⚑" + runCatching { zoned(b.deadline).format(DateTimeFormatter.ofPattern("E HH:mm")) }.getOrDefault(""),
+                    fontSize = if (compact) 9.sp else 11.sp, color = FLAG, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeadlineFlag(d: DeadlineDto, compact: Boolean, modifier: Modifier) {
+    Text(
+        "⚑ " + d.title + " 마감",
+        color = Color.White,
+        fontSize = if (compact) 9.sp else 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.background(FLAG, RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+    )
+}
+
+// ------------------------------------------------------------------ 블록 상세 (§8.3)
+
+@Composable
+fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Unit, onEdit: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var detail by remember { mutableStateOf<BlockDetailDto?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var memo by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var reload by remember { mutableIntStateOf(0) }
+    var askPlanned by remember { mutableStateOf(false) }
+
+    LaunchedEffect(reload) {
+        val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).block(blockId) } }
+        r.onSuccess { detail = it; memo = if (it.series_id != null) it.once_memo else it.memo; error = null }
+            .onFailure { error = ApiClient.errorMessage(it) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(detail?.title ?: "블록") },
+        text = {
+            val d = detail
+            if (d == null) {
+                if (error != null) {
+                    Column {
+                        Text("불러오지 못했어요", color = CAL_ERR)
+                        OutlinedButton(onClick = { reload++ }) { Text("다시 시도") }
+                    }
+                } else {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                }
+                return@AlertDialog
+            }
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val fixed = d.kind == "fixed"
+                Text((if (fixed) "고정" else "계획") + (if (d.series != null) " · 🔁 " + d.series.rule_text else "") +
+                    " · " + mdHm(d.start) + "–" + hm(d.end))
+                if (d.goal_label.isNotBlank()) GoalChip(d.goal_label, d.goal_color)
+                d.location?.let { Text("장소: $it") }
+                if (fixed && d.lead_minutes > 0) Text("출발·준비 ${d.lead_minutes}분 전")
+                if (!fixed) {
+                    d.linked_title?.let { Text("연결된 고정 일정: $it") }
+                    d.deadline?.let { Text("마감 " + mdHm(it), color = FLAG) }
+                }
+                if (fixed) {
+                    if (d.series != null && d.series.memo.isNotBlank()) Text("매번 메모: " + d.series.memo)
+                    OutlinedTextField(memo, { memo = it }, label = { Text(if (d.series != null) "이번만 메모" else "메모") },
+                        modifier = Modifier.fillMaxWidth(), maxLines = 6)
+                    Button(onClick = {
+                        saving = true
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) {
+                                runCatching { ApiClient.get(context).patchFixedBlock(blockId, FixedBlockRequest(memo = memo)) }
+                            }
+                            saving = false
+                            r.onSuccess { onChanged(); reload++ }.onFailure { error = ApiClient.errorMessage(it) }
+                        }
+                    }, enabled = !saving) {
+                        if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("메모 저장")
+                    }
+                    if (d.linked_prep.isNotEmpty()) {
+                        Text("준비 블록", fontWeight = FontWeight.Bold)
+                        d.linked_prep.forEach { p -> Text("· ${mdHm(p.start)} ${p.title} (${p.status})") }
+                    }
+                }
+                Text("기록", fontWeight = FontWeight.Bold)
+                if (d.logs.isEmpty()) Text("아직 기록이 없어요", style = MaterialTheme.typography.bodySmall)
+                d.logs.forEach { l ->
+                    val icon = when (l.actor) {
+                        "user" -> "🙋"
+                        "assistant" -> "🤖"
+                        else -> "⚙️"
+                    }
+                    Text("$icon ${mdHm(l.at)}  ${l.content}", style = MaterialTheme.typography.bodySmall)
+                }
+                error?.let { Text(it, color = CAL_ERR) }
+            }
+        },
+        confirmButton = {
+            val d = detail
+            val editable = d != null && d.status in listOf("planned", "nudging")
+            if (d != null && editable && d.kind == "fixed") {
+                TextButton(onClick = onEdit) { Text("수정·삭제") }
+            } else if (d != null && editable) {
+                TextButton(onClick = { askPlanned = true }) { Text("비서에게 바꿔 달라기") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+    )
+    if (askPlanned) {
+        detail?.let { d ->
+            PlannedBlockDialog(TimelineItem(kind = "planned_block", start = d.start, end = d.end, id = d.id, title = d.title),
+                onDismiss = { askPlanned = false }, onSent = { askPlanned = false; onDismiss() })
+        }
+    }
+}
+
+// ------------------------------------------------------------------ 할 일 상세·마감 수정 (P1.3)
+
+@Composable
+fun TaskDetailDialog(taskId: Long, onDismiss: () -> Unit, onChanged: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var task by remember { mutableStateOf<TaskDetailDto?>(null) }
+    var date by remember { mutableStateOf("") }
+    var time by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+
+    LaunchedEffect(taskId) {
+        val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).task(taskId) } }
+        r.onSuccess { t ->
+            task = t
+            t.deadline?.let { dl ->
+                date = zoned(dl).toLocalDate().toString()
+                time = zoned(dl).toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))
+            }
+        }.onFailure { error = ApiClient.errorMessage(it) }
+    }
+
+    fun save(deadline: String?) {
+        saving = true
+        scope.launch {
+            val body = JsonObject(mapOf("deadline" to (deadline?.let { JsonPrimitive(it) } ?: JsonNull)))
+            val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).patchTaskDeadline(taskId, body) } }
+            saving = false
+            r.onSuccess { onChanged(); onDismiss() }.onFailure { error = ApiClient.errorMessage(it) }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(task?.title ?: "할 일") },
+        text = {
+            val t = task
+            if (t == null) {
+                if (error != null) Text(error.orEmpty(), color = CAL_ERR)
+                else Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                return@AlertDialog
+            }
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("마감 " + (t.deadline?.let { mdHm(it) } ?: "없음") + (t.left_text?.let { " · $it" } ?: ""),
+                    color = FLAG, fontWeight = FontWeight.Bold)
+                Text("남은 작업 ${t.remaining_minutes}분")
+                Text("이 마감을 위한 블록", fontWeight = FontWeight.Bold)
+                if (t.blocks.isEmpty()) Text("없음", style = MaterialTheme.typography.bodySmall)
+                t.blocks.forEach { b -> Text("· ${mdHm(b.start)}–${hm(b.end)} (${b.status})") }
+                Text("마감 고치기", fontWeight = FontWeight.Bold)
+                OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
+                OutlinedTextField(time, { time = it }, label = { Text("시각 (HH:MM)") })
+                error?.let { Text(it, color = CAL_ERR) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !saving && task != null, onClick = {
+                val dl = runCatching { isoOf(LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim()))) }.getOrNull()
+                if (dl == null) {
+                    error = "날짜·시각 형식을 확인하세요"
+                } else {
+                    save(dl)
+                }
+            }) { Text(if (saving) "저장 중…" else "마감 저장") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(enabled = !saving && task?.deadline != null, onClick = { save(null) }) { Text("마감 없애기") }
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+        },
+    )
+}
+
+// ------------------------------------------------------------------ 고정 일정 추가·수정 (§8.2)
+
+/**
+ * 고정 일정 추가·수정. 반복 설정(안 함/매일/매주/격주/매월, 종료일)과 메모.
+ * 반복 일정의 회차를 고치거나 지우면 "이 날만 / 이후 전부 / 전체"를 고른다. 메모는 '매번'과 '이번만' 두 칸.
+ */
+@Composable
+fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -> Unit, onSaved: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val defaultStart = presetStart ?: LocalDateTime.now().plusMinutes(30).withSecond(0).withNano(0)
+    var loaded by remember { mutableStateOf(blockId == null) }
+    var detail by remember { mutableStateOf<BlockDetailDto?>(null) }
+    var title by remember { mutableStateOf("") }
+    var date by remember { mutableStateOf(defaultStart.toLocalDate().toString()) }
+    var time by remember { mutableStateOf(defaultStart.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))) }
+    var duration by remember { mutableStateOf("60") }
+    var lead by remember { mutableStateOf("") }
+    var location by remember { mutableStateOf("") }
+    var firstAction by remember { mutableStateOf("") }
+    var goalId by remember { mutableStateOf<Long?>(null) }
+    var memo by remember { mutableStateOf("") }
+    var onceMemo by remember { mutableStateOf("") }
+    var freq by remember { mutableStateOf("none") }
+    var interval by remember { mutableIntStateOf(1) }
+    var byDays by remember { mutableStateOf(setOf<Int>()) }
+    var until by remember { mutableStateOf("") }
+    var goals by remember { mutableStateOf<List<GoalDto>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var askScope by remember { mutableStateOf<String?>(null) } // "save" | "delete"
+
+    LaunchedEffect(Unit) {
+        goals = withContext(Dispatchers.IO) {
+            runCatching { ApiClient.get(context).goals().goals.filter { it.status == "active" } }.getOrDefault(emptyList())
+        }
+        if (blockId != null) {
+            val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).block(blockId) } }
+            r.onSuccess { d ->
+                detail = d
+                val s = zoned(d.start)
+                title = d.title
+                date = s.toLocalDate().toString()
+                time = s.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))
+                duration = java.time.Duration.between(zoned(d.start), zoned(d.end)).toMinutes().toString()
+                lead = if (d.lead_minutes > 0) d.lead_minutes.toString() else ""
+                location = d.location ?: ""
+                d.series?.let { sr ->
+                    freq = sr.freq
+                    interval = sr.interval
+                    byDays = sr.by_days.toSet()
+                    until = sr.until_date ?: ""
+                    memo = sr.memo
+                    onceMemo = d.once_memo
+                    goalId = sr.goal_id
+                } ?: run { memo = d.memo }
+                loaded = true
+            }.onFailure { error = ApiClient.errorMessage(it); loaded = true }
+        } else {
+            byDays = setOf(defaultStart.dayOfWeek.value)
+        }
+    }
+
+    val isSeries = detail?.series != null
+    val isNew = blockId == null
+
+    fun startIso(): String? = runCatching {
+        isoOf(LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim())))
+    }.getOrNull()
+
+    fun seriesBody(): SeriesRequest = SeriesRequest(
+        title = title.trim(), freq = freq, interval = interval,
+        by_days = if (freq == "weekly") byDays.sorted().ifEmpty { listOf(LocalDate.parse(date.trim()).dayOfWeek.value) } else null,
+        month_day = if (freq == "monthly") LocalDate.parse(date.trim()).dayOfMonth else null,
+        start_time = time.trim(), duration_min = duration.trim().toIntOrNull(),
+        start_date = date.trim(), until_date = until.trim().ifEmpty { null },
+        lead_minutes = lead.trim().toIntOrNull(), location = location.trim().ifEmpty { null }, goal_id = goalId,
+        first_action = firstAction.trim().ifEmpty { null }, memo = memo,
+    )
+
+    fun submit(block: suspend () -> Unit) {
+        saving = true
+        error = null
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { block() } }
+            saving = false
+            r.onSuccess { onSaved() }.onFailure { error = ApiClient.errorMessage(it) }
+        }
+    }
+
+    fun save(scopeChoice: String?) {
+        val start = startIso()
+        val minutes = duration.trim().toIntOrNull()
+        val leadText = lead.trim()
+        if (title.isBlank() || start == null || minutes == null || (leadText.isNotEmpty() && leadText.toIntOrNull() == null)) {
+            error = "제목·날짜·시각·길이·출발 준비 형식을 확인하세요"
+            return
+        }
+        val api = ApiClient.get(context)
+        val fixedBody = FixedBlockRequest(
+            title = title.trim(), start = start, duration_min = minutes, lead_minutes = leadText.toIntOrNull(),
+            location = location.trim().ifEmpty { null }, goal_id = goalId,
+            first_action = firstAction.trim().ifEmpty { null }, memo = if (isSeries) onceMemo else memo,
+        )
+        val d = detail
+        when {
+            isNew && freq != "none" -> submit { api.createSeries(seriesBody()) }
+            isNew -> submit { api.createFixedBlock(fixedBody) }
+            isSeries && d != null && scopeChoice == "one" -> submit {
+                api.patchFixedBlock(d.id, fixedBody)
+                if (memo != d.series!!.memo) api.patchSeries(d.series.id, SeriesRequest(memo = memo), "all")
+            }
+            isSeries && d != null -> submit {
+                api.patchSeries(d.series!!.id, seriesBody(), scopeChoice ?: "all",
+                    if (scopeChoice == "following") d.occurrence_date else null)
+            }
+            d != null -> submit { api.patchFixedBlock(d.id, fixedBody) }
+        }
+    }
+
+    fun delete(scopeChoice: String?) {
+        val api = ApiClient.get(context)
+        val d = detail ?: return
+        when {
+            isSeries && scopeChoice != null && scopeChoice != "one" -> submit {
+                api.deleteSeries(d.series!!.id, scopeChoice, if (scopeChoice == "following") d.occurrence_date else null)
+            }
+            else -> submit { api.deleteFixedBlock(d.id) }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isNew) "고정 일정 추가" else "고정 일정 수정") },
+        text = {
+            if (!loaded) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                return@AlertDialog
+            }
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text("제목 (예: 치과, 헬스)") })
+                OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
+                OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") })
+                OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
+                OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
+                OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
+                if (isNew) OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동(선택)") })
+                if (isNew || isSeries) {
+                    Text("반복", fontWeight = FontWeight.Bold)
+                    val options = listOf("none" to 1, "daily" to 1, "weekly" to 1, "weekly" to 2, "monthly" to 1)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        options.forEach { (f, iv) ->
+                            if (!isNew && f == "none") return@forEach
+                            val selected = freq == f && (f != "weekly" || interval == iv)
+                            Text(
+                                if (f == "none") "안 함" else freqLabel(f, iv),
+                                color = if (selected) Color.White else CAL_PINK,
+                                fontSize = 13.sp,
+                                modifier = Modifier.background(if (selected) CAL_PINK else Color.Transparent, RoundedCornerShape(50))
+                                    .clickable { freq = f; interval = iv }.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                    if (freq == "weekly") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            (1..7).forEach { d ->
+                                val on = d in byDays
+                                Text(
+                                    DAY_NAMES[d - 1].toString(),
+                                    color = if (on) Color.White else Color.DarkGray,
+                                    modifier = Modifier.background(if (on) CAL_PINK else Color(0xFFF1F3F5), CircleShape)
+                                        .clickable { byDays = if (on) byDays - d else byDays + d }.padding(8.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (freq == "monthly") Text("매월 ${runCatching { LocalDate.parse(date.trim()).dayOfMonth }.getOrDefault(1)}일(없는 달은 마지막 날)",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (freq != "none") OutlinedTextField(until, { until = it }, label = { Text("종료일(선택, YYYY-MM-DD)") })
+                }
+                OutlinedTextField(memo, { memo = it }, label = { Text(if (isSeries || freq != "none") "메모 · 매번" else "메모") },
+                    modifier = Modifier.fillMaxWidth(), maxLines = 6)
+                if (isSeries) {
+                    OutlinedTextField(onceMemo, { onceMemo = it }, label = { Text("메모 · 이번만") },
+                        modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                }
+                if (goals.isNotEmpty()) {
+                    Text("목표 연결(선택)", style = MaterialTheme.typography.bodySmall)
+                    Row(Modifier.fillMaxWidth().clickable { goalId = null }.padding(4.dp)) {
+                        Text(if (goalId == null) "● 없음" else "○ 없음")
+                    }
+                    goals.forEach { g ->
+                        Row(Modifier.fillMaxWidth().clickable { goalId = g.id }.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (goalId == g.id) "● " else "○ ")
+                            GoalChip(g.label, g.color)
+                            Spacer(Modifier.width(6.dp))
+                            Text(g.title)
+                        }
+                    }
+                }
+                error?.let { Text(it, color = CAL_ERR) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = loaded && !saving, onClick = { if (isSeries) askScope = "save" else save(null) }) {
+                if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("저장")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (!isNew) {
+                    TextButton(enabled = loaded && !saving, onClick = { if (isSeries) askScope = "delete" else delete(null) }) {
+                        Text("삭제", color = CAL_ERR)
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("취소") }
+            }
+        },
+    )
+
+    askScope?.let { action ->
+        AlertDialog(
+            onDismissRequest = { askScope = null },
+            title = { Text(if (action == "save") "어디까지 바꿀까요?" else "어디까지 지울까요?") },
+            text = { Text("반복 일정이에요. 메모 '이번만'은 이 날에만 적용돼요.") },
+            confirmButton = {
+                Column {
+                    listOf("one" to "이 날만", "following" to "이후 전부", "all" to "전체").forEach { (key, label) ->
+                        TextButton(onClick = {
+                            askScope = null
+                            if (action == "save") save(key) else delete(key)
+                        }) { Text(label) }
+                    }
+                }
+            },
+            dismissButton = { TextButton(onClick = { askScope = null }) { Text("취소") } },
+        )
+    }
+}

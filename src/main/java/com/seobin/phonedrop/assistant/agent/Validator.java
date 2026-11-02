@@ -17,8 +17,15 @@ import com.seobin.phonedrop.assistant.TimeUtil;
 @Component
 public class Validator {
 
-    /** 새로 넣으려는 계획 블록. taskId 가 null 이면 할 일 검사(7번)를 건너뛴다. */
-    public record NewBlock(Long taskId, Instant start, Instant end) {
+    /**
+     * 새로 넣으려는 계획 블록. taskId 가 null 이면 할 일 검사(7번)를 건너뛴다.
+     * linkedFixedBlockId: 이 블록이 준비하는 고정 일정(v3.2 §6).
+     */
+    public record NewBlock(Long taskId, Instant start, Instant end, Long linkedFixedBlockId) {
+
+        public NewBlock(Long taskId, Instant start, Instant end) {
+            this(taskId, start, end, null);
+        }
     }
 
     /**
@@ -59,6 +66,20 @@ public class Validator {
                     violations.add(label + ": 할일#" + b.taskId() + "이 없습니다");
                 } else if (!"active".equals(t.status())) {
                     violations.add(label + ": 할일#" + b.taskId() + "은 " + t.status() + " 상태라 배치할 수 없습니다");
+                } else if (t.deadline() != null && b.end().isAfter(t.deadline())) {
+                    // v3.2 P1.2: 마감이 있는 할 일의 블록은 마감 전에 끝나야 한다.
+                    violations.add(label + ": " + t.title() + " 마감(" + time.dayText(t.deadline())
+                            + ") 이후에 끝나는 블록입니다");
+                }
+            }
+            // v3.2 §6: 연결 블록은 연결된 고정 일정의 금지 구간(출발·준비 포함) 시작 전에 끝나야 한다.
+            if (b.linkedFixedBlockId() != null) {
+                Store.Block f = store.block(b.linkedFixedBlockId()).orElse(null);
+                if (f == null || !f.fixed() || !List.of("planned", "nudging").contains(f.status())) {
+                    violations.add(label + ": 연결할 고정 일정(블록#" + b.linkedFixedBlockId() + ")이 없거나 이미 지났습니다");
+                } else if (b.end().isAfter(f.blockedStart())) {
+                    violations.add(label + ": 연결된 고정 일정 " + store.blockTitle(f) + "(" + range(f.start(), f.end())
+                            + ")의 준비 시작(" + time.hm(f.blockedStart()) + ") 전에 끝나야 합니다");
                 }
             }
             // 1. 새 블록끼리 겹침

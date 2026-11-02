@@ -47,6 +47,7 @@ object InterventionController {
             workProductId = data["work_product_id"]?.toLongOrNull(),
             goalLabel = data["goal_label"].orEmpty(),
             goalColor = data["goal_color"].orEmpty(),
+            memo = data["memo"].orEmpty(),
         )
         dao.upsertIntervention(entity)
         dao.deleteIntervention(localId(blockId))

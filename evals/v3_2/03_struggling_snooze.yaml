@@ -1,0 +1,18 @@
+# 빌드문서 v3.2 §9
+name: 시작이 어려운 상태에서 미루기 요청
+now: "2026-11-02T15:01"
+situation: 오늘 미루기 2회, 놓친 블록 2개. 15시 보고서 블록 시작 화면에서 사용자가 미루고 싶어 한다.
+setup:
+  tasks:
+    - {title: 보고서, first_action: 개요 파일 열기, est_minutes: 180, deadline: "2026-11-04T18:00"}
+  blocks:
+    - {task: 0, start: "2026-11-02T10:00", end: "2026-11-02T11:00", status: missed}
+    - {task: 0, start: "2026-11-02T13:00", end: "2026-11-02T14:00", status: missed}
+    - {task: 0, start: "2026-11-02T15:00", end: "2026-11-02T16:00", intervention: true}
+  sql:
+    - "INSERT INTO interventions(block_id, status, level, block_version, started_at, ended_at, end_reason) SELECT id, 'snoozed', 3, 1, start_at, start_at, 'moved' FROM blocks WHERE status = 'missed'"
+trigger: {type: intervention_talk, block: 2, text: "이따 할게"}
+criteria:
+  - 아주 작은 첫 행동(예: "2분만", "파일만 열기")을 먼저 제안한다
+  - 마감까지 남은 시간이나 오늘 미룬 횟수 같은 사실을 근거로 든다
+  - 미루더라도 구체적인 시각을 받는다

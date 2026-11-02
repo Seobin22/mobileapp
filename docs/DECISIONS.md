@@ -213,3 +213,22 @@
 
 - 앱 3.1.2: 설정 화면에 "AI 모델" 칸(제공자 선택·모델 입력/목록에서 고르기·모델 저장·연결 테스트·제공자별 키 저장). 관리 화면과 같은 서버 API(`/v1/admin/agent`, `/v1/admin/llm`, `/v1/admin/llm_key`, `/v1/admin/llm/models`, `/v1/admin/llm/test`)를 앱의 API 토큰으로 부른다.
 - 앱 3.1.3: 홈 버튼으로 앱을 나가면 비서 알림이 안 뜨던 문제 수정. 채팅 화면이 "보는 중" 표시를 화면이 사라질 때만 껐는데, 홈으로 나가도 화면은 사라지지 않아 FCM 을 받고도 알림을 건너뛰었다(서버 발송은 정상이었음). 이제 앱이 화면에 보일 때(ON_RESUME~ON_PAUSE)만 "보는 중"이다.
+
+## v3.2 (빌드문서 v3.2, 2026-11-02) — 마감·상태 판단·반복 고정 일정·달력·메모·블록 기록·연결 블록
+
+- **복귀 지점**: 작업 전 운영 상태(`496d8f7`)에 태그 `1102_4_v3.2전`. 새 DB 컬럼은 모두 NULL 허용·기본값이라 코드만 되돌려도 v3.1 코드가 V7 DB 로 동작한다(AssistantDb 는 모르는 상위 버전을 건너뛴다). DB 자체는 마이그레이션 직전 자동 백업 `backups/pre-V7.zip`.
+- **DB V7**: `fixed_series`(H2 예약어라 `interval` → `interval_n`, 요일은 `by_days` "1,3" 문자열), `series_exceptions`(action skip | moved | **conflict**), `blocks.series_id·occurrence_date·memo·memo_updated_at·linked_fixed_block_id`(+ unique(series_id, occurrence_date)), `block_logs`, `turns.stage·stage_text·queued_at·updated_at·tool_names·duration_ms`. 설정 `series.horizon_days`(14)·`lookahead.days`(28)·`memo.urgent_hours`(24)·`memo.max_chars`(1000).
+- **P0 turn 종료**: 응답에 send_message·ask_user 가 있고 그 응답의 도구가 모두 성공했으며 조회 도구(get_*)가 없으면 turn 을 끝낸다(문서 Z1: 답장 + 기록 도구를 한 응답에서). 실패한 도구가 있거나 조회가 섞이면 결과를 돌려주고 계속한다. 목표 누락이면 결과와 [시스템 검사] 문장을 함께 돌려보낸다(turn 계속).
+- **P0.2 공통 마무리**: `AgentRunner.finish` 한 곳(텍스트 답 → 목표 누락 정리 → '저장됨' 줄 → turn 기록). 실패·재시도·건너뜀도 `endTurn` 한 곳에서 stage(done | failed | queued)를 정한다.
+- **'저장됨' 한 줄**: 문서는 "turn 의 changes 를 보고"지만, 반복 일정처럼 changes 에 남지 않는 변경이 있어 도구가 실행될 때 `Tools.Context.savedLines` 에 모으고 turn 끝에 kind=system·알림 없음으로 한 메시지로 보낸다(user_message·intervention_talk 만). 형식 `저장됨: 과제 · 마감 11/7(토) 23:00`, `저장됨: 고정 · 11/5(목) 15:00 치과`, `저장됨: 고정 삭제 · …`, `저장됨: 반복 · 매주 화·목 19:00 헬스`.
+- **마감 검증**: 할 일 deadline 이후에 끝나는 계획 블록은 set_schedule·move_block 모두 거절("과제 마감(11/2(월) 12:00) 이후에 끝나는 블록입니다").
+- **지금 상태**: 오늘 = logical day(기상부터). 제시간 = 실제 시작 ≤ 예정 + 10분. 미루기 = 오늘 끝난 snoozed 개입 수. 연속 제시간은 시작 시각이 지난 블록(planned·nudging·cancelled 제외)을 최근부터 센다.
+- **반복 일정**: 매일 04:10(작업 `series_generate`)과 시리즈 생성·수정 때 오늘~+14일 회차를 만든다. 다른 고정 블록과 겹치는 날은 만들지 않고 `conflict` 예외로 남겨 다시 시도·알림하지 않는다(사용자 메시지 1회, kind=system). 회차 블록 source=`series`.
+  - '전체'·'이후 전부'로 다시 만들 때 미래 회차(planned, 시작 전)는 status=cancelled·occurrence_date=NULL 로 지우고 새로 만든다(unique 때문). '이 날만' 옮긴 회차(moved 예외)는 지우지 않고 유지, '이후 전부'면 그 예외를 새 시리즈로 옮긴다. '이번만' 메모와 연결 블록은 같은 날짜의 새 회차로 옮기고, 시각이 바뀌었으면 fixed_changed.
+  - 시리즈 메모·이번만 메모는 앱만 쓴다. 비서 도구(upsert_fixed_series)의 memo 는 무시, 채팅 요청은 append_fixed_memo.
+- **메모 긴급 호출**: 곧(24시간 안) 시작하는 고정 블록 메모가 바뀌면 `fixed_memo_changed` turn 을 now+2분에 예약하고, 같은 블록 turn 이 대기 중이면 새로 만들지 않는다(2분 디바운스). 반복 '매번' 메모는 가장 가까운 회차 기준.
+- **맥락 메모**: morning = 앞으로 28일 고정 일정 전부(아직 블록이 없는 반복 회차 포함, 메모 없으면 '메모:' 없이), 고정 블록 관련 turn = 그 블록 메모·고지, 그 밖 = 48시간 안 메모 있는 일정만.
+- **블록 기록**: 비서 add_block_log 는 200자 넘으면 거절(문서 L2 "거절 또는 잘림" 중 거절). 코드 기록은 500자에서 자른다. 연장(extend_block)은 moved 로 남긴다.
+- **연결 블록 변경 알림**: 연결된 미래 계획 블록이 있을 때만 fixed_changed(앱·도구·반복 재생성 모두, 대기 중이면 중복 없음). 고정 삭제 시 연결 블록과 그 할 일을 코드가 취소한다.
+- **앱 API**: `GET /v1/calendar`(최대 62일), `GET/PATCH /v1/tasks/{id}`(PATCH 는 task_changed_by_user turn, priority 10), `GET /v1/turns/{id}/status`, `GET /v1/blocks/{id}`·`/logs`, `/v1/fixed_series` CRUD(scope·from_date 는 쿼리). `PATCH /v1/fixed_blocks/{id}` 에 memo 만 있으면 메모만 저장(시작한 블록도 가능).
+- **앱 3.2.0**: 시간표 탭 → 달력(월·주·일, 시간 축 0~24시, 7시로 스크롤). 채팅은 열 때 최신, 맨 아래면 따라가고 위면 [↓ n]. 보낸 메시지마다 turn 진행 상태를 1.5초마다 읽어 자리 표시(점 + 문구, 20초 넘으면 "(조금 오래 걸리고 있어요)"), 실패면 [다시 시도], 뒤에 보낸 것은 "대기 중". 개입 화면에 메모, "생각 중…" 을 진행 문구로. Room 스키마 5(파괴적).

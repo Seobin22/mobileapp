@@ -212,4 +212,135 @@ data class FixedBlockRequest(
     val location: String? = null,
     val goal_id: Long? = null,
     val first_action: String? = null,
+    /** v3.2 §3: 사용자 메모(단발 일정, 또는 반복의 '이번만'). */
+    val memo: String? = null,
+)
+
+// ------------------------------------------------------------------ v3.2 달력·마감·블록 기록·반복 일정
+
+@Serializable
+data class LinkedPrep(val id: Long, val start: String, val title: String, val status: String)
+
+@Serializable
+data class CalendarBlock(
+    val id: Long,
+    val kind: String,
+    val start: String,
+    val end: String,
+    val status: String,
+    val title: String = "",
+    val task_id: Long? = null,
+    val goal_id: Long? = null,
+    val goal_label: String = "",
+    val goal_color: String = "",
+    val series_id: Long? = null,
+    val lead_minutes: Int = 0,
+    val location: String? = null,
+    val memo: String = "",
+    val linked_prep: List<LinkedPrep> = emptyList(),
+    val deadline: String? = null,
+    val linked_fixed_block_id: Long? = null,
+    val linked_title: String? = null,
+)
+
+@Serializable
+data class DeadlineDto(
+    val task_id: Long? = null,
+    val goal_id: Long? = null,
+    val title: String,
+    val at: String,
+    val blocks_before: Int = 0,
+    val passed: Boolean = false,
+)
+
+@Serializable
+data class CalendarResponse(val blocks: List<CalendarBlock>, val deadlines: List<DeadlineDto> = emptyList())
+
+@Serializable
+data class TaskBlockDto(val id: Long, val start: String, val end: String, val status: String)
+
+@Serializable
+data class TaskDetailDto(
+    val id: Long,
+    val title: String,
+    val status: String,
+    val deadline: String? = null,
+    val remaining_minutes: Int = 0,
+    val left_text: String? = null,
+    val blocks: List<TaskBlockDto> = emptyList(),
+)
+
+@Serializable
+data class BlockLogDto(
+    val id: Long,
+    val at: String,
+    val type: String,
+    val actor: String,
+    val content: String,
+)
+
+@Serializable
+data class SeriesDto(
+    val id: Long,
+    val title: String,
+    val freq: String,
+    val interval: Int = 1,
+    val by_days: List<Int> = emptyList(),
+    val month_day: Int? = null,
+    val start_time: String,
+    val duration_min: Int,
+    val start_date: String,
+    val until_date: String? = null,
+    val lead_minutes: Int = 0,
+    val location: String? = null,
+    val goal_id: Long? = null,
+    val first_action: String? = null,
+    val memo: String = "",
+    val rule_text: String = "",
+)
+
+@Serializable
+data class BlockDetailDto(
+    val id: Long,
+    val kind: String,
+    val start: String,
+    val end: String,
+    val status: String,
+    val title: String = "",
+    val task_id: Long? = null,
+    val goal_label: String = "",
+    val goal_color: String = "",
+    val series_id: Long? = null,
+    val lead_minutes: Int = 0,
+    val location: String? = null,
+    val memo: String = "",
+    val once_memo: String = "",
+    val linked_prep: List<LinkedPrep> = emptyList(),
+    val deadline: String? = null,
+    val linked_fixed_block_id: Long? = null,
+    val linked_title: String? = null,
+    val series: SeriesDto? = null,
+    val occurrence_date: String? = null,
+    val logs: List<BlockLogDto> = emptyList(),
+)
+
+@Serializable
+data class TurnStatusDto(val stage: String, val stage_text: String = "", val elapsed_sec: Long = 0)
+
+@Serializable
+data class SeriesRequest(
+    val title: String? = null,
+    val freq: String? = null,
+    val interval: Int? = null,
+    val by_days: List<Int>? = null,
+    val month_day: Int? = null,
+    val start_time: String? = null,
+    val duration_min: Int? = null,
+    val start_date: String? = null,
+    val until_date: String? = null,
+    val lead_minutes: Int? = null,
+    val location: String? = null,
+    val goal_id: Long? = null,
+    val first_action: String? = null,
+    val memo: String? = null,
 )

@@ -1,0 +1,19 @@
+# 빌드문서 v3.2 §9 (04 의 다음 날)
+name: 어제 알린 결혼식 준비를 다음 날 아침 반복하지 않음
+now: "2026-11-03T07:00"
+situation: 어제 아침 결혼식 준비(KTX 예매·정장·축의금)를 이미 알렸고, KTX 예매 준비 블록도 잡혀 있다.
+setup:
+  memory: "서울(마포구)에 산다."
+  tasks:
+    - {title: KTX 예매, first_action: 코레일 앱 열기, est_minutes: 20, deadline: "2026-11-14T09:00"}
+  fixed_blocks:
+    - {title: 부산 결혼식, start: "2026-11-14T12:00", end: "2026-11-14T14:00", lead: 180, buffer_after: 180, memo: "정장, 축의금"}
+  blocks:
+    - {task: 0, start: "2026-11-04T20:00", end: "2026-11-04T20:20"}
+  sql:
+    - "UPDATE blocks SET linked_fixed_block_id = (SELECT id FROM blocks WHERE kind = 'fixed') WHERE kind = 'planned'"
+    - "INSERT INTO block_logs(block_id, at, type, actor, content) SELECT id, TIMESTAMP WITH TIME ZONE '2026-11-02 07:05:00+09:00', 'notice', 'assistant', 'KTX 예매·정장·축의금 미리 안내' FROM blocks WHERE kind = 'fixed'"
+trigger: {type: morning, logical_day: "2026-11-03"}
+criteria:
+  - 결혼식 준비(KTX 예매·정장·축의금)를 다시 길게 알리지 않는다(이미 고지함)
+  - 연결 블록을 새로 중복해서 만들지 않는다

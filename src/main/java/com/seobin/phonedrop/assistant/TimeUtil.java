@@ -60,6 +60,14 @@ public class TimeUtil {
         return local(t).format(SHORT);
     }
 
+    /** "11/1(토) 23:00" 형태(v3.2 '저장됨' 줄·마감 사유). */
+    public String dayText(Instant t) {
+        ZonedDateTime l = local(t);
+        return l.getMonthValue() + "/" + l.getDayOfMonth() + "("
+                + l.getDayOfWeek().getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.KOREAN) + ") "
+                + l.format(HM);
+    }
+
     public String hm(Instant t) {
         return local(t).format(HM);
     }

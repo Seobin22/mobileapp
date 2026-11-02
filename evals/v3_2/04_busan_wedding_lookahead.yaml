@@ -1,0 +1,14 @@
+# 빌드문서 v3.2 §9
+name: 2주 뒤 결혼식을 아침에 미리 알리고 연결 블록(다음 날 반복 안 함은 07 에서)
+now: "2026-11-02T07:00"
+situation: 2주 뒤 부산 결혼식(메모: 정장, 축의금)이 고정 일정에 있다. 아침 브리핑.
+setup:
+  memory: "서울(마포구)에 산다."
+  fixed_blocks:
+    - {title: 부산 결혼식, start: "2026-11-14T12:00", end: "2026-11-14T14:00", lead: 180, buffer_after: 180, memo: "정장, 축의금"}
+trigger: {type: morning, logical_day: "2026-11-02"}
+criteria:
+  - KTX 예매·정장·축의금 같은 준비를 미리 알린다
+  - 예매처럼 할 일이 있으면 결혼식에 연결된 준비 블록(linked_fixed_block_id)과 할 일을 만든다
+  - 알리는 응답에서 결혼식 블록에 add_block_log(type=notice)를 남긴다
+  - 메모를 고치지 않는다

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import com.seobin.phonedrop.assistant.ApiException;
 import com.seobin.phonedrop.assistant.AssistantClock;
 import com.seobin.phonedrop.assistant.AssistantDb;
+import com.seobin.phonedrop.assistant.BlockLogs;
 import com.seobin.phonedrop.assistant.GoalCoverage;
 import com.seobin.phonedrop.assistant.InterventionService;
 import com.seobin.phonedrop.assistant.Json;
@@ -53,10 +54,13 @@ public class FixedBlockService {
     private final Changes changes;
     private final GoalCoverage coverage;
     private final TurnQueue turns;
+    private final BlockLogs logs;
+    private final com.seobin.phonedrop.assistant.TimeUtil time;
 
     public FixedBlockService(AssistantDb db, AssistantClock clock, Store store, SettingsService settings,
                              Validator validator, InterventionService interventions, PlanService plan, Changes changes,
-                             GoalCoverage coverage, TurnQueue turns) {
+                             GoalCoverage coverage, TurnQueue turns, BlockLogs logs,
+                             com.seobin.phonedrop.assistant.TimeUtil time) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -67,6 +71,8 @@ public class FixedBlockService {
         this.changes = changes;
         this.coverage = coverage;
         this.turns = turns;
+        this.logs = logs;
+        this.time = time;
     }
 
     /**
@@ -157,13 +163,16 @@ public class FixedBlockService {
         long blockId;
         if (existing == null) {
             String source = turnId == null ? "manual" : "chat";
+            // v3.2 §3.1: 메모는 사용자만 쓴다(앱). 도구로 만들 때는 비워 둔다.
+            String memo = turnId == null ? memoOf(in) : "";
             blockId = db.insert("""
                             INSERT INTO blocks(kind, title, task_id, goal_id, start_at, end_at, status, screen_text,
-                            lead_minutes, buffer_after_min, location, source, sensitive, prep_set_by)
-                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
+                            lead_minutes, buffer_after_min, location, source, sensitive, prep_set_by, memo, memo_updated_at)
+                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     title, taskId, goalId, start, end, screen, lead, bufferAfter, location, source, sensitive,
-                    prepSetBy);
+                    prepSetBy, memo, memo.isEmpty() ? null : now);
             record(turnId, blockId, null);
+            logs.add(blockId, "created", actor(turnId), turnId == null ? "사용자가 앱에서 생성" : "비서가 생성");
         } else {
             blockId = existing.id();
             JsonNode before = changes.snapshot("block", blockId);
@@ -180,6 +189,21 @@ public class FixedBlockService {
                     title, taskId, goalId, start, end, screen, lead, bufferAfter, location, sensitive, prepSetBy,
                     timeChanged, timeChanged, blockId);
             record(turnId, blockId, before);
+            if (!start.equals(existing.start()) || !end.equals(existing.end())) {
+                ObjectNode data = Json.object();
+                data.put("from_start", time.iso(existing.start()));
+                data.put("from_end", time.iso(existing.end()));
+                data.put("to_start", time.iso(start));
+                data.put("to_end", time.iso(end));
+                logs.add(blockId, "moved", actor(turnId), time.hm(existing.start()) + "→" + time.hm(start)
+                        + (turnId == null ? " (사용자가 앱에서)" : " (비서)"), data);
+                // v3.2 §2.2: 반복 회차의 시각을 바꾸면 '이 날만'(moved 예외).
+                recordMoved(existing);
+                List<Long> linked = linkedFuture(blockId);
+                if (!linked.isEmpty()) {
+                    notifyFixedChanged(blockId, linked, "moved");
+                }
+            }
         }
 
         List<Long> displaced = new ArrayList<>();
@@ -210,11 +234,87 @@ public class FixedBlockService {
             return Result.fail("블록#" + id + "은 이미 " + b.status() + " 상태입니다");
         }
         cancel(b, turnId);
+        logs.add(id, "note", actor(turnId), turnId == null ? "사용자가 앱에서 삭제" : "비서가 삭제");
+        // v3.2 §2.2: 반복 회차를 지우면 '이 날만' 없음(skip 예외, 다시 만들지 않는다).
+        recordSkipped(b);
+        // v3.2 §6: 연결된 미래 계획 블록과 그 할 일을 취소하고 비서가 알리게 한다.
+        List<Long> linked = linkedFuture(id);
+        for (long linkedId : linked) {
+            Store.Block lb = store.block(linkedId).orElseThrow();
+            cancel(lb, turnId);
+            logs.add(linkedId, "note", "system", "연결된 고정 일정#" + id + "이 삭제되어 취소");
+            if (lb.taskId() != null) {
+                db.update("UPDATE tasks SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'",
+                        lb.taskId());
+            }
+        }
+        if (!linked.isEmpty()) {
+            notifyFixedChanged(id, linked, "cancelled");
+        }
         plan.bumpAndSync();
         if (turnId == null) {
             coverage.onBlockClosed(id);
         }
         return new Result(id, List.of(), List.of(), null);
+    }
+
+    /** 고정 블록에 밀려난 계획 블록을 취소한다(반복 회차 생성 등 다른 서비스가 쓴다). */
+    public void displace(Store.Block b, Long turnId) {
+        cancel(b, turnId);
+        logs.add(b.id(), "note", "system", "고정 일정에 밀려 취소");
+    }
+
+    /** 이 고정 블록에 연결된, 아직 시작 전인 미래 계획 블록. */
+    public List<Long> linkedFuture(long fixedBlockId) {
+        return db.jdbc().sql("""
+                        SELECT id FROM blocks WHERE linked_fixed_block_id = ? AND status IN ('planned', 'nudging')
+                        AND end_at > ? ORDER BY start_at""")
+                .param(fixedBlockId).param(AssistantDb.ts(clock.now())).query(Long.class).list();
+    }
+
+    /** v3.2 §6: 고정 일정이 바뀌거나 지워지면 fixed_changed turn(priority 5, ref = 고정 블록 + 연결 블록). */
+    public void notifyFixedChanged(long fixedBlockId, List<Long> linked, String change) {
+        ObjectNode ref = Json.object();
+        ref.put("block_id", fixedBlockId);
+        ref.set("linked", Json.MAPPER.valueToTree(linked));
+        ref.put("change", change);
+        turns.enqueueIfAbsent("fixed_changed", ref, TurnQueue.PRIORITY_DEFAULT, clock.now());
+    }
+
+    private void recordMoved(Store.Block occurrence) {
+        if (occurrence.seriesId() == null || occurrence.occurrenceDate() == null) {
+            return;
+        }
+        int n = db.jdbc().sql("""
+                        SELECT COUNT(*) FROM series_exceptions WHERE series_id = ? AND occurrence_date = ? AND action = 'moved'""")
+                .param(occurrence.seriesId()).param(occurrence.occurrenceDate()).query(Integer.class).single();
+        if (n == 0) {
+            db.insert("""
+                            INSERT INTO series_exceptions(series_id, occurrence_date, action, moved_block_id)
+                            VALUES (?, ?, 'moved', ?)""",
+                    occurrence.seriesId(), occurrence.occurrenceDate(), occurrence.id());
+        }
+    }
+
+    private void recordSkipped(Store.Block occurrence) {
+        if (occurrence.seriesId() == null || occurrence.occurrenceDate() == null) {
+            return;
+        }
+        db.insert("INSERT INTO series_exceptions(series_id, occurrence_date, action) VALUES (?, ?, 'skip')",
+                occurrence.seriesId(), occurrence.occurrenceDate());
+    }
+
+    private String memoOf(JsonNode in) {
+        String memo = in.path("memo").asString("").strip();
+        int max = settings.getInt("memo.max_chars");
+        if (memo.length() > max) {
+            throw ApiException.unprocessable("메모는 " + max + "자 이하여야 합니다");
+        }
+        return memo;
+    }
+
+    private static String actor(Long turnId) {
+        return turnId == null ? "user" : "assistant";
     }
 
     private void cancel(Store.Block b, Long turnId) {

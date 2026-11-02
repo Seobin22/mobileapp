@@ -21,12 +21,15 @@ public class Store {
      * 시간표의 칸(빌드문서 v3.1 §1). kind=fixed 는 사용자가 시각을 정한 고정 블록(할 일 없이도 있다),
      * planned 는 비서가 할 일을 위해 잡은 계획 블록. 둘 다 개입(알람)이 간다.
      * prepSetBy: lead·buffer 를 누가 정했나(user | assistant | null=아직, lead 0 으로 계산, v3.1 §3.2.1).
+     * v3.2: seriesId·occurrenceDate = 반복 일정에서 만든 회차, memo = 사용자 메모(반복이면 '이번만'),
+     * linkedFixedBlockId = 이 계획 블록이 준비하는 고정 일정.
      */
     public record Block(long id, Long taskId, Instant start, Instant end, String status, String screenText,
                         Instant actualStart, Instant actualEnd, int version, Long workProductId,
                         String kind, String title, Long goalId, int leadMinutes, int bufferAfterMin,
                         String location, String source, String externalId, boolean sensitive,
-                        String prepSetBy) {
+                        String prepSetBy, Long seriesId, java.time.LocalDate occurrenceDate, String memo,
+                        Long linkedFixedBlockId) {
 
         public boolean fixed() {
             return "fixed".equals(kind);
@@ -176,6 +179,17 @@ public class Store {
         db.update("UPDATE blocks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, blockId);
     }
 
+    /** 고정 블록 메모 전체(v3.2 §3): 반복이면 '매번'(시리즈) + '이번만'(회차). */
+    public String fullMemo(Block b) {
+        String every = b.seriesId() == null ? "" : db.jdbc().sql("SELECT memo FROM fixed_series WHERE id = ?")
+                .param(b.seriesId()).query(String.class).optional().orElse("");
+        String once = b.memo() == null ? "" : b.memo();
+        if (every.isBlank()) {
+            return once;
+        }
+        return once.isBlank() ? every : every + " / 이번만: " + once;
+    }
+
     /** 블록 제목: 고정 블록은 자기 제목, 계획 블록은 할 일 제목(비어 있으면). */
     public String blockTitle(Block b) {
         if (!b.title().isBlank()) {
@@ -215,7 +229,9 @@ public class Store {
                 rs.getString("kind"), rs.getString("title"), AssistantDb.nullableLong(rs, "goal_id"),
                 rs.getInt("lead_minutes"), rs.getInt("buffer_after_min"), rs.getString("location"),
                 rs.getString("source"), rs.getString("external_id"), rs.getBoolean("sensitive"),
-                rs.getString("prep_set_by"));
+                rs.getString("prep_set_by"), AssistantDb.nullableLong(rs, "series_id"),
+                rs.getObject("occurrence_date", java.time.LocalDate.class), rs.getString("memo"),
+                AssistantDb.nullableLong(rs, "linked_fixed_block_id"));
     }
 
     static Intervention intervention(ResultSet rs, int n) throws SQLException {

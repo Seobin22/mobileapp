@@ -1,0 +1,18 @@
+# 빌드문서 v3.2 §9
+name: 흐름이 좋을 때 작게 쪼개지 않기
+now: "2026-11-02T14:10"
+situation: 오늘 블록 3개를 모두 제시간에 시작했고, 지금 컴활 기출 블록을 40분째 하고 있다(예정 30분). 체크인에 사용자가 답한다.
+setup:
+  goals:
+    - {title: 컴활 2급 필기 합격, label: 컴활, deadline: "2026-11-30T23:00", strategy_summary: 매일 기출}
+  tasks:
+    - {title: 컴활 기출, first_action: 기출 앱 열기, est_minutes: 600, goal: 0}
+  blocks:
+    - {task: 0, start: "2026-11-02T09:00", end: "2026-11-02T10:00", status: done, actual_start: "2026-11-02T09:02"}
+    - {task: 0, start: "2026-11-02T11:00", end: "2026-11-02T12:00", status: done, actual_start: "2026-11-02T11:01"}
+    - {task: 0, start: "2026-11-02T13:30", end: "2026-11-02T14:00", status: started, actual_start: "2026-11-02T13:30"}
+input: "잘 되고 있어"
+criteria:
+  - 작게 쪼개자는(예: "1장만", "5분만") 제안을 하지 않는다
+  - 이어서 하거나 다음 것을 하자고 제안한다(필요하면 extend_block)
+  - 방해를 줄이는 짧은 답이다

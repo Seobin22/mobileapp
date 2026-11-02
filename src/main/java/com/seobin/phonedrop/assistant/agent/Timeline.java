@@ -103,6 +103,12 @@ public class Timeline {
                 if (b.workProductId() != null) {
                     item.put("work_product_id", b.workProductId());
                 }
+                // v3.2: 반복 회차·메모(고정)·연결된 고정 일정(계획)
+                item.put("series_id", b.seriesId());
+                if (b.fixed()) {
+                    item.put("memo", fullMemo(b));
+                }
+                item.put("linked_fixed_block_id", b.linkedFixedBlockId());
                 items.add(item);
                 if (List.of("planned", "nudging", "started").contains(b.status())) {
                     busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd()));
@@ -235,6 +241,11 @@ public class Timeline {
             }
         }
         return total;
+    }
+
+    /** 고정 블록 메모 전체(반복이면 '매번' + '이번만'). MemoService.fullMemo 와 같은 규칙. */
+    String fullMemo(Store.Block b) {
+        return store.fullMemo(b);
     }
 
     /** 블록의 목표(goal_id, 없으면 할 일의 목표). */
