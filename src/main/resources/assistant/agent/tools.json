@@ -590,7 +590,7 @@
   },
   {
     "name": "create_work_product",
-    "description": "할 일에 도움이 되는 작업물(조사 요약·체크리스트·초안·공부 범위)을 마크다운으로 저장한다. 웹에서 찾은 내용은 sources 에 출처를 넣고, 확실하지 않으면 본문에 '확인 필요'라고 적는다. 결과 id 를 attach_work_product 로 블록에 붙인다.",
+    "description": "할 일에 도움이 되는 작업물(조사 요약·체크리스트·초안·공부 범위)을 마크다운으로 저장한다. 웹에서 찾은 내용은 sources 에 출처를 넣고, 확실하지 않으면 본문에 '확인 필요'라고 적는다. 결과 id 를 attach_work_product 로 블록에 붙인다. 사용자 허락을 받은 뒤에만 만든다(사용자가 요청했거나 ask_user 에 원한다고 답한 turn 에서만 실행된다).",
     "input_schema": {
       "type": "object",
       "properties": {

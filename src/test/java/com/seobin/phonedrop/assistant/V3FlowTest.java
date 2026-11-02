@@ -463,6 +463,22 @@ class V3FlowTest extends AssistantTestBase {
     }
 
     @Test
+    void r1b_workProductOnlyAfterUserAllows() {
+        long[] ids = createBlock("쇼핑몰 조건 확인", "2026-11-02T10:00", 60);
+        String args = "{\"task_id\":" + ids[0] + ",\"title\":\"요약\",\"kind\":\"research\",\"content_md\":\"x\"}";
+        long wakeupTurn = db.insert("INSERT INTO turns(trigger, status, started_at) VALUES ('wakeup', 'running', ?)",
+                clock.now());
+        ObjectNode rejected = tx.run(() -> agentTools.dispatch(new Tools.Context(wakeupTurn, "wakeup", false),
+                "create_work_product", Json.parse(args)));
+        assertThat(rejected.path("ok").asBoolean()).isFalse();
+        assertThat(rejected.toString()).contains("허락");
+        assertThat(count("SELECT COUNT(*) FROM work_products")).isZero();
+
+        assertThat(tool("create_work_product", args).path("ok").asBoolean()).isTrue();
+        assertThat(count("SELECT COUNT(*) FROM work_products")).isEqualTo(1);
+    }
+
+    @Test
     void r2_softLimitDisablesWebSearchAndPulse() {
         llm.then(text("네"));
         say("안녕");

@@ -33,6 +33,8 @@ public class Permissions {
     }
 
     public static final String CALENDAR_REJECT = "캘린더에서 바꿔주세요";
+    public static final String WORK_PRODUCT_ASK_FIRST =
+            "작업물은 사용자 허락을 받은 뒤에 만든다. ask_user로 만들지 묻고, 사용자가 원한다고 답하면 그때 만든다";
 
     private final Store store;
 
@@ -95,6 +97,10 @@ public class Permissions {
                     return Decision.confirm("goal_change");
                 }
                 return Decision.execute();
+            }
+            case "create_work_product" -> {
+                // 사용자 요청(2026-11-02): 작업물은 허락받은 뒤에만 만든다. 허락은 사용자의 답(user_message)으로 온다.
+                return fromUser ? Decision.execute() : Decision.reject(WORK_PRODUCT_ASK_FIRST);
             }
             default -> {
                 return Decision.execute();
