@@ -9,20 +9,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Properties;
 
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import com.seobin.phonedrop.auth.PasswordHasher;
 
 /**
  * 관리자 아이디·비밀번호. data/admin/account 에 비밀번호 해시(PBKDF2)만 저장한다.
@@ -33,8 +31,6 @@ import org.springframework.stereotype.Component;
 public class AdminAccount {
 
     private static final Logger log = LoggerFactory.getLogger(AdminAccount.class);
-    private static final String ALGORITHM = "PBKDF2WithHmacSHA256";
-    private static final int ITERATIONS = 210_000;
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final Path accountFile;
@@ -66,7 +62,7 @@ public class AdminAccount {
         boolean sameName = MessageDigest.isEqual(
                 this.username.getBytes(StandardCharsets.UTF_8),
                 username.getBytes(StandardCharsets.UTF_8));
-        boolean samePassword = MessageDigest.isEqual(hash, derive(password, salt));
+        boolean samePassword = PasswordHasher.matches(password, salt, PasswordHasher.ITERATIONS, hash);
         return sameName & samePassword;
     }
 
@@ -76,9 +72,8 @@ public class AdminAccount {
     }
 
     private void set(String newUsername, String newPassword) throws IOException {
-        byte[] newSalt = new byte[16];
-        RANDOM.nextBytes(newSalt);
-        byte[] newHash = derive(newPassword, newSalt);
+        byte[] newSalt = PasswordHasher.newSalt();
+        byte[] newHash = PasswordHasher.hash(newPassword, newSalt, PasswordHasher.ITERATIONS);
 
         Properties props = new Properties();
         props.setProperty("username", newUsername);
@@ -106,15 +101,6 @@ public class AdminAccount {
         this.username = props.getProperty("username");
         this.salt = HexFormat.of().parseHex(props.getProperty("salt"));
         this.hash = HexFormat.of().parseHex(props.getProperty("hash"));
-    }
-
-    private static byte[] derive(String password, byte[] salt) {
-        try {
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, ITERATIONS, 256);
-            return SecretKeyFactory.getInstance(ALGORITHM).generateSecret(spec).getEncoded();
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException(e);
-        }
     }
 
     private static String randomPassword() {
