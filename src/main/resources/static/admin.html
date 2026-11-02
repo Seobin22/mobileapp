@@ -35,8 +35,18 @@
             overflow-wrap: anywhere;
         }
 
+        .hiddenOnMain {
+            color: #888;
+            border-style: dashed;
+        }
+
         .dateLink {
             margin-right: 8px;
+        }
+
+        .hint {
+            color: #666;
+            font-size: 0.9em;
         }
 
         .error {
@@ -77,8 +87,9 @@
                     <input id="textDate" type="date">
                 </label>
                 <button type="button" onclick="showToday()">오늘</button>
-                <button type="button" onclick="deleteDate()">이 날짜 전체 삭제</button>
+                <button type="button" onclick="deleteDate()">이 날짜 전체 영구 삭제</button>
             </p>
+            <p class="hint">점선 칸은 메인 화면에서 삭제된 텍스트입니다(메인에서는 안 보이고 여기에만 남아 있음).</p>
             <p class="error" id="textError"></p>
             <div id="textList"></div>
         </section>
@@ -194,16 +205,17 @@
 
             texts.forEach(entry => {
                 const item = document.createElement("div");
-                item.className = "textItem";
+                item.className = entry.deletedAt ? "textItem hiddenOnMain" : "textItem";
 
                 const time = document.createElement("small");
-                time.textContent = entry.createdAt.replace("T", " ");
+                time.textContent = entry.createdAt.replace("T", " ") +
+                    (entry.deletedAt ? "  · 메인에서 삭제됨 " + entry.deletedAt.replace("T", " ") : "");
 
                 const content = document.createElement("div");
                 content.textContent = entry.text;
 
                 const deleteButton = document.createElement("button");
-                deleteButton.textContent = "삭제";
+                deleteButton.textContent = "영구 삭제";
                 deleteButton.addEventListener("click", () => deleteText(entry.id));
 
                 item.append(time, content, deleteButton);
@@ -242,7 +254,7 @@
         }
 
         async function deleteText(id) {
-            if (!confirm("이 텍스트를 삭제할까요?")) {
+            if (!confirm("이 텍스트를 영구 삭제할까요? 되돌릴 수 없습니다.")) {
                 return;
             }
 
@@ -252,7 +264,7 @@
         }
 
         async function deleteDate() {
-            if (!confirm(textDate.value + " 의 텍스트를 모두 삭제할까요?")) {
+            if (!confirm(textDate.value + " 의 텍스트를 모두 영구 삭제할까요? 되돌릴 수 없습니다.")) {
                 return;
             }
 

@@ -17,6 +17,7 @@ import com.seobin.phonedrop.admin.AdminController.LoginRequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 class TextAndAdminTest {
 
@@ -48,6 +49,31 @@ class TextAndAdminTest {
         assertThat(store.delete(id)).isFalse();
         assertThat(store.deleteByDate(today)).isEqualTo(1);
         assertThat(store.dates()).isEmpty();
+    }
+
+    @Test
+    void mainPageDeleteOnlyHidesAndAdminStillSeesIt() throws Exception {
+        TextStore store = newStore();
+        TextController controller = new TextController(store);
+        controller.addText("남길 것");
+        controller.addText("지울 것");
+        long id = controller.getTexts(null).get(0).id();
+
+        controller.hideText(id);
+        assertThatThrownBy(() -> controller.hideText(id)).isInstanceOf(ResponseStatusException.class);
+        assertThat(controller.getTexts(null)).extracting(TextStore.TextEntry::text).containsExactly("남길 것");
+
+        AdminController admin = new AdminController(new AdminAccount(dir.toString()), store);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        admin.login(new LoginRequest("admin", initialPassword(dir)), request);
+        assertThat(admin.texts(null, request))
+                .extracting(TextStore.TextEntry::text, entry -> entry.deletedAt() != null)
+                .containsExactly(tuple("지울 것", true), tuple("남길 것", false));
+
+        assertThat(controller.hideTextsOfDate(TextStore.today())).isEqualTo("1개 삭제 완료");
+        assertThat(controller.getTexts(null)).isEmpty();
+        assertThat(admin.texts(null, request)).hasSize(2);
+        assertThat(admin.dates(request)).containsExactly(new TextStore.DateCount(TextStore.today(), 2));
     }
 
     @Test

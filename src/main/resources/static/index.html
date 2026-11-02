@@ -99,6 +99,7 @@
                 <input id="textDate" type="date">
             </label>
             <button type="button" onclick="showToday()">오늘</button>
+            <button type="button" onclick="hideTextsOfDate()">이 날짜 전체 삭제</button>
         </p>
 
         <div id="textList"></div>
@@ -292,9 +293,34 @@
                     alert("복사했습니다.");
                 });
 
-                item.append(time, content, copyButton);
+                const deleteButton = document.createElement("button");
+                deleteButton.textContent = "삭제";
+                deleteButton.addEventListener("click", () => hideText(entry.id));
+
+                item.append(time, content, copyButton, deleteButton);
                 textList.appendChild(item);
             });
+        }
+
+        async function hideText(id) {
+            if (!confirm("이 텍스트를 삭제할까요?")) {
+                return;
+            }
+
+            await fetch("/texts/" + id, { method: "DELETE" });
+            await loadTexts();
+        }
+
+        async function hideTextsOfDate() {
+            if (!confirm(textDate.value + " 의 텍스트를 모두 삭제할까요?")) {
+                return;
+            }
+
+            await fetch(
+                "/texts?date=" + encodeURIComponent(textDate.value),
+                { method: "DELETE" }
+            );
+            await loadTexts();
         }
 
         async function loadAccount() {
