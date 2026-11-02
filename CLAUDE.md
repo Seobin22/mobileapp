@@ -26,6 +26,9 @@
    - 서버 데이터: 상대경로 `data/<feature>/` (실제 위치 `/root/data/<feature>/`)
 3. `index.html`의 기존 기능은 유지하고, 메인 화면에 새 페이지로 가는 링크 한 줄만 추가한다.
 4. 의존성은 가능한 한 추가하지 않는다. 꼭 필요하면 이유를 보고에 적는다.
+5. 회원 로그인이 필요한 기능은 회원 계정(`user/`)을 쓴다. 컨트롤러에서 `UserSession`을 주입받아
+   `User user = userSession.require(request);`(로그인 안 했으면 401) 또는 `userSession.current(request)`(Optional)로 가져오고,
+   기능 데이터에는 `user.id()`를 저장한다. 아이디·비밀번호를 기능마다 따로 만들지 않는다. 회원 화면은 seobin.page에 두어야 로그인 쿠키가 붙는다.
 
 ## 절대 건드리지 말 것
 - 서버의 `uploads/` 폴더(사용자 업로드 파일). 새 기능이 이 폴더를 읽는 것은 괜찮지만, 삭제·이동·덮어쓰기는
