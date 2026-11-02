@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 응답 지연·무응답 조사(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서 응답 지연 측정(속도 수정 후)(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,8 +41,8 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'JOB' AS q, id, status, attempts, FORMATDATETIME(fire_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS fire, FORMATDATETIME(updated_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS upd, LEFT(last_error, 300) AS err FROM jobs WHERE type = 'turn' AND target_id IN (130, 131, 132);
-SELECT 'MSG' AS q, id, role, kind, FORMATDATETIME(created_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS kst, LENGTH(content) AS len FROM messages WHERE id BETWEEN 176 AND 190 ORDER BY id;
+SELECT 'SETTINGS' AS q, key, LEFT(value, 60) AS v FROM settings WHERE key IN ('llm.provider','llm.model');
+SELECT 'LAT' AS q, m.id, FORMATDATETIME(m.created_at, 'MM-dd HH:mm:ss', 'en', 'Asia/Seoul') AS kst, LENGTH(m.content) AS len, t.id AS tid, t.trigger, t.status, t.tool_calls AS tc, DATEDIFF('SECOND', m.created_at, t.started_at) AS wait_s, DATEDIFF('SECOND', t.started_at, t.ended_at) AS run_s, (SELECT DATEDIFF('SECOND', m.created_at, MIN(a.created_at)) FROM messages a WHERE a.role = 'assistant' AND a.id > m.id) AS first_reply_s, t.input_tokens AS inp, t.output_tokens AS outp FROM messages m LEFT JOIN turns t ON t.trigger IN ('user_message','intervention_talk') AND t.trigger_ref LIKE CONCAT('%"message_id":', m.id, '%') WHERE m.role = 'user' AND m.created_at >= DATEADD('HOUR', -2, CURRENT_TIMESTAMP) ORDER BY m.id DESC LIMIT 30;
 SQL
 
 while IFS= read -r q; do
@@ -50,8 +50,9 @@ while IFS= read -r q; do
   "$JAVA" -cp "$H2" org.h2.tools.Shell -url "$URL" -user sa -password "" -sql "$q" >> "$WORK/out.txt" 2>&1 || echo "QUERY FAILED" >> "$WORK/out.txt"
 done < "$WORK/queries.sql"
 
-# 11-02 14:20~14:40 KST 의 비서 경고·오류 줄과 예외 첫 줄들(키 형태 문자열은 가린다).
-journalctl -u phonedrop --since '2026-11-02 05:20' --until '2026-11-02 05:45' --no-pager -o cat   | grep -E 'WARN|ERROR|Exception|Caused by|^\s+at com\.seobin' | grep -v 'at org\.' | head -60   | sed -E 's/(sk-|key=|Bearer )[A-Za-z0-9_.-]+/***/g' | cut -c1-260 | sed 's/^/LOGLINE /' >> "$WORK/out.txt" || true
+# 새 측정 로그(왕복 수·도구 이름·시간)만. 메시지 내용은 없다.
+journalctl -u phonedrop --since '2 hours ago' --no-pager -o cat | grep -oE 'turn [0-9]+ [a-z_]+ [a-z]+: rounds=.*' | tail -40 | sed 's/^/PERF /' >> "$WORK/out.txt" || true
+journalctl -u phonedrop --since '2 hours ago' --no-pager -o cat | grep -E 'LLM failure|turn job .* failed' | cut -c1-200 | tail -5 | sed 's/^/LOGLINE /' >> "$WORK/out.txt" || true
 
 # 3000자씩 ::notice 주석으로 내보낸다(공개 annotations API 로 읽을 수 있다).
 awk -v max=3000 '
