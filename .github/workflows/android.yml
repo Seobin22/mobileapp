@@ -82,6 +82,13 @@ jobs:
             echo "::error title=android build::${msg}"
           done
 
+      # 서명 확인: APK 인증서 SHA-256 을 공개 annotation 으로 남긴다(지문은 비밀이 아니다). 고정 키와 같아야 덮어 설치된다.
+      - name: Print APK signing certificate
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep -i 'SHA-256' | head -1 > cert.txt || true
+          echo "::notice title=apk cert::$(cat cert.txt)"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
