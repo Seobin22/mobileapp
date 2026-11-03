@@ -19,8 +19,8 @@ android {
         applicationId = "kr.ssbin.assistant"
         minSdk = 29
         targetSdk = 35
-        versionCode = 17
-        versionName = "3.3.0"
+        versionCode = 18
+        versionName = "3.3.1"
     }
 
     // 고정 서명 키(덮어 설치·앱 안 업데이트용). CI 가 Secret 에서 키 파일을 만들고 ASSISTANT_KEYSTORE 로 경로를 준다.
@@ -84,4 +84,6 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // v3 작업물 뷰어: 마크다운 렌더링
     implementation("io.noties.markwon:core:4.6.2")
+    // 장소 탭: 지도에서 위치 고르기(카카오 지도 SDK, arm64-v8a·armeabi-v7a)
+    implementation("com.kakao.maps.open:android:2.15.2")
 }

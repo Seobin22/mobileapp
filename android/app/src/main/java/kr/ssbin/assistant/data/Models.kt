@@ -267,6 +267,34 @@ data class DocumentDto(
 @Serializable
 data class DocumentsResponse(val documents: List<DocumentDto>)
 
+// 장소 탭(2026-11-04)
+@Serializable
+data class ArriveLegDto(val from: String, val mode: String = "", val minutes: Int, val distance_m: Int = 0, val source: String = "")
+
+@Serializable
+data class PlaceItemDto(
+    val id: Long,
+    val title: String,
+    val start: String,
+    val end: String,
+    val location: String? = null,
+    val place_name: String? = null,
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val place_source: String? = null,
+    val series_id: Long? = null,
+    val arrive: ArriveLegDto? = null,
+)
+
+@Serializable
+data class PlacesResponse(val places: List<PlaceItemDto>, val home_found: Boolean = false)
+
+@Serializable
+data class PlaceCandidateDto(val name: String, val address: String = "", val lat: Double, val lng: Double)
+
+@Serializable
+data class PlaceSearchResponse(val places: List<PlaceCandidateDto>)
+
 // ------------------------------------------------------------------ v3.2 달력·마감·블록 기록·반복 일정
 
 @Serializable

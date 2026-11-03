@@ -383,6 +383,37 @@ class V33FlowTest extends AssistantTestBase {
         assertThat(tx.run(() -> travel.status()).toString()).doesNotContain("SECRETKEY123abc");
     }
 
+    @Autowired
+    com.seobin.phonedrop.assistant.api.TravelController travelApi;
+
+    @Test
+    void p1_pinnedPlaceAndUserMinutesSurviveRecompute() {
+        home();
+        mapApi.places.put("열쇠집", new MapApi.Place("OO열쇠", "", 37.4500, 127.0100));
+        long cafe = fixed("카페", "2026-11-05T13:00", 60, null, null);
+        long keys = fixed("열쇠집", "2026-11-05T15:00", 30, null, "열쇠집");
+        assertThat(block(cafe).hasCoords()).isFalse();
+
+        travelApi.setPlace(cafe, Json.parse("{\"lat\":37.4100,\"lng\":127.0050,\"name\":\"OO카페\"}"));
+        Store.Block c = block(cafe);
+        assertThat(c.placeSource()).isEqualTo("user");
+        assertThat(c.location()).isEqualTo("OO카페");
+        assertThat(travel.leg(keys, "arrive").orElseThrow().from()).isEqualTo("카페");
+
+        travelApi.setTravel(keys, Json.parse("{\"direction\":\"arrive\",\"minutes\":33}"));
+        tx.exec(() -> travel.computeDay(LocalDate.parse("2026-11-05")));
+        TravelService.Leg leg = travel.leg(keys, "arrive").orElseThrow();
+        assertThat(leg.minutes()).isEqualTo(33);
+        assertThat(leg.source()).isEqualTo("user");
+        assertThat(context("pulse")).contains("약 33분(사용자가 정함)");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> places = (List<Map<String, Object>>) travelApi.places().get("places");
+        assertThat(places).extracting(m -> m.get("title")).containsExactly("카페", "열쇠집");
+        assertThatThrownBy(() -> travelApi.setPlace(cafe, Json.parse("{\"lat\":10,\"lng\":10}")))
+                .isInstanceOf(ApiException.class);
+        assertThat(travelApi.search("열쇠집", null, null).get("places").toString()).contains("OO열쇠");
+    }
+
     // ------------------------------------------------------------------ §4 문서 받기
 
     static byte[] pdf(String line) throws IOException {

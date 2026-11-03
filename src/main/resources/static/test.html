@@ -86,6 +86,11 @@
         <div class="muted" style="font-size:13px">서버 /root/data/assistant/kakao_api_key 에만 저장하고 다시 표시하지 않습니다.
             장소 검색·대중교통·도보는 카카오 개발자 콘솔의 '카카오맵 사용 설정'이 켜져 있어야 합니다. 키가 없거나 실패하면 어림값으로 계산합니다.</div>
         <div class="error" id="kakaoError"></div>
+        <label>네이티브 앱 키 (앱 '장소' 탭 지도용. 카카오 콘솔 [플랫폼 → Android]에 패키지 kr.ssbin.assistant 와 키 해시를 등록해야 지도가 뜹니다)</label>
+        <div class="row">
+            <input id="kakaoNativeKey" type="password" placeholder="카카오 네이티브 앱 키" autocomplete="off">
+            <button id="saveKakaoNative">키 저장</button>
+        </div>
     </section>
 
     <section>
@@ -439,7 +444,8 @@
 
     function showKakao(r) {
         $('kakaoStatus').textContent = '상태: ' + r.status_text + ' · 오늘 호출 ' + r.calls_today + '/' + r.daily_limit
-            + ' · 집 주소 ' + (r.home_address || '없음') + (r.home_found ? ' (위치 확인됨)' : '');
+            + ' · 집 주소 ' + (r.home_address || '없음') + (r.home_found ? ' (위치 확인됨)' : '')
+            + (r.native_key_configured === undefined ? '' : ' · 앱 지도 키 ' + (r.native_key_configured ? '있음' : '없음'));
     }
     async function loadKakao() { showKakao(await api('GET', '/v1/admin/kakao_status')); }
     $('saveKakao').onclick = async () => {
@@ -448,6 +454,16 @@
             showKakao(await api('POST', '/v1/admin/kakao_key', { key: $('kakaoKey').value.trim() }));
             $('kakaoKey').value = '';
             $('kakaoError').textContent = '저장했습니다';
+        } catch (e) { $('kakaoError').textContent = e.message; }
+    };
+
+    $('saveKakaoNative').onclick = async () => {
+        $('kakaoError').textContent = '';
+        try {
+            await api('POST', '/v1/admin/kakao_native_key', { key: $('kakaoNativeKey').value.trim() });
+            $('kakaoNativeKey').value = '';
+            await loadKakao();
+            $('kakaoError').textContent = '네이티브 앱 키를 저장했습니다';
         } catch (e) { $('kakaoError').textContent = e.message; }
     };
 

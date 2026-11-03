@@ -33,6 +33,16 @@ public interface MapApi {
     /** 키워드 장소 검색 첫 결과. nearLat·nearLng 가 있으면 그 근처를 우선한다. */
     Optional<Place> searchKeyword(String query, Double nearLat, Double nearLng);
 
+    /** 키워드 검색 후보 여러 개(장소 탭의 지도 검색). 기본은 첫 결과 하나. */
+    default java.util.List<Place> searchKeywordList(String query, Double nearLat, Double nearLng, int size) {
+        return searchKeyword(query, nearLat, nearLng).map(java.util.List::of).orElse(java.util.List.of());
+    }
+
+    /** 좌표 → 주소(지도에서 찍은 위치의 이름). */
+    default Optional<Place> reverse(double lat, double lng) {
+        return Optional.empty();
+    }
+
     /** 주소 검색 첫 결과. */
     Optional<Place> searchAddress(String query);
 

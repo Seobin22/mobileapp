@@ -144,6 +144,9 @@ public class TravelService {
     }
 
     private void geocode(Store.Block b) {
+        if ("user".equals(b.placeSource())) {
+            return; // 장소 탭 지도에서 사용자가 찍은 위치는 장소 글자로 다시 찾지 않는다.
+        }
         if (b.location() == null || b.location().isBlank()) {
             db.update("UPDATE blocks SET place_name = NULL, lat = NULL, lng = NULL, place_source = NULL WHERE id = ?", b.id());
             return;
@@ -261,7 +264,8 @@ public class TravelService {
         List<Store.Block> all = fixedBetween(from, to).stream()
                 .filter(b -> !b.start().isBefore(from)).toList();
         for (Store.Block b : all) {
-            db.update("DELETE FROM block_travel WHERE block_id = ?", b.id());
+            // 사용자가 직접 고친 이동 시간(source=user)은 다시 계산하지 않는다(장소를 다시 정하면 지운다).
+            db.update("DELETE FROM block_travel WHERE block_id = ? AND source <> 'user'", b.id());
         }
         List<Store.Block> located = all.stream().filter(Store.Block::hasCoords).toList();
         Point home = home().orElse(null);
@@ -282,6 +286,10 @@ public class TravelService {
     }
 
     private void save(long blockId, String direction, Point from, Point to, String mode, Instant at) {
+        if (db.jdbc().sql("SELECT COUNT(*) FROM block_travel WHERE block_id = ? AND direction = ? AND source = 'user'")
+                .param(blockId).param(direction).query(Integer.class).single() > 0) {
+            return;
+        }
         Leg leg = route(from, to, mode, at);
         db.insert("""
                         INSERT INTO block_travel(block_id, direction, from_label, to_label, mode, minutes, distance_m, source,
@@ -414,10 +422,137 @@ public class TravelService {
         StringBuilder sb = new StringBuilder();
         leg(b.id(), "arrive").ifPresent(l -> sb.append(" · 오는 길: ").append(l.from()).append('→').append(l.to())
                 .append(' ').append(modeText(l.mode())).append(" 약 ").append(l.minutes()).append("분")
-                .append("kakao".equals(l.source()) ? "(카카오)" : "(어림값)"));
+                .append(sourceText(l.source(), "(카카오)")));
         leg(b.id(), "depart").ifPresent(l -> sb.append(" · 가는 길: ").append(l.from()).append('→').append(l.to())
-                .append(" 약 ").append(l.minutes()).append("분").append("kakao".equals(l.source()) ? "" : "(어림값)"));
+                .append(" 약 ").append(l.minutes()).append("분").append(sourceText(l.source(), "")));
         return sb.toString();
+    }
+
+    private static String sourceText(String source, String kakao) {
+        return switch (source) {
+            case "kakao" -> kakao;
+            case "user" -> "(사용자가 정함)";
+            default -> "(어림값)";
+        };
+    }
+
+    // ---------------------------------------------------------------- 장소 탭 (2026-11-04 사용자 요청)
+
+    /**
+     * 지도에서 찍은 위치를 저장한다(place_source=user). name 이 비면 좌표 → 주소로 이름을 붙인다.
+     * series=true 면 반복 일정 전체(시리즈와 아직 시작 전인 회차). 장소 글자가 비어 있으면 이름으로 채운다.
+     * 이 블록에 사용자가 고친 이동 시간이 있으면 지운다(장소가 바뀌었으므로).
+     */
+    public Store.Block setPlace(long blockId, double lat, double lng, String name, boolean series) {
+        Store.Block b = store.block(blockId).filter(Store.Block::fixed)
+                .orElseThrow(() -> com.seobin.phonedrop.assistant.ApiException.notFound("고정 블록#" + blockId + "이 없습니다"));
+        String label = name == null || name.isBlank() ? null : name.strip();
+        if (label == null && map.hasKey() && !overLimit()) {
+            try {
+                label = map.reverse(lat, lng).map(MapApi.Place::name).orElse(null);
+                countCall("reverse", true);
+            } catch (MapApi.MapException e) {
+                countCall("reverse", false);
+            }
+        }
+        String placeName = label == null ? "지도에서 고른 위치" : label;
+        List<Long> ids = new ArrayList<>();
+        ids.add(blockId);
+        if (series && b.seriesId() != null) {
+            db.update("""
+                            UPDATE fixed_series SET place_name = ?, lat = ?, lng = ?, place_source = 'user',
+                            location = COALESCE(NULLIF(location, ''), ?) WHERE id = ?""",
+                    placeName, lat, lng, placeName, b.seriesId());
+            ids.addAll(db.jdbc().sql("""
+                            SELECT id FROM blocks WHERE series_id = ? AND id <> ? AND status = 'planned' AND start_at > ?""")
+                    .param(b.seriesId()).param(blockId).param(AssistantDb.ts(clock.now())).query(Long.class).list());
+        }
+        List<LocalDate> days = new ArrayList<>();
+        for (long id : ids) {
+            db.update("""
+                            UPDATE blocks SET place_name = ?, lat = ?, lng = ?, place_source = 'user',
+                            location = COALESCE(NULLIF(location, ''), ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                    placeName, lat, lng, placeName, id);
+            db.update("DELETE FROM block_travel WHERE block_id = ? AND source = 'user'", id);
+            store.block(id).ifPresent(x -> {
+                LocalDate d = time.local(x.start()).toLocalDate();
+                if (!days.contains(d)) {
+                    days.add(d);
+                }
+            });
+        }
+        logs.add(blockId, "note", "user", "장소를 지도에서 정함: " + placeName + (ids.size() > 1 ? " (반복 전체)" : ""));
+        days.forEach(this::computeDay);
+        return store.block(blockId).orElseThrow();
+    }
+
+    /** 오는 길(arrive)·가는 길(depart) 분을 사용자가 직접 고친다. 다시 계산해도 바뀌지 않는다. */
+    public void setLegMinutes(long blockId, String direction, int minutes) {
+        if (!List.of("arrive", "depart").contains(direction)) {
+            throw com.seobin.phonedrop.assistant.ApiException.badRequest("direction 은 arrive·depart 중 하나입니다");
+        }
+        if (minutes < 0 || minutes > 24 * 60) {
+            throw com.seobin.phonedrop.assistant.ApiException.badRequest("이동 시간은 0~1440분입니다");
+        }
+        Store.Block b = store.block(blockId).filter(Store.Block::fixed)
+                .orElseThrow(() -> com.seobin.phonedrop.assistant.ApiException.notFound("고정 블록#" + blockId + "이 없습니다"));
+        Leg old = leg(blockId, direction).orElse(null);
+        String from = old != null ? old.from() : "arrive".equals(direction) ? HOME : store.blockTitle(b);
+        String to = old != null ? old.to() : "arrive".equals(direction) ? store.blockTitle(b) : HOME;
+        db.update("DELETE FROM block_travel WHERE block_id = ? AND direction = ?", blockId, direction);
+        db.insert("""
+                        INSERT INTO block_travel(block_id, direction, from_label, to_label, mode, minutes, distance_m, source,
+                        computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?)""",
+                blockId, direction, from, to, old != null ? old.mode() : settings.getString("travel.mode"), minutes,
+                old != null ? old.distanceM() : 0, clock.now());
+        logs.add(blockId, "note", "user", ("arrive".equals(direction) ? "오는 길 " : "가는 길 ") + minutes + "분으로 직접 고침");
+    }
+
+    /** 장소 탭: 앞으로 days 일의 활성 고정 일정과 장소·바로 앞 장소에서 오는 길. */
+    public List<Map<String, Object>> upcomingPlaces(int days) {
+        Instant now = clock.now();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Store.Block b : fixedBetween(now, now.plus(Duration.ofDays(days)))) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", b.id());
+            m.put("title", store.blockTitle(b));
+            m.put("start", time.iso(b.start()));
+            m.put("end", time.iso(b.end()));
+            m.put("location", b.location());
+            m.put("place_name", b.placeName());
+            m.put("lat", b.lat());
+            m.put("lng", b.lng());
+            m.put("place_source", b.placeSource());
+            m.put("series_id", b.seriesId());
+            leg(b.id(), "arrive").ifPresent(l -> {
+                Map<String, Object> lm = new LinkedHashMap<>();
+                lm.put("from", l.from());
+                lm.put("mode", l.mode());
+                lm.put("minutes", l.minutes());
+                lm.put("distance_m", l.distanceM());
+                lm.put("source", l.source());
+                m.put("arrive", lm);
+            });
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** 지도 검색 후보(집 근처 우선). 키가 없거나 실패하면 빈 목록. */
+    public List<MapApi.Place> search(String query, Double nearLat, Double nearLng) {
+        if (query == null || query.isBlank() || !map.hasKey() || overLimit()) {
+            return List.of();
+        }
+        Point home = home().orElse(null);
+        try {
+            List<MapApi.Place> list = map.searchKeywordList(query.strip(), nearLat != null ? nearLat : home == null ? null : home.lat(),
+                    nearLng != null ? nearLng : home == null ? null : home.lng(), 5);
+            countCall("keyword", true);
+            return list;
+        } catch (MapApi.MapException e) {
+            countCall("keyword", false);
+            return List.of();
+        }
     }
 
     public static String modeText(String mode) {

@@ -274,3 +274,11 @@
 - 채팅으로 올린 자료는 사용자 메시지(파일 카드, `messages.document_id`)만 남기고 user_message turn 은 만들지 않는다. 함께 쓴 글은 document_ready turn 맥락에 들어간다.
 - 문서 파일은 `/root/data/assistant/documents/`, 매일 DB 백업 때 `backups/daily-docs-*.zip` 으로 같이 백업(7일).
 - 앱 3.3.0(versionCode 17): 고정 일정 칸 🔕/🔔, 상세에 방해 허용·오는 길·가는 길·[지금 끝내기], 편집에 '방해 허용' 선택(진행 중이면 시작 시각 잠금·반복 범위 없음), 설정에 집 주소·이동수단, 목표 상세 '자료', 채팅 📎 첨부·파일 카드.
+
+## 장소 탭 (2026-11-04 사용자 요청, 앱 3.3.1)
+- 새 탭 '장소': 앞으로 30일 고정 일정마다 위치 상태·바로 앞 장소(같은 날 앞 고정 일정, 없으면 집)에서 오는 길(분·km·출처)을 보여 준다. [위치 넣기] → 지도(카카오 지도 Android SDK 2.15.2, devrepo.kakao.com)에서 가운데 핀으로 고르거나 위쪽 검색 후보를 누른다. 반복 일정이면 '반복 전체 / 이 날만'을 묻는다.
+- 지도에서 고른 위치는 place_source=user. 장소 글자로 다시 찾지 않는다. 장소 글자가 비어 있으면 고른 이름으로 채운다. 이름이 없으면 좌표→주소(coord2address).
+- 오는 길 분을 직접 고치면 block_travel source=user 로 저장하고 다시 계산하지 않는다(그 블록 위치를 다시 고르면 지운다). 비서 맥락에 "(사용자가 정함)".
+- API: GET /v1/places, GET /v1/places/search?q, PUT /v1/blocks/{id}/place {lat,lng,name?,series?}, PUT /v1/blocks/{id}/travel {direction,minutes}, GET /v1/app/map_key.
+- 지도 SDK 는 REST 키가 아니라 네이티브 앱 키를 쓴다. 저장소에 두지 않고 관리 화면 '지도 연결'이 `/root/data/assistant/kakao_native_key` 에 저장, 앱이 지도 화면을 열 때 받아 KakaoMapSdk.init. 콘솔 [플랫폼 → Android]에 패키지 `kr.ssbin.assistant`, 키 해시 `8RIKncx9ROmE1inTU75hGhZ4mh0=`(고정 서명 키 SHA-1 base64) 등록 필요.
+- 지도가 실패해도(키 없음·인증 오류) 화면은 열리고 검색 후보로 고를 수 있다. SDK 는 arm64-v8a·armeabi-v7a 만 있다.

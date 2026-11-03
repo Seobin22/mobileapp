@@ -38,13 +38,16 @@ public class TravelController {
     private final SettingsService settings;
     private final PlanService plan;
     private final MapApi map;
+    private final String dataDir;
 
-    public TravelController(Tx tx, TravelService travel, SettingsService settings, PlanService plan, MapApi map) {
+    public TravelController(Tx tx, TravelService travel, SettingsService settings, PlanService plan, MapApi map,
+                            @org.springframework.beans.factory.annotation.Value("${assistant.data-dir:data/assistant}") String dataDir) {
         this.tx = tx;
         this.travel = travel;
         this.settings = settings;
         this.plan = plan;
         this.map = map;
+        this.dataDir = dataDir;
     }
 
     @GetMapping("/travel")
@@ -95,9 +98,81 @@ public class TravelController {
         return tx.run(travel::status);
     }
 
+    // ---------------------------------------------------------------- 장소 탭 (2026-11-04 사용자 요청)
+
+    /** 앞으로 30일 고정 일정의 장소와 바로 앞 장소(없으면 집)에서 오는 길. */
+    @GetMapping("/places")
+    public Map<String, Object> places() {
+        return tx.run(() -> Map.of("places", travel.upcomingPlaces(30), "home_found", travel.status().get("home_found")));
+    }
+
+    /** 지도 검색 후보 {places:[{name,address,lat,lng}]} */
+    @GetMapping("/places/search")
+    public Map<String, Object> search(@org.springframework.web.bind.annotation.RequestParam("q") String q,
+                                      @org.springframework.web.bind.annotation.RequestParam(value = "lat", required = false) Double lat,
+                                      @org.springframework.web.bind.annotation.RequestParam(value = "lng", required = false) Double lng) {
+        return tx.run(() -> Map.of("places", travel.search(q, lat, lng)));
+    }
+
+    /** 지도에서 찍은 위치 {lat, lng, name?, series?} */
+    @PutMapping("/blocks/{id}/place")
+    public Map<String, Object> setPlace(@org.springframework.web.bind.annotation.PathVariable long id,
+                                        @RequestBody JsonNode body) {
+        if (!body.path("lat").isNumber() || !body.path("lng").isNumber()) {
+            throw ApiException.badRequest("lat·lng 가 필요합니다");
+        }
+        double lat = body.get("lat").asDouble();
+        double lng = body.get("lng").asDouble();
+        if (lat < 32 || lat > 39.5 || lng < 124 || lng > 132) {
+            throw ApiException.unprocessable("국내 위치만 정할 수 있어요");
+        }
+        return tx.run(() -> {
+            var b = travel.setPlace(id, lat, lng, body.path("name").asString(""), body.path("series").asBoolean(false));
+            plan.bumpAndSync();
+            return Map.<String, Object>of("ok", true, "id", id, "place_name", b.placeName());
+        });
+    }
+
+    /** 이동 시간 직접 고치기 {direction: arrive|depart, minutes} */
+    @PutMapping("/blocks/{id}/travel")
+    public Map<String, Object> setTravel(@org.springframework.web.bind.annotation.PathVariable long id,
+                                         @RequestBody JsonNode body) {
+        if (!body.path("minutes").isNumber()) {
+            throw ApiException.badRequest("minutes 가 필요합니다");
+        }
+        tx.exec(() -> travel.setLegMinutes(id, body.path("direction").asString("arrive"), body.get("minutes").asInt()));
+        return Map.of("ok", true, "id", id);
+    }
+
+    /** 앱 지도 SDK 용 카카오 네이티브 앱 키(앱에 들어가는 공개 키지만 저장소에는 두지 않는다). */
+    @GetMapping("/app/map_key")
+    public Map<String, Object> mapKey() throws IOException {
+        java.nio.file.Path f = nativeKeyFile();
+        String key = java.nio.file.Files.exists(f) ? java.nio.file.Files.readString(f).trim() : "";
+        return Map.of("key", key);
+    }
+
+    @PostMapping("/admin/kakao_native_key")
+    public Map<String, Object> saveNativeKey(@RequestBody JsonNode body) throws IOException {
+        String key = body.path("key").asString("").trim();
+        if (key.isEmpty() || key.length() > 200 || !key.matches("[A-Za-z0-9_-]+")) {
+            throw ApiException.badRequest("카카오 네이티브 앱 키 형식이 맞지 않습니다");
+        }
+        java.nio.file.Path f = nativeKeyFile();
+        java.nio.file.Files.createDirectories(f.getParent());
+        java.nio.file.Files.writeString(f, key + "\n");
+        return Map.of("ok", true, "native_key_configured", true);
+    }
+
+    private java.nio.file.Path nativeKeyFile() {
+        return java.nio.file.Path.of(dataDir, "kakao_native_key");
+    }
+
     @GetMapping("/admin/kakao_status")
     public Map<String, Object> status() {
-        return tx.run(travel::status);
+        Map<String, Object> m = new LinkedHashMap<>(tx.run(travel::status));
+        m.put("native_key_configured", java.nio.file.Files.exists(nativeKeyFile()));
+        return m;
     }
 
     @ExceptionHandler(ApiException.class)

@@ -99,6 +99,32 @@ public class KakaoMapApi implements MapApi {
     }
 
     @Override
+    public java.util.List<Place> searchKeywordList(String query, Double nearLat, Double nearLng, int size) {
+        String url = LOCAL + "/v2/local/search/keyword.json?size=" + Math.max(1, Math.min(size, 15)) + "&query=" + enc(query)
+                + (nearLat != null && nearLng != null ? "&x=" + num(nearLng) + "&y=" + num(nearLat) : "");
+        java.util.List<Place> out = new java.util.ArrayList<>();
+        for (JsonNode d : get(url, true).path("documents")) {
+            String address = d.path("road_address_name").asString("");
+            out.add(new Place(d.path("place_name").asString(query),
+                    address.isBlank() ? d.path("address_name").asString("") : address,
+                    Double.parseDouble(d.path("y").asString("0")), Double.parseDouble(d.path("x").asString("0"))));
+        }
+        return out;
+    }
+
+    @Override
+    public Optional<Place> reverse(double lat, double lng) {
+        JsonNode d = get(LOCAL + "/v2/local/geo/coord2address.json?x=" + num(lng) + "&y=" + num(lat), true)
+                .path("documents").path(0);
+        if (d.isMissingNode()) {
+            return Optional.empty();
+        }
+        String road = d.path("road_address").path("address_name").asString("");
+        String addr = road.isBlank() ? d.path("address").path("address_name").asString("") : road;
+        return addr.isBlank() ? Optional.empty() : Optional.of(new Place(addr, addr, lat, lng));
+    }
+
+    @Override
     public Optional<Place> searchAddress(String query) {
         JsonNode docs = get(LOCAL + "/v2/local/search/address.json?size=1&query=" + enc(query), true).path("documents");
         if (docs.isEmpty()) {

@@ -157,7 +157,8 @@ public class CalendarController {
                 lm.put("to", l.to());
                 lm.put("mode", l.mode());
                 lm.put("minutes", l.minutes());
-                lm.put("estimate", !"kakao".equals(l.source()));
+                lm.put("estimate", "estimate".equals(l.source()));
+                lm.put("source", l.source());
                 legs.add(lm);
             }
             m.put("travel", legs);

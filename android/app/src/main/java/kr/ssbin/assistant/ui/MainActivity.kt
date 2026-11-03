@@ -134,7 +134,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; else -> "목표" }) },
+                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; 2 -> "목표"; else -> "장소" }) },
                 actions = {
                     TextButton(onClick = { navigate(Screen.Permissions) }) { Text("권한") }
                     TextButton(onClick = { navigate(Screen.Settings) }) { Text("설정") }
@@ -146,6 +146,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("💬") }, label = { Text("채팅") })
                 NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("📅") }, label = { Text("달력") })
                 NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎯") }, label = { Text("목표") })
+                NavigationBarItem(selected = tab == 3, onClick = { tab = 3 }, icon = { Text("📍") }, label = { Text("장소") })
             }
         },
     ) { padding ->
@@ -190,7 +191,8 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
             when (tab) {
                 0 -> ChatScreen(tick = tick + localTick)
                 1 -> CalendarScreen(tick = tick + localTick)
-                else -> GoalsScreen(tick = tick + localTick)
+                2 -> GoalsScreen(tick = tick + localTick)
+                else -> PlacesScreen(tick = tick + localTick)
             }
         }
     }

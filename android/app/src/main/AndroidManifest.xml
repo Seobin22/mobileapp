@@ -52,6 +52,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".ui.MapPickActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".chat.QuickInputActivity"
             android:excludeFromRecents="true"
             android:exported="false"

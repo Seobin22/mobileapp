@@ -129,6 +129,22 @@ interface AssistantApi {
     @DELETE("v1/documents/{id}")
     suspend fun deleteDocument(@Path("id") id: Long): JsonObject
 
+    // 장소 탭: 일정 장소 지도에서 고르기, 오는 길 분 직접 고치기
+    @GET("v1/places")
+    suspend fun places(): PlacesResponse
+
+    @GET("v1/places/search")
+    suspend fun searchPlaces(@Query("q") q: String, @Query("lat") lat: Double? = null, @Query("lng") lng: Double? = null): PlaceSearchResponse
+
+    @PUT("v1/blocks/{id}/place")
+    suspend fun setPlace(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @PUT("v1/blocks/{id}/travel")
+    suspend fun setTravel(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @GET("v1/app/map_key")
+    suspend fun mapKey(): JsonObject
+
     // v3.2 달력·마감·처리 중 표시·블록 기록·반복 일정
     @GET("v1/calendar")
     suspend fun calendar(@Query("from") from: String, @Query("to") to: String): CalendarResponse
