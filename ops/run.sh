@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 목표 마감 정리 대상 조회(읽기 전용)(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서 연결 블록 사용 현황 조회(읽기 전용)(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,7 +41,12 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'GOAL' AS q, g.id, g.status, FORMATDATETIME(g.deadline, 'MM-dd HH:mm', 'en', 'Asia/Seoul') AS deadline, g.deadline < CURRENT_TIMESTAMP AS passed, (SELECT COUNT(*) FROM tasks t WHERE t.goal_id = g.id AND t.status = 'active') AS active_tasks, (SELECT COUNT(*) FROM tasks t WHERE t.goal_id = g.id AND t.status = 'done') AS done_tasks, (SELECT COUNT(*) FROM blocks b LEFT JOIN tasks t ON t.id = b.task_id WHERE (b.goal_id = g.id OR t.goal_id = g.id) AND b.kind = 'planned' AND b.status IN ('planned','nudging') AND b.start_at > CURRENT_TIMESTAMP) AS future_planned, (SELECT COUNT(*) FROM blocks b LEFT JOIN tasks t ON t.id = b.task_id WHERE (b.goal_id = g.id OR t.goal_id = g.id) AND b.kind = 'planned' AND b.status IN ('planned','nudging') AND g.deadline IS NOT NULL AND b.end_at > g.deadline) AS planned_after_deadline FROM goals g WHERE g.status = 'active' ORDER BY g.id;
+SELECT 'LINKED' AS q, COUNT(*) AS n FROM blocks WHERE linked_fixed_block_id IS NOT NULL;
+SELECT 'FIXED28' AS q, COUNT(*) AS fixed_next_28d, SUM(CASE WHEN memo <> '' THEN 1 ELSE 0 END) AS with_memo, SUM(CASE WHEN series_id IS NOT NULL THEN 1 ELSE 0 END) AS from_series FROM blocks WHERE kind = 'fixed' AND status IN ('planned','nudging') AND start_at > CURRENT_TIMESTAMP AND start_at < DATEADD('DAY', 28, CURRENT_TIMESTAMP);
+SELECT 'SERIES' AS q, COUNT(*) AS n FROM fixed_series WHERE active = TRUE;
+SELECT 'LOGS' AS q, type, actor, COUNT(*) AS n FROM block_logs GROUP BY type, actor ORDER BY type;
+SELECT 'TURN' AS q, id, FORMATDATETIME(started_at, 'MM-dd HH:mm', 'en', 'Asia/Seoul') AS kst, trigger, status, LEFT(tool_names, 200) AS tools FROM turns WHERE started_at >= TIMESTAMP WITH TIME ZONE '2026-11-02 17:50:00+09:00' ORDER BY id;
+SELECT 'SET' AS q, key, LEFT(value, 60) AS v FROM settings WHERE key IN ('llm.provider','llm.model');
 SQL
 
 while IFS= read -r q; do
