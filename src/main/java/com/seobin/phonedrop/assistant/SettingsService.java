@@ -2,6 +2,7 @@ package com.seobin.phonedrop.assistant;
 
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -61,6 +62,14 @@ public class SettingsService {
         d.put("lookahead.days", "28");
         d.put("memo.urgent_hours", "24");
         d.put("memo.max_chars", "1000");
+        // v3.3 지도 읽기(집 좌표는 주소를 저장할 때 코드가 채운다)·문서 받기
+        d.put("travel.home_address", "\"\"");
+        d.put("travel.home_lat", "null");
+        d.put("travel.home_lng", "null");
+        d.put("travel.mode", "\"transit\"");
+        d.put("travel.daily_api_limit", "300");
+        // 문서 읽기·요약 모델. 비면 llm.model(이미지는 이미지 입력을 받는 모델이어야 한다)
+        d.put("documents.model", "\"\"");
 
         DEFAULTS = Map.copyOf(d);
     }
@@ -132,7 +141,22 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "llm.model" -> {
+                case "travel.home_address" -> {
+                    if (!value.isString() || value.asString().length() > 300) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "travel.home_lat", "travel.home_lng" -> {
+                    if (!value.isNull() && !value.isNumber()) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "travel.mode" -> {
+                    if (!List.of("transit", "car", "walk").contains(value.asString())) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "llm.model", "documents.model" -> {
                     if (!value.isString() || !value.asString().matches("[A-Za-z0-9._:/@-]{0,100}")) {
                         throw new IllegalArgumentException();
                     }

@@ -42,6 +42,12 @@ abstract class AssistantTestBase {
         ScriptedLlm scriptedLlm() {
             return new ScriptedLlm();
         }
+
+        @Bean
+        @Primary
+        FakeMapApi fakeMapApi() {
+            return new FakeMapApi();
+        }
     }
 
     @Autowired
@@ -72,6 +78,9 @@ abstract class AssistantTestBase {
     @Autowired
     DeviceService devices;
 
+    @Autowired
+    FakeMapApi mapApi;
+
     FakePush push;
 
     static Instant at(String localDateTime) {
@@ -83,7 +92,8 @@ abstract class AssistantTestBase {
         push = (FakePush) pushBean;
         db.update("UPDATE blocks SET linked_fixed_block_id = NULL");
         for (String table : new String[]{"changes", "turns", "messages", "confirmations", "questions",
-                "intervention_logs", "interventions", "jobs", "block_logs", "series_exceptions", "blocks", "fixed_series",
+                "intervention_logs", "interventions", "jobs", "block_logs", "series_exceptions", "block_travel",
+                "travel_cache", "kakao_calls", "document_chunks", "documents", "blocks", "fixed_series",
                 "work_products", "wakeups", "daily_flags", "tasks",
                 "goals", "events", "notes", "data_migrations",
                 "device_events", "devices", "processed_actions", "settings"}) {
@@ -91,6 +101,7 @@ abstract class AssistantTestBase {
         }
         db.update("UPDATE memory SET content = '' WHERE id = 1");
         llm.reset();
+        mapApi.reset();
         db.update("UPDATE plan_state SET plan_version = 0");
         settings.seedDefaults();
         clock.set(START);

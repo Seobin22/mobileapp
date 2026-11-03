@@ -81,12 +81,13 @@ public class SeriesService {
     private final BlockLogs logs;
     private final Jobs jobs;
     private final Tx tx;
+    private final TravelService travel;
     private final boolean enabled;
 
     public SeriesService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                          Validator validator, InterventionService interventions, PlanService plan,
                          FixedBlockService fixedBlocks, ChatService chat, TurnQueue turns, BlockLogs logs, Jobs jobs,
-                         Tx tx, @Value("${assistant.worker.enabled:true}") boolean enabled) {
+                         Tx tx, TravelService travel, @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -101,6 +102,7 @@ public class SeriesService {
         this.logs = logs;
         this.jobs = jobs;
         this.tx = tx;
+        this.travel = travel;
         this.enabled = enabled;
         jobs.register(JOB, this::onDaily);
     }
@@ -254,6 +256,11 @@ public class SeriesService {
                             VALUES ('fixed', ?, ?, ?, ?, 'planned', ?, ?, ?, ?, 'series', ?, ?, ?)""",
                     s.title(), s.goalId(), start, end, screen, s.leadMinutes(), s.bufferAfterMin(), s.location(),
                     prepGiven ? s.prepSetBy() : null, s.id(), date);
+            // v3.3: 시리즈의 방해 허용 정도·찾은 장소를 회차에 복사한다(회차별로 바꾸면 그 회차만 바뀐다).
+            db.update("""
+                            UPDATE blocks SET (interrupt_level, interrupt_set_by, place_name, lat, lng, place_source) =
+                            (SELECT interrupt_level, interrupt_set_by, place_name, lat, lng, place_source FROM fixed_series
+                            WHERE id = ?) WHERE id = ?""", s.id(), id);
             logs.add(id, "created", "system", "반복 일정#" + s.id() + "(" + describe(s) + ")에서 생성");
             List<Long> displaced = new ArrayList<>();
             for (Store.Block b : check.displaced()) {
@@ -270,6 +277,9 @@ public class SeriesService {
                 turns.enqueue("blocks_displaced", ref, TurnQueue.PRIORITY_DEFAULT);
             }
             interventions.scheduleBlockJobs(store.block(id).orElseThrow());
+            if (store.block(id).map(Store.Block::hasCoords).orElse(false)) {
+                travel.onDayChanged(id);
+            }
             created.add(id);
         }
         if (!created.isEmpty()) {
@@ -309,10 +319,18 @@ public class SeriesService {
         } catch (IllegalArgumentException | ApiException e) {
             return Result.fail(e.getMessage());
         }
+        String[] level;
+        try {
+            level = interruptLevel(existing == null ? null : existing.id(), in, turnId);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
         if (existing == null) {
             long id = insert(s);
+            applyExtras(id, level, true);
             return new Result(id, generate(series(id).orElseThrow()), null, null);
         }
+        boolean locationChanged = !java.util.Objects.equals(s.location(), existing.location());
         String scope = in.path("scope").asString("all");
         LocalDate today = time.local(clock.now()).toLocalDate();
         LocalDate from = in.hasNonNull("from_date") ? LocalDate.parse(in.get("from_date").asString()) : today;
@@ -324,6 +342,11 @@ public class SeriesService {
                     s.durationMin(), from, s.untilDate(), s.leadMinutes(), s.bufferAfterMin(), s.prepSetBy(),
                     s.location(), s.goalId(), s.firstAction(), s.memo(), true);
             long newId = insert(next);
+            db.update("""
+                            UPDATE fixed_series SET (place_name, lat, lng, place_source) =
+                            (SELECT place_name, lat, lng, place_source FROM fixed_series WHERE id = ?) WHERE id = ?""",
+                    existing.id(), newId);
+            applyExtras(newId, level, locationChanged);
             db.update("UPDATE series_exceptions SET series_id = ? WHERE series_id = ? AND occurrence_date >= ?",
                     newId, existing.id(), from);
             Map<LocalDate, Store.Block> old = removeFuture(existing.id(), from);
@@ -333,6 +356,7 @@ public class SeriesService {
         }
         // 전체: 시리즈를 고치고 미래 회차를 지우고 다시 만든다(과거·진행 중 제외).
         update(existing.id(), s);
+        applyExtras(existing.id(), level, locationChanged);
         Map<LocalDate, Store.Block> old = removeFuture(existing.id(), today);
         List<Long> created = generate(series(existing.id()).orElseThrow());
         carryOver(old, existing.id());
@@ -500,6 +524,60 @@ public class SeriesService {
                 untilDate, lead, buffer, prepSetBy, location, goalId, firstAction, memo, true);
     }
 
+    /** 방해 허용 정도(v3.3 §1.3): 고정 블록과 같은 규칙. {level, set_by}. */
+    private String[] interruptLevel(Long seriesId, JsonNode in, Long turnId) {
+        String[] current = seriesId == null ? new String[]{null, null} : db.jdbc().sql(
+                        "SELECT interrupt_level, interrupt_set_by FROM fixed_series WHERE id = ?")
+                .param(seriesId).query((rs, n) -> new String[]{rs.getString(1), rs.getString(2)}).single();
+        if (!in.has("interrupt_level")) {
+            return current;
+        }
+        String given = in.get("interrupt_level").isNull() ? "" : in.get("interrupt_level").asString("").trim();
+        boolean byUser = turnId == null || in.path("interrupt_from_user").asBoolean(false);
+        if (given.isEmpty()) {
+            return byUser ? new String[]{null, null} : current;
+        }
+        if (!InterruptPolicy.LEVELS.contains(given)) {
+            throw new IllegalArgumentException("interrupt_level 은 dnd·quiet·allow 중 하나입니다");
+        }
+        if (!byUser && "user".equals(current[1]) && !given.equals(current[0])) {
+            throw new IllegalArgumentException("사용자가 정한 방해 허용 정도(" + FixedBlockService.levelText(current[0])
+                    + ")라 바꾸지 않습니다");
+        }
+        return new String[]{given, byUser ? "user" : "assistant"};
+    }
+
+    /** 방해 허용 정도 저장, 장소가 바뀌었으면 시리즈 단위로 한 번만 좌표를 찾는다(§3.2). */
+    private void applyExtras(long seriesId, String[] level, boolean locationChanged) {
+        db.update("UPDATE fixed_series SET interrupt_level = ?, interrupt_set_by = ? WHERE id = ?", level[0], level[1],
+                seriesId);
+        if (locationChanged) {
+            travel.geocodeSeries(seriesId);
+        }
+    }
+
+    /** set_interrupt_level 도구(series_id): 시리즈와 아직 시작 전인 미래 회차에 적용한다. */
+    public Result setInterruptLevel(long seriesId, String level, Long turnId) {
+        if (series(seriesId).filter(Series::active).isEmpty()) {
+            return Result.fail("반복 일정#" + seriesId + "이 없습니다");
+        }
+        tools.jackson.databind.node.ObjectNode in = Json.object();
+        in.put("interrupt_level", level);
+        String[] v;
+        try {
+            v = interruptLevel(seriesId, in, turnId);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
+        applyExtras(seriesId, v, false);
+        db.update("""
+                        UPDATE blocks SET interrupt_level = ?, interrupt_set_by = ? WHERE series_id = ? AND status = 'planned'
+                        AND start_at > ? AND (interrupt_set_by IS NULL OR interrupt_set_by <> 'user' OR ? = 'user')""",
+                v[0], v[1], seriesId, AssistantDb.ts(clock.now()), v[1]);
+        plan.bumpAndSync();
+        return new Result(seriesId, List.of(), null, null);
+    }
+
     String checkMemo(String memo) {
         String m = memo == null ? "" : memo.strip();
         int max = settings.getInt("memo.max_chars");
@@ -550,6 +628,13 @@ public class SeriesService {
         m.put("first_action", s.firstAction());
         m.put("memo", s.memo());
         m.put("rule_text", describe(s));
+        db.jdbc().sql("SELECT interrupt_level, interrupt_set_by, place_name FROM fixed_series WHERE id = ?").param(s.id())
+                .query((rs, n) -> {
+                    m.put("interrupt_level", rs.getString(1));
+                    m.put("interrupt_set_by", rs.getString(2));
+                    m.put("place_name", rs.getString(3));
+                    return null;
+                }).list();
         return m;
     }
 

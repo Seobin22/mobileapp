@@ -118,6 +118,8 @@ data class MessageDto(
     val source: String? = null,
     /** 목표 질문(goal_deadline·goal_shortage·goal_done_check)의 목표. */
     val goal_id: Long? = null,
+    /** v3.3: 채팅으로 올린 자료(파일 카드). */
+    val document_id: Long? = null,
 )
 
 // ------------------------------------------------------------------ v3 작업물
@@ -216,7 +218,54 @@ data class FixedBlockRequest(
     val first_action: String? = null,
     /** v3.2 §3: 사용자 메모(단발 일정, 또는 반복의 '이번만'). */
     val memo: String? = null,
+    /** v3.3 §2: 진행 중 일정은 시작 대신 끝 시각만 보낸다. */
+    val end: String? = null,
+    /** v3.3 §1: dnd | quiet | allow, "" = 비서가 정함 */
+    val interrupt_level: String? = null,
 )
+
+// ------------------------------------------------------------------ v3.3 이동 시간·자료
+
+@Serializable
+data class TravelLegDto(
+    val direction: String,
+    val from: String,
+    val to: String,
+    val mode: String,
+    val minutes: Int,
+    val estimate: Boolean = false,
+)
+
+@Serializable
+data class TravelStatusDto(
+    val status: String = "",
+    val status_text: String = "",
+    val calls_today: Int = 0,
+    val daily_limit: Int = 0,
+    val home_address: String = "",
+    val home_found: Boolean = false,
+    val mode: String = "transit",
+    val found: Boolean? = null,
+    val found_address: String? = null,
+)
+
+@Serializable
+data class DocumentDto(
+    val id: Long,
+    val goal_id: Long? = null,
+    val filename: String,
+    val mime: String = "",
+    val size_bytes: Long = 0,
+    val status: String,
+    val error: String? = null,
+    val pages: Int? = null,
+    val uploaded_at: String? = null,
+    val summary_md: String = "",
+    val extracted: JsonElement? = null,
+)
+
+@Serializable
+data class DocumentsResponse(val documents: List<DocumentDto>)
 
 // ------------------------------------------------------------------ v3.2 달력·마감·블록 기록·반복 일정
 
@@ -245,6 +294,11 @@ data class CalendarBlock(
     val deadline: String? = null,
     val linked_fixed_block_id: Long? = null,
     val linked_title: String? = null,
+    val interrupt_level: String? = null,
+    val interrupt_set_by: String? = null,
+    val place_name: String? = null,
+    val in_progress: Boolean = false,
+    val travel: List<TravelLegDto> = emptyList(),
 )
 
 @Serializable
@@ -301,6 +355,8 @@ data class SeriesDto(
     val first_action: String? = null,
     val memo: String = "",
     val rule_text: String = "",
+    val interrupt_level: String? = null,
+    val place_name: String? = null,
 )
 
 @Serializable
@@ -326,6 +382,12 @@ data class BlockDetailDto(
     val series: SeriesDto? = null,
     val occurrence_date: String? = null,
     val logs: List<BlockLogDto> = emptyList(),
+    val interrupt_level: String? = null,
+    val interrupt_set_by: String? = null,
+    val place_name: String? = null,
+    val place_source: String? = null,
+    val in_progress: Boolean = false,
+    val travel: List<TravelLegDto> = emptyList(),
 )
 
 @Serializable
@@ -347,6 +409,7 @@ data class SeriesRequest(
     val goal_id: Long? = null,
     val first_action: String? = null,
     val memo: String? = null,
+    val interrupt_level: String? = null,
 )
 
 @Serializable

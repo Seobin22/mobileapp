@@ -247,6 +247,19 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
     val negotiationUntil = remember(now, reload) { Prefs.get(context).negotiationUntil }
     val firstActiveTurn = pending.firstOrNull { it.stage != "failed" }?.turnId
 
+    // v3.3 §4.2: 채팅 [첨부]. 목표 없이 올라가고 비서가 어느 목표 자료인지 판단한다. 입력 중인 글은 함께 보낸다.
+    var attaching by remember { mutableStateOf(false) }
+    val attachPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        attaching = true
+        val text = input
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { uploadDocument(context, uri, null, true, text) } }
+            attaching = false
+            r.onSuccess { input = ""; reload++ }.onFailure { error = ApiClient.errorMessage(it) }
+        }
+    }
+
     Column(modifier.fillMaxSize()) {
         if (negotiationUntil > now) {
             val left = ((negotiationUntil - now + 59_999) / 60_000).coerceAtLeast(1)
@@ -319,6 +332,10 @@ fun ChatScreen(tick: Int, modifier: Modifier = Modifier) {
                 }
             }, enabled = !sending && !listening) { Text("🎤") }
             Spacer(Modifier.padding(2.dp))
+            OutlinedButton(onClick = { attachPicker.launch(DOCUMENT_MIME_TYPES) }, enabled = !sending && !attaching) {
+                Text(if (attaching) "…" else "📎")
+            }
+            Spacer(Modifier.padding(2.dp))
             Button(onClick = { send(input, "chat") }, enabled = !sending && input.isNotBlank()) { Text("전송") }
         }
     }
@@ -371,6 +388,7 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
                 .padding(10.dp)
         ) {
             Text(m.content, color = if (mine) Color.White else Color.Unspecified)
+            m.document_id?.let { DocumentCard(it, mine) }
             // "작업물#12" 를 누르면 작업물 뷰어(v3 §8.2)
             if (!mine) {
                 val context = LocalContext.current

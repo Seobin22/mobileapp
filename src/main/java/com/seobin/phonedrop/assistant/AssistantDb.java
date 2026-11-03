@@ -40,7 +40,8 @@ public class AssistantDb {
             "assistant/db/V5__fixed_blocks_goals.sql",
             "assistant/db/V6__prep_set_by.sql",
             "assistant/db/V7__v3_2.sql",
-            "assistant/db/V8__goal_prompts.sql"
+            "assistant/db/V8__goal_prompts.sql",
+            "assistant/db/V9__v3_3.sql"
     );
 
     private static final Logger log = LoggerFactory.getLogger(AssistantDb.class);

@@ -82,7 +82,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 
-private val CAL_PINK = Color(0xFFD6336C)
+internal val CAL_PINK = Color(0xFFD6336C)
 private val CAL_ERR = Color(0xFFC92A2A)
 private val FIXED_BG = Color(0xFFDEE2E6)
 private val FIXED_TEXT = Color(0xFF343A40)
@@ -488,7 +488,7 @@ private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
                 )
             }
             Text(
-                (if (b.series_id != null) "🔁" else "") + b.title,
+                (if (fixed) interruptIcon(b.interrupt_level) else "") + (if (b.series_id != null) "🔁" else "") + b.title,
                 fontSize = if (compact) 11.sp else 14.sp, fontWeight = FontWeight.Bold, color = textColor,
                 maxLines = if (compact) 3 else 2, overflow = TextOverflow.Ellipsis, lineHeight = if (compact) 13.sp else 17.sp,
                 textDecoration = if (b.status == "missed") TextDecoration.LineThrough else null,
@@ -498,7 +498,7 @@ private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
                 fontSize = if (compact) 9.sp else 12.sp, color = subColor, maxLines = 1,
             )
             val sub = when {
-                fixed && b.location != null -> b.location
+                fixed && b.location != null -> b.place_name ?: b.location
                 fixed && b.memo.isNotBlank() -> b.memo.lines().first()
                 !fixed && b.linked_title != null -> "→ " + b.linked_title
                 else -> null
@@ -557,8 +557,24 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
                 Text((if (fixed) "고정" else "계획") + (if (d.series != null) " · 🔁 " + d.series.rule_text else "") +
                     " · " + mdHm(d.start) + "–" + hm(d.end))
                 if (d.goal_label.isNotBlank()) GoalChip(d.goal_label, d.goal_color)
-                d.location?.let { Text("장소: $it") }
+                d.location?.let { Text("장소: $it" + (d.place_name?.takeIf { p -> p != it }?.let { p -> " → $p" } ?: "")) }
                 if (fixed && d.lead_minutes > 0) Text("출발·준비 ${d.lead_minutes}분 전")
+                if (fixed) {
+                    Text("방해 허용: " + interruptIcon(d.interrupt_level) + interruptText(d.interrupt_level) +
+                        if (d.interrupt_set_by == "assistant") " (비서가 정함)" else "")
+                    travelLine("arrive", d.travel)?.let { Text(it) }
+                    travelLine("depart", d.travel)?.let { Text(it) }
+                }
+                if (fixed && d.in_progress) {
+                    Button(onClick = {
+                        saving = true
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).endFixedNow(blockId) } }
+                            saving = false
+                            r.onSuccess { onChanged(); reload++ }.onFailure { error = ApiClient.errorMessage(it) }
+                        }
+                    }, enabled = !saving) { Text("지금 끝내기") }
+                }
                 if (!fixed) {
                     d.linked_title?.let { Text("연결된 고정 일정: $it") }
                     d.deadline?.let { Text("마감 " + mdHm(it), color = FLAG) }
@@ -630,7 +646,7 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
         },
         confirmButton = {
             val d = detail
-            val editable = d != null && d.status in listOf("planned", "nudging")
+            val editable = d != null && (d.status in listOf("planned", "nudging") || (d.kind == "fixed" && d.in_progress))
             if (d != null && editable && d.kind == "fixed") {
                 TextButton(onClick = onEdit) { Text("수정·삭제") }
             } else if (d != null && editable) {
@@ -747,6 +763,8 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
     var goalId by remember { mutableStateOf<Long?>(null) }
     var memo by remember { mutableStateOf("") }
     var onceMemo by remember { mutableStateOf("") }
+    var interrupt by remember { mutableStateOf("") } // "" = 비서가 정함
+    var interruptInitial by remember { mutableStateOf("") }
     var freq by remember { mutableStateOf("none") }
     var interval by remember { mutableIntStateOf(1) }
     var byDays by remember { mutableStateOf(setOf<Int>()) }
@@ -771,6 +789,8 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
                 duration = java.time.Duration.between(zoned(d.start), zoned(d.end)).toMinutes().toString()
                 lead = if (d.lead_minutes > 0) d.lead_minutes.toString() else ""
                 location = d.location ?: ""
+                interrupt = if (d.interrupt_set_by == "user") d.interrupt_level ?: "" else ""
+                interruptInitial = interrupt
                 d.series?.let { sr ->
                     freq = sr.freq
                     interval = sr.interval
@@ -787,12 +807,17 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
         }
     }
 
-    val isSeries = detail?.series != null
     val isNew = blockId == null
+    // v3.3 §2: 이미 시작된 일정은 시작 시각을 고칠 수 없고, 그 회차만 바뀐다(반복 범위를 묻지 않는다).
+    val inProgress = detail?.in_progress == true
+    val isSeries = detail?.series != null && !inProgress
 
     fun startIso(): String? = runCatching {
         isoOf(LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim())))
     }.getOrNull()
+
+    /** 바꿨을 때만 보낸다(그대로면 비서가 정한 값을 지우지 않는다). */
+    fun interruptChange(): String? = if (isNew) interrupt.ifEmpty { null } else interrupt.takeIf { it != interruptInitial }
 
     fun seriesBody(): SeriesRequest = SeriesRequest(
         title = title.trim(), freq = freq, interval = interval,
@@ -801,7 +826,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
         start_time = time.trim(), duration_min = duration.trim().toIntOrNull(),
         start_date = date.trim(), until_date = until.trim().ifEmpty { null },
         lead_minutes = lead.trim().toIntOrNull(), location = location.trim().ifEmpty { null }, goal_id = goalId,
-        first_action = firstAction.trim().ifEmpty { null }, memo = memo,
+        first_action = firstAction.trim().ifEmpty { null }, memo = memo, interrupt_level = interruptChange(),
     )
 
     fun submit(block: suspend () -> Unit) {
@@ -823,10 +848,14 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
             return
         }
         val api = ApiClient.get(context)
-        val fixedBody = FixedBlockRequest(
+        val fixedBody = if (inProgress) FixedBlockRequest(
+            title = title.trim(), duration_min = minutes, location = location.trim(),
+            memo = if (detail?.series != null) onceMemo else memo, interrupt_level = interruptChange(),
+        ) else FixedBlockRequest(
             title = title.trim(), start = start, duration_min = minutes, lead_minutes = leadText.toIntOrNull(),
             location = location.trim().ifEmpty { null }, goal_id = goalId,
             first_action = firstAction.trim().ifEmpty { null }, memo = if (isSeries) onceMemo else memo,
+            interrupt_level = interruptChange(),
         )
         val d = detail
         when {
@@ -865,13 +894,29 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
             }
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("제목 (예: 치과, 헬스)") })
-                OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
-                OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") })
+                OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") }, enabled = !inProgress)
+                OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") }, enabled = !inProgress)
+                if (inProgress) Text("이미 시작된 일정이라 시작 시각은 바꿀 수 없어요. 길이로 끝 시각을 늘리거나 줄이세요.",
+                    style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
-                OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
+                if (!inProgress) OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
                 OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
+                detail?.place_name?.let { Text("찾은 장소: $it (틀리면 장소를 다시 입력하세요)", style = MaterialTheme.typography.bodySmall) }
+                Text("방해 허용", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("" to "비서가 정함", "dnd" to "🔕 방해 금지", "quiet" to "조용히", "allow" to "🔔 알림 허용").forEach { (key, label) ->
+                        val selected = interrupt == key
+                        Text(
+                            label,
+                            color = if (selected) Color.White else CAL_PINK,
+                            fontSize = 12.sp,
+                            modifier = Modifier.background(if (selected) CAL_PINK else Color.Transparent, RoundedCornerShape(50))
+                                .clickable { interrupt = key }.padding(horizontal = 7.dp, vertical = 4.dp),
+                        )
+                    }
+                }
                 if (isNew) OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동(선택)") })
-                if (isNew || isSeries) {
+                if ((isNew || isSeries) && !inProgress) {
                     Text("반복", fontWeight = FontWeight.Bold)
                     val options = listOf("none" to 1, "daily" to 1, "weekly" to 1, "weekly" to 2, "monthly" to 1)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

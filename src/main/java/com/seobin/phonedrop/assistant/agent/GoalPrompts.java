@@ -57,11 +57,13 @@ public class GoalPrompts {
     private final Jobs jobs;
     private final TurnQueue turns;
     private final Tx tx;
+    private final InterruptPolicy interrupts;
     private final boolean enabled;
 
     public GoalPrompts(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, GoalCoverage coverage,
                        ChatService chat, InterventionService interventions, PlanService plan, BlockLogs logs, Jobs jobs,
-                       TurnQueue turns, Tx tx, @Value("${assistant.worker.enabled:true}") boolean enabled) {
+                       TurnQueue turns, Tx tx, InterruptPolicy interrupts,
+                       @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -74,6 +76,7 @@ public class GoalPrompts {
         this.jobs = jobs;
         this.turns = turns;
         this.tx = tx;
+        this.interrupts = interrupts;
         this.enabled = enabled;
         jobs.register(DEADLINE_JOB, this::onDeadline);
     }
@@ -220,8 +223,8 @@ public class GoalPrompts {
     }
 
     private void send(Store.Goal g, String kind, String text) {
-        boolean silent = time.isQuiet(clock.now());
-        long id = chat.sendAssistant(text, kind, "normal", null, null, silent);
+        // v3.3 §1.2: 방해 허용 정도를 따른다(방해 금지 일정 중이면 묶음 메시지에 들어간다).
+        long id = interrupts.send(interrupts.proactive(null), text, kind, "normal", null, null);
         db.update("UPDATE messages SET goal_id = ? WHERE id = ?", g.id(), id);
     }
 

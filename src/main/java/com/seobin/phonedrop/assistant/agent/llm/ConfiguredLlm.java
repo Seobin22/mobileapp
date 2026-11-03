@@ -167,6 +167,25 @@ public class ConfiguredLlm implements LlmClient {
         return new AnthropicLlm(key, model);
     }
 
+    /**
+     * 문서 읽기·요약(v3.3 §4.3). documents.model 이 정해져 있으면 그 모델(같은 제공자·키), 비면 지금 모델.
+     */
+    public LlmResponse once(String system, String text, List<Image> images, String documentsModel) {
+        if (documentsModel == null || documentsModel.isBlank()) {
+            return client().once(system, text, images);
+        }
+        String key = currentKey(provider());
+        if (key.isEmpty()) {
+            throw new NotConfiguredException("API 키가 설정되지 않았습니다");
+        }
+        return create(provider(), documentsModel.trim(), key).once(system, text, images);
+    }
+
+    @Override
+    public LlmResponse once(String system, String text, List<Image> images) {
+        return client().once(system, text, images);
+    }
+
     @Override
     public Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch) {
         return client().start(system, toolDefinitions, userContent, webSearch);

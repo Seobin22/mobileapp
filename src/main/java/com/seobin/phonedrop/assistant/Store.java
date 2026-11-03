@@ -29,10 +29,20 @@ public class Store {
                         String kind, String title, Long goalId, int leadMinutes, int bufferAfterMin,
                         String location, String source, String externalId, boolean sensitive,
                         String prepSetBy, Long seriesId, java.time.LocalDate occurrenceDate, String memo,
-                        Long linkedFixedBlockId) {
+                        Long linkedFixedBlockId, String interruptLevel, String interruptSetBy, String placeName,
+                        Double lat, Double lng, String placeSource) {
 
         public boolean fixed() {
             return "fixed".equals(kind);
+        }
+
+        /** v3.3 §1: 방해 허용 정도. 값이 없으면 quiet(이전 동작). */
+        public String level() {
+            return interruptLevel == null ? "quiet" : interruptLevel;
+        }
+
+        public boolean hasCoords() {
+            return lat != null && lng != null;
         }
 
         /** 개입 시작 시각 = start − lead_minutes (계획 블록은 lead 0). */
@@ -85,6 +95,18 @@ public class Store {
                 .query(Store::block).list().stream()
                 .filter(b -> b.blockedStart().isBefore(to) && from.isBefore(b.blockedEnd()))
                 .toList();
+    }
+
+    /** v3.3 §1.2: 지금 진행 중인 고정 블록 = 금지 구간 [start − lead, end + buffer_after] 안. */
+    public List<Block> fixedInProgress(Instant now) {
+        return activeFixedBlocksOverlapping(now, now.plusSeconds(1));
+    }
+
+    /** 지금 진행 중인 방해 금지(dnd) 고정 블록(exceptId 는 뺀다: 그 블록 자신의 개입은 막지 않는다). */
+    public Optional<Block> dndInProgress(Instant now, Long exceptId) {
+        return fixedInProgress(now).stream()
+                .filter(b -> "dnd".equals(b.level()) && (exceptId == null || b.id() != exceptId))
+                .findFirst();
     }
 
     public Optional<Goal> goal(long id) {
@@ -231,7 +253,14 @@ public class Store {
                 rs.getString("source"), rs.getString("external_id"), rs.getBoolean("sensitive"),
                 rs.getString("prep_set_by"), AssistantDb.nullableLong(rs, "series_id"),
                 rs.getObject("occurrence_date", java.time.LocalDate.class), rs.getString("memo"),
-                AssistantDb.nullableLong(rs, "linked_fixed_block_id"));
+                AssistantDb.nullableLong(rs, "linked_fixed_block_id"), rs.getString("interrupt_level"),
+                rs.getString("interrupt_set_by"), rs.getString("place_name"), nullableDouble(rs, "lat"),
+                nullableDouble(rs, "lng"), rs.getString("place_source"));
+    }
+
+    public static Double nullableDouble(ResultSet rs, String column) throws SQLException {
+        double v = rs.getDouble(column);
+        return rs.wasNull() ? null : v;
     }
 
     static Intervention intervention(ResultSet rs, int n) throws SQLException {

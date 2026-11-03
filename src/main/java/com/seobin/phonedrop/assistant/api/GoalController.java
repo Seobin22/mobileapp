@@ -102,6 +102,12 @@ public class GoalController {
         });
     }
 
+    /** v3.3 §2: 진행 중 고정 일정 [지금 끝내기]. */
+    @PostMapping("/fixed_blocks/{id}/end_now")
+    public Map<String, Object> endFixedNow(@PathVariable long id) {
+        return tx.run(() -> fixedBlocks.toResponse(fixedBlocks.endNow(id, null)));
+    }
+
     @DeleteMapping("/fixed_blocks/{id}")
     public Map<String, Object> deleteFixed(@PathVariable long id) {
         return tx.run(() -> fixedBlocks.toResponse(fixedBlocks.cancel(id, null)));

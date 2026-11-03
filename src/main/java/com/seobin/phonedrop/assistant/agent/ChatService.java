@@ -144,19 +144,40 @@ public class ChatService {
         return id;
     }
 
+    /**
+     * v3.3 §1.2: 방해 금지 일정 중에는 저장만 하고 알리지 않는다(채팅에도 안 보인다). 일정이 끝나면 InterruptPolicy 가
+     * 묶음 메시지로 보낸다.
+     */
+    public long holdAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
+                              long heldBlockId) {
+        return db.insert("""
+                        INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id,
+                        held_block_id, created_at) VALUES ('assistant', ?, ?, ?, TRUE, ?, ?, ?, ?)""",
+                text, kind, importance, questionId, confirmationId, heldBlockId, clock.now());
+    }
+
     public long askUser(String text, List<String> options) {
+        return askUser(text, options, null);
+    }
+
+    /** heldBlockId 가 있으면 방해 금지 일정이 끝날 때까지 모아 둔다. */
+    public long askUser(String text, List<String> options, Long heldBlockId) {
         ArrayNode opts = Json.array();
         options.forEach(opts::add);
         long questionId = db.insert("INSERT INTO questions(text, options, asked_at) VALUES (?, ?, ?)",
                 text, options.isEmpty() ? null : Json.write(opts), clock.now());
-        sendAssistant(text, "question", "normal", questionId, null);
+        if (heldBlockId != null) {
+            holdAssistant(text, "question", "normal", questionId, null, heldBlockId);
+        } else {
+            sendAssistant(text, "question", "normal", questionId, null);
+        }
         return questionId;
     }
 
     public Map<String, Object> list(long afterId) {
         String sql = afterId > 0
-                ? "SELECT * FROM (SELECT * FROM messages WHERE id > ? ORDER BY id LIMIT 200) ORDER BY id"
-                : "SELECT * FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 100) ORDER BY id";
+                ? "SELECT * FROM (SELECT * FROM messages WHERE id > ? AND held_block_id IS NULL ORDER BY id LIMIT 200) ORDER BY id"
+                : "SELECT * FROM (SELECT * FROM messages WHERE held_block_id IS NULL ORDER BY id DESC LIMIT 100) ORDER BY id";
         var spec = db.jdbc().sql(sql);
         if (afterId > 0) {
             spec = spec.param(afterId);
@@ -176,6 +197,10 @@ public class ChatService {
             Long goal = AssistantDb.nullableLong(rs, "goal_id");
             if (goal != null) {
                 m.put("goal_id", goal);
+            }
+            Long document = AssistantDb.nullableLong(rs, "document_id");
+            if (document != null) {
+                m.put("document_id", document);
             }
             if (rs.getString("source") != null) {
                 m.put("source", rs.getString("source"));
@@ -221,7 +246,7 @@ public class ChatService {
         return db.jdbc().sql("""
                         SELECT COUNT(*), COALESCE(SUM(CASE WHEN importance = 'high' AND silent = FALSE THEN 1 ELSE 0 END), 0)
                         FROM messages WHERE role = 'assistant' AND kind IN ('proactive', 'briefing', 'checkin')
-                        AND created_at >= ?""")
+                        AND held_block_id IS NULL AND created_at >= ?""")
                 .param(AssistantDb.ts(dayStart))
                 .query((rs, n) -> new int[]{rs.getInt(1), rs.getInt(2)}).single();
     }
@@ -229,7 +254,9 @@ public class ChatService {
     /** 오늘(logical day) 시작된 turn 수. */
     public int turnsToday() {
         Instant dayStart = time.activeWindow(time.logicalDay(clock.now())).start();
-        return db.jdbc().sql("SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND started_at >= ?")
+        return db.jdbc().sql("""
+                        SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND trigger <> 'document_process'
+                        AND started_at >= ?""")
                 .param(AssistantDb.ts(dayStart)).query(Integer.class).single();
     }
 }

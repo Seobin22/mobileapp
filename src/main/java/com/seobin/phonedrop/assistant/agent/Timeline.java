@@ -99,6 +99,10 @@ public class Timeline {
                     item.put("location", b.location());
                     item.put("source", b.source());
                     item.put("prep_set_by", b.prepSetBy());
+                    // v3.3: 방해 허용 정도(null = 아직 안 정함, quiet 로 동작), 찾은 장소
+                    item.put("interrupt_level", b.interruptLevel());
+                    item.put("interrupt_set_by", b.interruptSetBy());
+                    item.put("place_name", b.placeName());
                 }
                 if (b.workProductId() != null) {
                     item.put("work_product_id", b.workProductId());

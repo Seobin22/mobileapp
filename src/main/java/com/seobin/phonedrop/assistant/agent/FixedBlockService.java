@@ -56,11 +56,14 @@ public class FixedBlockService {
     private final TurnQueue turns;
     private final BlockLogs logs;
     private final com.seobin.phonedrop.assistant.TimeUtil time;
+    private final InterruptPolicy interrupts;
+    private final TravelService travel;
 
     public FixedBlockService(AssistantDb db, AssistantClock clock, Store store, SettingsService settings,
                              Validator validator, InterventionService interventions, PlanService plan, Changes changes,
                              GoalCoverage coverage, TurnQueue turns, BlockLogs logs,
-                             com.seobin.phonedrop.assistant.TimeUtil time) {
+                             com.seobin.phonedrop.assistant.TimeUtil time, InterruptPolicy interrupts,
+                             TravelService travel) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -73,6 +76,8 @@ public class FixedBlockService {
         this.turns = turns;
         this.logs = logs;
         this.time = time;
+        this.interrupts = interrupts;
+        this.travel = travel;
     }
 
     /**
@@ -86,6 +91,10 @@ public class FixedBlockService {
             existing = store.block(id).orElse(null);
             if (existing == null || !existing.fixed()) {
                 return Result.fail("고정 블록#" + id + "이 없습니다");
+            }
+            // v3.3 §2: 이미 시작된(시작 시각이 지났거나 [시작]을 누른) 고정 일정은 따로 고친다(시작 시각은 그대로).
+            if (inProgress(existing, clock.now()) && ("started".equals(existing.status()) || !startChange(in, existing))) {
+                return editInProgress(existing, in, turnId);
             }
             if (!List.of("planned", "nudging").contains(existing.status())) {
                 return Result.fail("블록#" + id + "은 " + existing.status() + " 상태라 바꿀 수 없습니다");
@@ -149,6 +158,12 @@ public class FixedBlockService {
         boolean sensitive = in.hasNonNull("sensitive") ? in.get("sensitive").asBoolean()
                 : existing != null && existing.sensitive();
         String screen = screenText(in, title, lead, existing);
+        String[] level;
+        try {
+            level = interruptLevel(in, existing, turnId);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
 
         Instant now = clock.now();
         boolean timeChanged = existing == null || !start.equals(existing.start()) || !end.equals(existing.end())
@@ -167,10 +182,11 @@ public class FixedBlockService {
             String memo = turnId == null ? memoOf(in) : "";
             blockId = db.insert("""
                             INSERT INTO blocks(kind, title, task_id, goal_id, start_at, end_at, status, screen_text,
-                            lead_minutes, buffer_after_min, location, source, sensitive, prep_set_by, memo, memo_updated_at)
-                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            lead_minutes, buffer_after_min, location, source, sensitive, prep_set_by, memo, memo_updated_at,
+                            interrupt_level, interrupt_set_by)
+                            VALUES ('fixed', ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     title, taskId, goalId, start, end, screen, lead, bufferAfter, location, source, sensitive,
-                    prepSetBy, memo, memo.isEmpty() ? null : now);
+                    prepSetBy, memo, memo.isEmpty() ? null : now, level[0], level[1]);
             record(turnId, blockId, null);
             logs.add(blockId, "created", actor(turnId), turnId == null ? "사용자가 앱에서 생성" : "비서가 생성");
         } else {
@@ -184,10 +200,11 @@ public class FixedBlockService {
                             UPDATE blocks SET title = ?, task_id = ?, goal_id = ?, start_at = ?, end_at = ?,
                             screen_text = ?, lead_minutes = ?, buffer_after_min = ?, location = ?, sensitive = ?,
                             prep_set_by = ?, status = CASE WHEN ? THEN 'planned' ELSE status END,
+                            interrupt_level = ?, interrupt_set_by = ?,
                             version = version + CASE WHEN ? THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?""",
                     title, taskId, goalId, start, end, screen, lead, bufferAfter, location, sensitive, prepSetBy,
-                    timeChanged, timeChanged, blockId);
+                    timeChanged, level[0], level[1], timeChanged, blockId);
             record(turnId, blockId, before);
             if (!start.equals(existing.start()) || !end.equals(existing.end())) {
                 ObjectNode data = Json.object();
@@ -220,8 +237,209 @@ public class FixedBlockService {
         if (timeChanged) {
             interventions.scheduleBlockJobs(store.block(blockId).orElseThrow());
         }
+        if (existing == null || !java.util.Objects.equals(location, existing.location())) {
+            travel.onLocationChanged(blockId);
+        } else if (timeChanged) {
+            travel.onDayChanged(blockId);
+        }
+        if (existing != null && interrupts.hasHeld(blockId)) {
+            interrupts.scheduleRelease(store.block(blockId).orElseThrow());
+            interrupts.releaseIfDone(blockId);
+        }
         plan.bumpAndSync();
         return new Result(blockId, displaced, cutoff, null);
+    }
+
+    /**
+     * 시작 시각을 바꾸는 요청인가. 시작 화면이 뜬 채(nudging) 시작 시각이 지난 블록을 미루는 것(move_block)은
+     * 진행 중 수정이 아니라 기존 미루기다. [시작]을 누른(started) 블록만 시작 시각 변경을 거절한다.
+     */
+    public static boolean startChange(JsonNode in, Store.Block b) {
+        return in.hasNonNull("start") && !TimeUtil.parse(in.get("start").asString()).equals(b.start());
+    }
+
+    /** 시작 시각이 지났거나 [시작]을 누른, 아직 끝나지 않은 고정 블록(v3.3 §2). */
+    public boolean inProgress(Store.Block b, Instant now) {
+        return b.fixed() && List.of("planned", "nudging", "started").contains(b.status())
+                && ("started".equals(b.status()) || !b.start().isAfter(now));
+    }
+
+    /**
+     * 진행 중 고정 일정 고치기(v3.3 §2): 끝 시각(늘리기·줄이기), 제목·장소·방해 허용 정도. 시작 시각은 바꾸지 않는다.
+     * 늘린 구간과 겹치는 계획 블록은 밀어내고(비서가 재배치), 고정 블록과 겹치면 거절한다.
+     * 권한(비서는 확인 카드로만)은 Permissions 가 정한다. 여기에 오면 사용자 결정이다.
+     */
+    public Result editInProgress(Store.Block existing, JsonNode in, Long turnId) {
+        Instant now = clock.now();
+        long id = existing.id();
+        if (in.hasNonNull("start") && !TimeUtil.parse(in.get("start").asString()).equals(existing.start())) {
+            return Result.fail("이미 시작된 일정이라 시작 시각은 바꿀 수 없어요. 끝 시각만 바꿀 수 있어요");
+        }
+        Instant end = existing.end();
+        if (in.hasNonNull("end")) {
+            end = TimeUtil.parse(in.get("end").asString());
+        } else if (in.hasNonNull("duration_min")) {
+            end = existing.start().plus(Duration.ofMinutes(in.get("duration_min").asInt()));
+        }
+        if (!end.isAfter(now)) {
+            return Result.fail("끝 시각이 이미 지났어요. 지금 끝내려면 [지금 끝내기]를 쓰세요");
+        }
+        String title = in.hasNonNull("title") ? in.get("title").asString("").trim() : existing.title();
+        if (title.isEmpty()) {
+            return Result.fail("고정 블록에는 title 이 필요합니다");
+        }
+        String location = in.has("location") ? emptyToNull(in.path("location").asString("")) : existing.location();
+        String[] level;
+        try {
+            level = interruptLevel(in, existing, turnId);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
+        boolean endChanged = !end.equals(existing.end());
+        Validator.FixedCheck check = new Validator.FixedCheck(List.of(), List.of(), List.of());
+        if (end.isAfter(existing.end())) {
+            check = validator.validateFixed(id, existing.start(), end, existing.leadMinutes(), existing.bufferAfterMin(),
+                    now);
+            if (!check.errors().isEmpty()) {
+                return Result.fail(String.join(" ", check.errors()).replace("시간을 바꿔 주세요.", "그 일정을 먼저 옮겨 주세요."));
+            }
+        }
+        JsonNode before = changes.snapshot("block", id);
+        db.update("""
+                        UPDATE blocks SET end_at = ?, title = ?, location = ?, interrupt_level = ?, interrupt_set_by = ?,
+                        version = version + CASE WHEN ? THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                end, title, location, level[0], level[1], endChanged, id);
+        record(turnId, id, before);
+        if (endChanged) {
+            ObjectNode data = Json.object();
+            data.put("from_end", time.iso(existing.end()));
+            data.put("to_end", time.iso(end));
+            logs.add(id, "moved", actor(turnId), "끝 " + time.hm(existing.end()) + "→" + time.hm(end)
+                    + (end.isAfter(existing.end()) ? " (연장" : " (줄임") + (turnId == null ? ", 사용자가 앱에서)" : ")"), data);
+            recordMoved(existing);
+            interventions.rescheduleEnd(store.block(id).orElseThrow());
+        }
+        if (!title.equals(existing.title()) || !java.util.Objects.equals(location, existing.location())) {
+            logs.add(id, "note", actor(turnId), "진행 중 수정:" + (title.equals(existing.title()) ? "" : " 제목")
+                    + (java.util.Objects.equals(location, existing.location()) ? "" : " 장소"));
+        }
+        if (!java.util.Objects.equals(level[0], existing.interruptLevel())) {
+            logs.add(id, "note", actor(turnId), "방해 허용 정도: " + levelText(existing.interruptLevel()) + " → "
+                    + levelText(level[0]));
+        }
+        List<Long> displaced = new ArrayList<>();
+        for (Store.Block b : check.displaced()) {
+            cancel(b, turnId);
+            displaced.add(b.id());
+        }
+        List<Long> cutoff = new ArrayList<>();
+        for (Store.Block b : check.cutoff()) {
+            interventions.scheduleCutoff(b.id(), now);
+            cutoff.add(b.id());
+        }
+        Store.Block after = store.block(id).orElseThrow();
+        if (interrupts.hasHeld(id)) {
+            interrupts.scheduleRelease(after);
+        }
+        interrupts.releaseIfDone(id);
+        if (!java.util.Objects.equals(location, existing.location())) {
+            travel.onLocationChanged(id);
+        } else if (endChanged) {
+            travel.onDayChanged(id);
+        }
+        plan.bumpAndSync();
+        return new Result(id, displaced, cutoff, null);
+    }
+
+    /** [지금 끝내기](v3.3 §2): done, actual_end = now. 모아 둔 메시지가 있으면 바로 보낸다. */
+    public Result endNow(long id, Long turnId) {
+        Store.Block b = store.block(id).orElse(null);
+        Instant now = clock.now();
+        if (b == null || !b.fixed()) {
+            return Result.fail("고정 블록#" + id + "이 없습니다");
+        }
+        if (!inProgress(b, now)) {
+            return Result.fail("진행 중인 일정만 지금 끝낼 수 있어요");
+        }
+        JsonNode before = changes.snapshot("block", id);
+        interventions.cancelRunningForBlock(id);
+        interventions.cancelBlockJobs(id);
+        db.update("""
+                        UPDATE blocks SET status = 'done', actual_start = COALESCE(actual_start, start_at), actual_end = ?,
+                        updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                now, id);
+        record(turnId, id, before);
+        logs.add(id, "ended", actor(turnId), "지금 끝냄(" + time.hm(now) + (turnId == null ? ", 사용자가 앱에서)" : ")"));
+        coverage.onBlockClosed(id);
+        interrupts.releaseIfDone(id);
+        travel.onDayChanged(id);
+        plan.bumpAndSync();
+        return new Result(id, List.of(), List.of(), null);
+    }
+
+    /**
+     * 방해 허용 정도(v3.3 §1.3) → {level, set_by}. 앱(turnId 없음)이 정하면 user, 비서가 정하면 assistant
+     * (사용자가 채팅으로 직접 말한 단계면 interrupt_from_user). 사용자가 정한 단계를 비서가 바꾸려 하면 거절한다.
+     * 앱에서 "비서가 정함"(빈 값·null)을 고르면 둘 다 비운다.
+     */
+    String[] interruptLevel(JsonNode in, Store.Block existing, Long turnId) {
+        String level = existing == null ? null : existing.interruptLevel();
+        String setBy = existing == null ? null : existing.interruptSetBy();
+        if (!in.has("interrupt_level")) {
+            return new String[]{level, setBy};
+        }
+        String given = in.get("interrupt_level").isNull() ? "" : in.get("interrupt_level").asString("").trim();
+        boolean byUser = turnId == null || in.path("interrupt_from_user").asBoolean(false);
+        if (given.isEmpty()) {
+            return byUser ? new String[]{null, null} : new String[]{level, setBy};
+        }
+        if (!InterruptPolicy.LEVELS.contains(given)) {
+            throw new IllegalArgumentException("interrupt_level 은 dnd·quiet·allow 중 하나입니다");
+        }
+        if (!byUser && "user".equals(setBy) && !given.equals(level)) {
+            throw new IllegalArgumentException("사용자가 정한 방해 허용 정도(" + levelText(level) + ")라 바꾸지 않습니다");
+        }
+        if (byUser) {
+            return new String[]{given, "user"};
+        }
+        return new String[]{given, given.equals(level) && setBy != null ? setBy : "assistant"};
+    }
+
+    /** set_interrupt_level 도구(v3.3 §1.4): 확인 카드 없이. 사용자가 정한 단계면 거절. */
+    public Result setInterruptLevel(long id, String level, Long turnId) {
+        Store.Block b = store.block(id).orElse(null);
+        if (b == null || !b.fixed()) {
+            return Result.fail("고정 블록#" + id + "이 없습니다");
+        }
+        if (!List.of("planned", "nudging", "started").contains(b.status())) {
+            return Result.fail("블록#" + id + "은 " + b.status() + " 상태입니다");
+        }
+        ObjectNode in = Json.object();
+        in.put("interrupt_level", level);
+        String[] v;
+        try {
+            v = interruptLevel(in, b, turnId);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(e.getMessage());
+        }
+        JsonNode before = changes.snapshot("block", id);
+        db.update("UPDATE blocks SET interrupt_level = ?, interrupt_set_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                v[0], v[1], id);
+        record(turnId, id, before);
+        if (!java.util.Objects.equals(v[0], b.interruptLevel())) {
+            logs.add(id, "note", actor(turnId), "방해 허용 정도: " + levelText(b.interruptLevel()) + " → " + levelText(v[0]));
+        }
+        interrupts.releaseIfDone(id);
+        plan.bumpAndSync();
+        return new Result(id, List.of(), List.of(), null);
+    }
+
+    public static String levelText(String level) {
+        return level == null ? "비서가 정함" : switch (level) {
+            case "dnd" -> "방해 금지";
+            case "allow" -> "알림 허용";
+            default -> "조용히";
+        };
     }
 
     /** 고정 블록 취소(cancel entity=fixed_block, DELETE /v1/fixed_blocks/{id}). */
@@ -358,6 +576,10 @@ public class FixedBlockService {
         m.put("id", r.id());
         m.put("displaced", r.displaced());
         m.put("plan_version", plan.version());
+        store.block(r.id()).ifPresent(b -> {
+            m.put("interrupt_level", b.interruptLevel());
+            m.put("place_name", b.placeName());
+        });
         return m;
     }
 

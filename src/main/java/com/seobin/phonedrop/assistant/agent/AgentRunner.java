@@ -56,11 +56,12 @@ public class AgentRunner {
     private final GoalCoverage coverage;
     private final Store store;
     private final GoalPrompts goalPrompts;
+    private final DocumentService documents;
     private final String systemTemplate;
 
     public AgentRunner(Tx tx, AssistantDb db, AssistantClock clock, SettingsService settings, ContextBuilder context,
                        Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive,
-                       GoalCoverage coverage, Store store, GoalPrompts goalPrompts) {
+                       GoalCoverage coverage, Store store, GoalPrompts goalPrompts, DocumentService documents) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -74,6 +75,7 @@ public class AgentRunner {
         this.coverage = coverage;
         this.store = store;
         this.goalPrompts = goalPrompts;
+        this.documents = documents;
         try (InputStream in = new ClassPathResource("assistant/prompts/system.md").getInputStream()) {
             this.systemTemplate = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -121,6 +123,14 @@ public class AgentRunner {
 
     /** @return ok | partial | failed | retry | skipped */
     String runTurn(long turnId, String trigger, JsonNode ref, int attempts) {
+        // v3.3 §4.3: 자료 처리는 비서 turn 이 아니라 코드 작업이다(LLM 은 읽기·요약에만, 하루 turn 수에 넣지 않는다).
+        if (DocumentService.PROCESS_TRIGGER.equals(trigger)) {
+            tx.exec(() -> db.update("UPDATE turns SET status = 'running', started_at = ? WHERE id = ?", clock.now(), turnId));
+            setStage(turnId, "working", "자료 읽는 중…");
+            documents.process(ref.path("document_id").asLong());
+            tx.exec(() -> endTurn(turnId, "ok", new Stats(), null));
+            return "ok";
+        }
         // 풀스크린 대화도 사용자가 직접 한 말이다(답이 있어야 하고, 한도 초과 안내도 한다).
         boolean fromUser = Permissions.fromUser(trigger);
         int hardLimit = settings.getInt("agent.daily_turn_hard");

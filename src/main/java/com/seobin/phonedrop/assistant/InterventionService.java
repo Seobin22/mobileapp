@@ -91,6 +91,19 @@ public class InterventionService {
         jobs.schedule(BLOCK_END, b.id(), b.end(), null);
     }
 
+    /**
+     * v3.3 §2: 진행 중 블록의 끝 시각이 바뀌면 block_end 와 진행 중 개입의 만료를 새 끝 시각으로 다시 잡는다
+     * (시작 화면 개입 시각은 이미 지났으므로 다시 예약하지 않는다).
+     */
+    public void rescheduleEnd(Store.Block b) {
+        jobs.cancelForTarget(BLOCK_END, b.id());
+        jobs.schedule(BLOCK_END, b.id(), b.end(), null);
+        store.runningForBlock(b.id()).ifPresent(i -> {
+            jobs.cancelForTarget(EXPIRE, i.id());
+            jobs.schedule(EXPIRE, i.id(), expireAt(b), null);
+        });
+    }
+
     public void cancelBlockJobs(long blockId) {
         jobs.cancelForTarget(START, blockId);
         jobs.cancelForTarget(BLOCK_END, blockId);
@@ -135,6 +148,10 @@ public class InterventionService {
     private Optional<Store.Intervention> begin(Store.Block b) {
         Instant now = clock.now();
         if (time.isQuiet(now) || !now.isBefore(b.end())) {
+            return Optional.empty();
+        }
+        // v3.3 §1.2: 방해 금지 고정 일정이 진행 중이면 다른 블록의 개입은 시작하지 않는다(quiet window 와 같다).
+        if (store.dndInProgress(now, b.id()).isPresent()) {
             return Optional.empty();
         }
 

@@ -17,6 +17,20 @@ public interface LlmClient {
         return start(system, toolDefinitions, userContent, false);
     }
 
+    /** 이미지 입력(PNG·JPEG). */
+    record Image(String mediaType, byte[] data) {
+    }
+
+    /**
+     * 도구 없이 한 번 묻고 답을 받는다(문서 읽기·요약, 빌드문서 v3.3 §4.3). 이미지 입력은 구현체가 지원할 때만.
+     */
+    default LlmResponse once(String system, String text, List<Image> images) {
+        if (!images.isEmpty()) {
+            throw new LlmException("이 모델은 이미지 입력을 지원하지 않습니다", null);
+        }
+        return start(system, com.seobin.phonedrop.assistant.Json.array(), text).next();
+    }
+
     interface Conversation {
         /** 다음 응답. 네트워크·5xx·타임아웃은 LlmException. */
         LlmResponse next();

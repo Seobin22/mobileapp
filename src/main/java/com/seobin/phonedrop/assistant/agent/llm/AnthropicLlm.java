@@ -164,6 +164,36 @@ public class AnthropicLlm implements LlmClient {
         };
     }
 
+    @Override
+    public LlmResponse once(String system, String text, List<Image> images) {
+        List<ContentBlockParam> blocks = new ArrayList<>();
+        for (Image img : images) {
+            blocks.add(ContentBlockParam.ofImage(com.anthropic.models.messages.ImageBlockParam.builder()
+                    .source(com.anthropic.models.messages.Base64ImageSource.builder()
+                            .data(java.util.Base64.getEncoder().encodeToString(img.data()))
+                            .mediaType(com.anthropic.models.messages.Base64ImageSource.MediaType.of(img.mediaType()))
+                            .build())
+                    .build()));
+        }
+        blocks.add(ContentBlockParam.ofText(TextBlockParam.builder().text(text).build()));
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(model)
+                .maxTokens(MAX_TOKENS)
+                .system(system)
+                .addUserMessageOfBlockParams(blocks)
+                .build();
+        Message message;
+        try {
+            message = client.messages().create(params);
+        } catch (RuntimeException e) {
+            throw new LlmException("Claude 호출 실패: " + e.getMessage(), e);
+        }
+        StringBuilder out = new StringBuilder();
+        message.content().forEach(b -> b.text().ifPresent(t -> out.append(t.text())));
+        return new LlmResponse(List.of(), out.toString(), message.stopReason().map(StopReason::asString).orElse(""),
+                message.usage().inputTokens(), message.usage().outputTokens());
+    }
+
     /** tools.json 의 정의 하나를 SDK Tool 로. 마지막 도구에 캐시 표시를 달아 도구 목록 전체를 캐시한다. */
     private static Tool tool(JsonNode def, boolean cacheBreakpoint) {
         JsonNode schema = def.path("input_schema");

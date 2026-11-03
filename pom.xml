@@ -44,6 +44,12 @@
 			<artifactId>anthropic-java</artifactId>
 			<version>2.34.0</version>
 		</dependency>
+		<!-- 실행 비서 v3.3 문서 받기: PDF 글자 추출·스캔본 쪽 이미지(JDK 에 PDF 파서가 없다) -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.6</version>
+		</dependency>
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>

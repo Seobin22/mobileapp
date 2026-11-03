@@ -115,6 +115,34 @@ public class OpenAiCompatLlm implements LlmClient {
         };
     }
 
+    @Override
+    public LlmResponse once(String system, String text, List<Image> images) {
+        ArrayNode messages = Json.array();
+        messages.add(message("system", system));
+        ObjectNode user = Json.object();
+        user.put("role", "user");
+        ArrayNode content = user.putArray("content");
+        ObjectNode t = content.addObject();
+        t.put("type", "text");
+        t.put("text", text);
+        for (Image img : images) {
+            ObjectNode part = content.addObject();
+            part.put("type", "image_url");
+            part.putObject("image_url").put("url", "data:" + img.mediaType() + ";base64,"
+                    + java.util.Base64.getEncoder().encodeToString(img.data()));
+        }
+        messages.add(user);
+        ObjectNode body = Json.object();
+        body.put("model", model);
+        body.set("messages", messages);
+        JsonNode resp = post("/chat/completions/", body);
+        JsonNode choice = resp.path("choices").path(0);
+        String out = choice.path("message").path("content").isString() ? choice.path("message").get("content").asString() : "";
+        JsonNode usage = resp.path("usage");
+        return new LlmResponse(List.of(), out, choice.path("finish_reason").asString(""),
+                usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0));
+    }
+
     /** 게이트웨이의 모델 id 목록(GET /models/). {data:[{id}]} 또는 [{id}] 둘 다 받는다. */
     public List<String> listModels() {
         JsonNode resp = send(HttpRequest.newBuilder(URI.create(baseUrl + "/models/")).GET());

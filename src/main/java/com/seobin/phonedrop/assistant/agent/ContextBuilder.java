@@ -42,10 +42,13 @@ public class ContextBuilder {
     private final MemoService memos;
     private final BlockLogs logs;
     private final GoalPrompts goalPrompts;
+    private final TravelService travel;
+    private final DocumentService documents;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                           Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
-                          Deadlines deadlines, MemoService memos, BlockLogs logs, GoalPrompts goalPrompts) {
+                          Deadlines deadlines, MemoService memos, BlockLogs logs, GoalPrompts goalPrompts,
+                          TravelService travel, DocumentService documents) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -60,6 +63,8 @@ public class ContextBuilder {
         this.memos = memos;
         this.logs = logs;
         this.goalPrompts = goalPrompts;
+        this.travel = travel;
+        this.documents = documents;
     }
 
     public String build(String trigger, JsonNode ref) {
@@ -89,6 +94,11 @@ public class ContextBuilder {
                 .append(deadlines.contextSection()).append('\n');
         sb.append("# 답을 기다리는 목표 질문(코드가 버튼으로 물음)\n").append(goalPrompts.contextSection(trigger)).append('\n');
         appendMemos(sb, trigger, ref, now);
+        // v3.3 §4.5: 자료는 요약·제목만(전문은 read_document)
+        sb.append("# 사용자 자료\n")
+                .append(documents.contextSection(trigger, goalOf(trigger, ref),
+                        "document_ready".equals(trigger) ? ref.path("document_id").asLong() : null))
+                .append('\n');
         appendBlockLogs(sb, ref);
 
         // v3.1 §3.6-2: 풀스크린 대화면 이 개입에서 오간 말
@@ -135,6 +145,17 @@ public class ContextBuilder {
         sb.append("# 향후 7일 시간표\n");
         appendTimeline(sb, now, now.plus(Duration.ofDays(7)));
         sb.append('\n');
+
+        // v3.3 §3.5: 이동 불가능 경고. 사용자 메시지 turn·아침 브리핑에서만, 같은 경고는 한 번만 알린다.
+        if ("user_message".equals(trigger) || "morning".equals(trigger)) {
+            List<TravelService.Warning> warnings = travel.unnoticedWarnings(now, now.plus(Duration.ofDays(7)));
+            if (!warnings.isEmpty()) {
+                sb.append("# 경고(사용자에게 알린다)\n");
+                warnings.forEach(w -> sb.append("- 블록#").append(w.blockId()).append(' ').append(w.text()).append('\n'));
+                sb.append('\n');
+                travel.markNoticed(warnings);
+            }
+        }
 
         List<Store.Task> tasks = store.activeTasks();
         sb.append("# 목표\n");
@@ -240,7 +261,8 @@ public class ContextBuilder {
         int n = settings.getInt("agent.context_messages");
         sb.append("# 최근 대화 (최근 ").append(n).append("개)\n");
         List<String> recent = db.jdbc().sql("""
-                        SELECT * FROM (SELECT id, role, kind, content, created_at FROM messages ORDER BY id DESC LIMIT ?)
+                        SELECT * FROM (SELECT id, role, kind, content, created_at FROM messages WHERE held_block_id IS NULL
+                        ORDER BY id DESC LIMIT ?)
                         ORDER BY id""")
                 .param(n)
                 .query((rs, i) -> "[" + mdHm(AssistantDb.instant(rs, "created_at")) + " "
@@ -283,7 +305,8 @@ public class ContextBuilder {
                     + "). 시간표를 다시 정리하고 짧게 알린다";
             case "fixed_block_added" -> "fixed_block_added: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 준비 시간 없이 넣었다. 장소·거리·준비물·일의 성격을 보고 lead_minutes·buffer_after_min 을 정하거나"
-                    + " 앞에 준비용 계획 블록을 만든다(upsert_fixed_block 에 id 와 두 값만)";
+                    + " 앞에 준비용 계획 블록을 만든다(upsert_fixed_block 에 id 와 두 값만)."
+                    + " 방해 허용 정도가 미정이면 set_interrupt_level 로 정한다";
             case "fixed_memo_changed" -> "fixed_memo_changed: 사용자가 곧 시작하는 고정 블록#" + ref.path("block_id").asLong()
                     + "의 메모를 바꿨다. 메모를 읽고 알릴 것·준비할 것이 있으면 처리한다(없으면 말하지 않는다)";
             case "fixed_changed" -> "fixed_changed: 고정 블록#" + ref.path("block_id").asLong()
@@ -316,6 +339,14 @@ public class ContextBuilder {
             case "wakeup" -> "wakeup: 예약해 둔 wakeup#" + ref.path("wakeup_id").asLong()
                     + (ref.hasNonNull("task_id") ? " 할일#" + ref.path("task_id").asLong() : "")
                     + " — " + ref.path("reason").asString("");
+            case "document_ready" -> {
+                DocumentService.Document d = documents.find(ref.path("document_id").asLong()).orElse(null);
+                yield "document_ready: 사용자가 올린 자료#" + ref.path("document_id").asLong()
+                        + (d == null ? "" : " '" + d.filename() + "'" + (d.message() == null ? "" : ", 함께 남긴 말: \"" + d.message() + "\""))
+                        + "를 읽었다(요약·추출은 '# 사용자 자료'). 목표가 없으면 어느 목표 자료인지 판단해 link_document(애매하면 ask_user)."
+                        + " 추출된 마감·할 일은 자동 등록하지 말고 ask_user 로 등록할지 묻는다. 필요하면 목표 전략을 자료에 맞게 고치고 짧게 알린다."
+                        + " 작업물은 만들지 않는다";
+            }
             case "pulse" -> "pulse: 정기 점검(먼저 말 걸 가치가 있을 때만 send_message)";
             case "morning" -> "morning: 아침 브리핑(" + ref.path("logical_day").asString("") + ")";
             case "evening" -> "evening: 저녁 회고(" + ref.path("logical_day").asString("") + ")";
@@ -350,6 +381,23 @@ public class ContextBuilder {
     }
 
     /** v3.2 §4.3: 진행 중 개입 블록의 기록, 이번 turn 블록과 같은 목표의 직전 블록 3개 기록(블록당 최근 5줄). */
+    /** 이번 turn 이 어느 목표에 관한 것인지(자료 요약을 넣을 목표). */
+    private Long goalOf(String trigger, JsonNode ref) {
+        if (ref.hasNonNull("goal_id")) {
+            return ref.get("goal_id").asLong();
+        }
+        if ("document_ready".equals(trigger)) {
+            return documents.find(ref.path("document_id").asLong()).map(DocumentService.Document::goalId).orElse(null);
+        }
+        if (ref.hasNonNull("block_id")) {
+            return store.block(ref.get("block_id").asLong()).map(timeline::goalOf).map(Store.Goal::id).orElse(null);
+        }
+        if (ref.hasNonNull("task_id")) {
+            return store.task(ref.get("task_id").asLong()).map(Store.Task::goalId).orElse(null);
+        }
+        return null;
+    }
+
     private void appendBlockLogs(StringBuilder sb, JsonNode ref) {
         List<String> lines = new java.util.ArrayList<>();
         for (Store.Intervention i : store.runningInterventions()) {
@@ -405,7 +453,9 @@ public class ContextBuilder {
                     case "fixed_block" -> {
                         int lead = ((Number) item.get("lead_minutes")).intValue();
                         int after = ((Number) item.get("buffer_after_min")).intValue();
-                        sb.append("- ").append(range).append(" [고정] ").append(nz(item.get("title")))
+                        sb.append("- ").append(range).append(' ').append(fixedTag(item)).append(' ')
+                                .append(nz(item.get("title")))
+                                .append(item.get("place_name") == null ? "" : "(" + item.get("place_name") + ")")
                                 .append(" 블록#").append(item.get("id"))
                                 .append(lead > 0 ? " (출발 " + hm(java.time.Instant.parse(isoUtc(item.get("start")))
                                         .minusSeconds(lead * 60L)) + ")" : "")
@@ -417,7 +467,9 @@ public class ContextBuilder {
                                         : "user".equals(item.get("prep_set_by")) ? " (준비 시간 사용자가 정함)" : "")
                                 .append("calendar".equals(item.get("source")) ? " (캘린더)" : "")
                                 .append(item.get("series_id") == null ? "" : " (반복 일정#" + item.get("series_id") + ")")
-                                .append(" ").append(item.get("status")).append('\n');
+                                .append(" ").append(item.get("status"))
+                                .append(store.block(((Number) item.get("id")).longValue()).map(travel::contextText).orElse(""))
+                                .append('\n');
                     }
                     case "planned_block" -> sb.append("- ").append(range)
                             .append(String.valueOf(item.get("goal_label")).isEmpty() ? "" : " [" + item.get("goal_label") + "]")
@@ -435,6 +487,20 @@ public class ContextBuilder {
             }
             sb.append("- 빈 시간: ").append(free.isEmpty() ? "없음" : free).append('\n');
         }
+    }
+
+    /** v3.3 §1.4: [고정·방해금지] / [고정·조용히] / [고정·알림허용], 아직 안 정했으면 [고정](조용히로 동작). */
+    private static String fixedTag(Map<String, Object> item) {
+        Object level = item.get("interrupt_level");
+        if (level == null) {
+            return "[고정]";
+        }
+        String tag = switch (String.valueOf(level)) {
+            case "dnd" -> "방해금지";
+            case "allow" -> "알림허용";
+            default -> "조용히";
+        };
+        return "[고정·" + tag + ("user".equals(item.get("interrupt_set_by")) ? "(사용자)" : "") + "]";
     }
 
     private static String goalTag(Map<String, Object> item) {

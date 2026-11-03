@@ -251,3 +251,26 @@
 - Secret 이 없으면 예전처럼 임시 키로 빌드하고 서버 업로드를 건너뛴다(경고 annotation).
 - 고정 키로 빌드하면 android.yml 이 APK·version.json 을 서버 `/root/data/assistant/app/`에 올린다(기존 SERVER_* Secrets). 서버 `GET /api/assistant/v1/app/latest`·`/app/apk`(API 토큰 필요). 앱은 홈 화면에 돌아올 때마다 확인하고, 새 버전이면 파란 띠 "새 버전 …이 있어요" → 받기 → 설치 화면. 첫 사용 때 '출처를 알 수 없는 앱 설치' 허용 화면이 열린다.
 - 고정 키로 바꾼 첫 APK 는 키가 달라 한 번 더 지우고 깔아야 한다. 그 뒤부터 덮어 설치된다.
+
+## v3.3 (2026-11-03) — 방해 허용 정도·진행 중 고정 일정 수정·지도 읽기·문서 받기
+복귀: 태그 `1103_1_v3.3전`(1c178e3). DB 는 V9 마이그레이션 직전에 자동 백업(`/root/data/assistant/backups/pre-V9-*.zip`). V9 컬럼은 모두 NULL 허용이라 옛 jar 로 되돌려도 동작한다.
+- §1 진행 중 = 고정 블록의 금지 구간 [start − lead, end + buffer]. 판단은 `InterruptPolicy`. 사용자 말(user_message·풀스크린 대화)이 아닌 turn 의 메시지·질문·확인 카드가 대상. dnd 중에는 `messages.held_block_id` 로 저장만 하고(채팅·예산에서 빠짐) 금지 구간 끝(`dnd_release` 작업)에 "'○○' 동안 온 소식" 한 메시지(proactive, 예산 1)로 보낸다. 버튼이 있는 질문·확인 카드·목표 질문은 묶음 뒤에 무음으로 다시 붙인다.
+- quiet 은 이전 규칙 유지: [시작]을 누른(started) 고정 블록은 작업 중으로 보고 무음으로 만들지 않는다(체크인이 울리게). allow 는 무음으로 만들지 않는다(수면·예산 규칙은 그대로).
+- dnd 중 다른 블록의 개입은 시작하지 않는다(그 고정 블록 자신의 시작 화면은 뜬다).
+- 앱에서 고정 일정을 만들 때 방해 허용을 비워 두면 null(quiet 로 동작). 그것만으로 turn 을 만들지 않는다(비용). 비서가 다음에 볼 때 `set_interrupt_level` 로 정한다(맥락에 `[고정]` 으로 보임, 정했으면 `[고정·방해금지]` 등). 앱 편집 화면은 값을 바꿨을 때만 보낸다.
+- §2 "진행 중"으로 고치는 경우: [시작]을 누른(started) 블록, 또는 시작 시각이 지난 블록에서 시작 시각을 바꾸지 않는 요청. 시작 화면이 뜬 채 시작 시각이 지난 블록을 미루는 것(move_block)은 기존 미루기 그대로다. started 블록의 extend_block·end_block 은 기존 경로(검증기·결과)를 쓰고, 고정 블록이면 사용자 말이 아닐 때 확인 카드가 된다.
+- 진행 중 끝 시각 변경: version +1, block_end·진행 중 개입 만료를 새 끝으로 다시 예약, 반복 회차면 series_exceptions moved, 늘린 구간의 계획 블록은 밀어내고 blocks_displaced turn(앱 조작일 때).
+- §3 카카오 엔드포인트(공식 문서 developers.kakao.com/docs/ko/kakaomap/rest-api 확인, 2026-11-03):
+  - 장소 `GET dapi.kakao.com/v2/local/search/keyword.json?query&x&y&radius`(집 좌표 기준 20km 우선, 없으면 전체), 주소 `/v2/local/search/address.json`
+  - 대중교통 `GET dapi.kakao.com/v2/routing/publictraffic?start_x&start_y&end_x&end_y` → `routes[0].properties.totalTime`(초)·`totalDistance`(m)
+  - 도보 `GET dapi.kakao.com/v2/routing/walk` → `route.properties.totalTime`·`totalDistance`
+  - 자동차 `GET apis-navi.kakaomobility.com/v1/directions?origin=lng,lat&destination=lng,lat` → `routes[0].summary.duration`·`distance`
+  - 인증 `Authorization: KakaoAK {REST 키}`. 장소·대중교통·도보는 콘솔의 '카카오맵 사용 설정'이 필요하다(꺼져 있으면 403 "disabled OPEN_MAP_AND_LOCAL service" → 관리 화면 "사용 설정 꺼짐"). 2026-11-03 사용자 키로 확인: 자동차는 200, 나머지는 403(사용 설정 꺼짐).
+- 키는 관리 화면 '지도 연결'이 `/root/data/assistant/kakao_api_key`(600)에 저장하거나 환경변수 `KAKAO_REST_API_KEY`. 로그에는 오류 종류만 남긴다. 하루 호출 수는 `kakao_calls` 테이블로 센다(장소 검색 포함).
+- 이동 시간 출발·도착 이름은 일정 제목(집은 "집"). 반복 시리즈는 시리즈에서 한 번 장소를 찾고 회차에 복사한다. 매일 04:20 앞으로 7일 점검(빠진 것만).
+- 이동 불가능 경고는 user_message·morning turn 맥락에만 넣고, 넣는 순간 block_logs notice 로 기록해 한 번만 알린다.
+- §4 PDF 처리에 **PDFBox 3.0.6 의존성 추가**(JDK 에 PDF 파서·렌더러가 없다. 스캔본은 쪽을 110dpi JPEG 로 그려 이미지 입력). DOCX 는 의존성 없이 word/document.xml 의 태그를 벗긴다.
+- 문서 처리는 `document_process` turn(priority 1, agent worker)이지만 비서 turn 이 아니라 코드 작업이다(하루 turn 수에서 뺀다). 읽기·요약 모델은 설정 `documents.model`(비면 지금 llm.model). 지금 운영 모델(deepseek, OpenAI 호환)은 이미지 입력을 받지 못할 수 있다 → 이미지·스캔본은 실패로 남고 "자료를 읽지 못했어요"가 간다. 이미지까지 읽으려면 관리 화면에서 documents.model 을 이미지 입력이 되는 모델로 정한다(OPEN_ISSUES).
+- 채팅으로 올린 자료는 사용자 메시지(파일 카드, `messages.document_id`)만 남기고 user_message turn 은 만들지 않는다. 함께 쓴 글은 document_ready turn 맥락에 들어간다.
+- 문서 파일은 `/root/data/assistant/documents/`, 매일 DB 백업 때 `backups/daily-docs-*.zip` 으로 같이 백업(7일).
+- 앱 3.3.0(versionCode 17): 고정 일정 칸 🔕/🔔, 상세에 방해 허용·오는 길·가는 길·[지금 끝내기], 편집에 '방해 허용' 선택(진행 중이면 시작 시각 잠금·반복 범위 없음), 설정에 집 주소·이동수단, 목표 상세 '자료', 채팅 📎 첨부·파일 카드.

@@ -213,7 +213,7 @@
   },
   {
     "name": "upsert_fixed_block",
-    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes(출발·준비 시간, 개입이 start − lead 에 시작)와 buffer_after_min(끝난 뒤 이동·회복)은 기본값이 없다: 장소·거리·준비물·일의 성격을 보고 네가 정한다(집에서 바로 하는 일이면 0). 사용자가 준비 시간을 직접 말했으면 prep_from_user=true. 사용자가 정한 준비 시간은 바꿀 수 없다(거절된다). 네가 정한 준비 시간(prep_set_by=assistant)은 새 정보가 생기면 id 와 두 값만 보내 확인 카드 없이 다시 정할 수 있다. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 시작·끝 시각 변경과 생성은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 반복 일정의 회차 블록을 고치면 그 날만 바뀐다('이 날만'). 메모는 사용자만 쓴다(채팅으로 요청하면 append_fixed_memo).",
+    "description": "고정 블록을 만들거나 고친다. 사용자가 시각을 정해 잡아달라고 한 것(약속이든 공부든 \"몇 시에 ○○ 잡아줘\")은 무조건 이것으로 만든다. 생성 시 title·start·end 필수. lead_minutes(출발·준비 시간, 개입이 start − lead 에 시작)와 buffer_after_min(끝난 뒤 이동·회복)은 기본값이 없다: 장소·거리·준비물·일의 성격을 보고 네가 정한다(집에서 바로 하는 일이면 0). 사용자가 준비 시간을 직접 말했으면 prep_from_user=true. 사용자가 정한 준비 시간은 바꿀 수 없다(거절된다). 네가 정한 준비 시간(prep_set_by=assistant)은 새 정보가 생기면 id 와 두 값만 보내 확인 카드 없이 다시 정할 수 있다. 관련 목표가 있으면 goal_id 를 연결한다. 고정 블록끼리 겹치면 거절되니 사용자에게 다시 묻는다. 계획 블록과 겹치면 고정 블록이 만들어지고 겹친 계획 블록은 displaced 로 취소되니 다시 배치한다. 시작·끝 시각 변경과 생성은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 반복 일정의 회차 블록을 고치면 그 날만 바뀐다('이 날만'). 메모는 사용자만 쓴다(채팅으로 요청하면 append_fixed_memo). 만들 때 interrupt_level(방해 허용 정도)을 함께 정한다. 사용자가 정한 단계는 바꿀 수 없다. 이미 시작된(진행 중) 고정 일정은 끝 시각·제목·장소·방해 허용 정도만 바꿀 수 있고 시작 시각은 바꿀 수 없다. 사용자가 직접 말한 경우가 아니면 진행 중 일정 변경은 확인 카드가 된다. 장소(location)를 주면 코드가 지도에서 찾아 좌표와 이동 시간을 계산한다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -268,6 +268,19 @@
         "confirm_text": {
           "type": "string",
           "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        },
+        "interrupt_level": {
+          "type": "string",
+          "enum": [
+            "dnd",
+            "quiet",
+            "allow"
+          ],
+          "description": "방해 허용 정도. dnd=방해 금지(시험·면접·진료·수업), allow=알림 허용(워크샵·여행·행사·외근), quiet=조용히(그 외). 애매하면 dnd"
+        },
+        "interrupt_from_user": {
+          "type": "boolean",
+          "description": "사용자가 방해 허용 정도를 직접 말했으면 true(이후 비서가 바꾸지 않는다)"
         }
       }
     }
@@ -522,7 +535,7 @@
   },
   {
     "name": "extend_block",
-    "description": "진행 중(started) 블록의 끝 시각을 늘린다. 뒤 블록·고정 블록·방해 금지와 겹치면 거절되니, 뒤 블록이 있으면 move_block 으로 먼저 옮긴다.",
+    "description": "진행 중(started) 계획 블록의 끝 시각을 늘린다. 뒤 블록·고정 블록·방해 금지와 겹치면 거절되니, 뒤 블록이 있으면 move_block 으로 먼저 옮긴다. 고정 블록에 쓰면 사용자가 직접 말한 경우가 아니면 확인 카드가 된다(진행 중 고정 일정은 비서가 직접 늘리지 않는다).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -542,7 +555,7 @@
   },
   {
     "name": "end_block",
-    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다.",
+    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다. 진행 중 고정 블록(\"시험 끝났어\")에 쓰면 지금 끝낸다(done, 실제 끝 = 지금). 사용자가 직접 말한 경우가 아니면 확인 카드가 된다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -692,7 +705,7 @@
   },
   {
     "name": "upsert_fixed_series",
-    "description": "반복 고정 일정(매일·매주·격주·매월)을 만들거나 고친다. \"매주 화목 저녁 7시 헬스\" → freq=weekly, by_days=[2,4], start_time=\"19:00\". 앞으로 14일치 회차가 고정 블록으로 만들어진다(다른 고정 일정과 겹치는 날은 빠지고 사용자에게 알림). 고칠 때 scope=all(전체, 기본) 또는 following(from_date 부터, 그 전은 그대로). 한 회차만 바꾸려면 그 회차 블록에 upsert_fixed_block. 권한은 고정 블록과 같다(사용자가 방금 말한 경우가 아니면 확인 카드). lead_minutes·buffer_after_min 규칙은 upsert_fixed_block 과 같다.",
+    "description": "반복 고정 일정(매일·매주·격주·매월)을 만들거나 고친다. \"매주 화목 저녁 7시 헬스\" → freq=weekly, by_days=[2,4], start_time=\"19:00\". 앞으로 14일치 회차가 고정 블록으로 만들어진다(다른 고정 일정과 겹치는 날은 빠지고 사용자에게 알림). 고칠 때 scope=all(전체, 기본) 또는 following(from_date 부터, 그 전은 그대로). 한 회차만 바꾸려면 그 회차 블록에 upsert_fixed_block. 권한은 고정 블록과 같다(사용자가 방금 말한 경우가 아니면 확인 카드). lead_minutes·buffer_after_min 규칙은 upsert_fixed_block 과 같다. 만들 때 interrupt_level 을 함께 정한다(회차에 복사된다).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -778,6 +791,19 @@
         "confirm_text": {
           "type": "string",
           "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        },
+        "interrupt_level": {
+          "type": "string",
+          "enum": [
+            "dnd",
+            "quiet",
+            "allow"
+          ],
+          "description": "방해 허용 정도. dnd=방해 금지(시험·면접·진료·수업), allow=알림 허용(워크샵·여행·행사·외근), quiet=조용히(그 외). 애매하면 dnd"
+        },
+        "interrupt_from_user": {
+          "type": "boolean",
+          "description": "사용자가 방해 허용 정도를 직접 말했으면 true(이후 비서가 바꾸지 않는다)"
         }
       }
     }
@@ -852,6 +878,74 @@
           "type": "integer"
         }
       }
+    }
+  },
+  {
+    "name": "set_interrupt_level",
+    "description": "고정 일정(block_id) 또는 반복 일정(series_id)의 방해 허용 정도를 정한다. 확인 카드 없이 바로 반영된다. 사용자가 정한 단계는 바꿀 수 없다(거절된다). 시험·면접·진료·수업은 dnd, 워크샵·여행·행사·외근은 allow, 그 외는 quiet. 애매하면 dnd.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "series_id": {
+          "type": "integer"
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "dnd",
+            "quiet",
+            "allow"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ]
+    }
+  },
+  {
+    "name": "read_document",
+    "description": "사용자가 올린 자료(문서)를 읽는다. query 를 주면 그 단어가 많이 들어간 부분 상위 3개, page 를 주면 그 쪽. 맥락에는 요약만 있으니 제출 형식·범위·조건 같은 구체적인 내용이 필요할 때 쓴다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "document_id": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "page": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "document_id"
+      ]
+    }
+  },
+  {
+    "name": "link_document",
+    "description": "목표 없이 올라온 자료를 목표(goal_id) 또는 할 일(task_id)에 연결한다. 어느 목표 자료인지 애매하면 ask_user 로 먼저 묻는다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "document_id": {
+          "type": "integer"
+        },
+        "goal_id": {
+          "type": "integer"
+        },
+        "task_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "document_id"
+      ]
     }
   }
 ]

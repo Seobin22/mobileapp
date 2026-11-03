@@ -39,9 +39,25 @@ public class Permissions {
             "작업물은 사용자 허락을 받은 뒤에 만든다. ask_user로 만들지 묻고, 사용자가 원한다고 답하면 그때 만든다";
 
     private final Store store;
+    private final com.seobin.phonedrop.assistant.AssistantClock clock;
 
-    public Permissions(Store store) {
+    public Permissions(Store store, com.seobin.phonedrop.assistant.AssistantClock clock) {
         this.store = store;
+        this.clock = clock;
+    }
+
+    /** v3.3 §2: 시작 시각이 지났거나 [시작]을 누른 고정 블록. 비서는 확인 카드로만 바꾼다. */
+    private boolean fixedInProgress(Store.Block b) {
+        return b != null && b.fixed() && java.util.List.of("planned", "nudging", "started").contains(b.status())
+                && ("started".equals(b.status()) || !b.start().isAfter(clock.now()));
+    }
+
+    /** 방해 허용 정도만 바꾸는 호출(§1.3: 확인 카드 없이). */
+    private static boolean onlyInterruptLevel(JsonNode args) {
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        args.propertyNames().forEach(keys::add);
+        keys.removeAll(java.util.Set.of("id", "interrupt_level", "interrupt_from_user", "confirm_text"));
+        return keys.isEmpty();
     }
 
     /** 사용자가 직접 한 말로 시작된 turn(§3.6-2: 풀스크린 대화도 user_message 와 같은 권한). */
@@ -57,6 +73,10 @@ public class Permissions {
                     Store.Block b = store.block(args.get("id").asLong()).orElse(null);
                     if (b != null && "calendar".equals(b.source())) {
                         return Decision.reject(CALENDAR_REJECT);
+                    }
+                    if (fixedInProgress(b) && !fromUser && !onlyInterruptLevel(args)
+                            && ("started".equals(b.status()) || !FixedBlockService.startChange(args, b))) {
+                        return Decision.confirm("fixed_change");
                     }
                     // v3.1 §3.2.1: 준비 시간(lead·buffer)만 바꾸는 것은 확인 카드 없이(사용자가 정한 값은 도구가 거절한다).
                     boolean timeChange = args.hasNonNull("start") || args.hasNonNull("end");
@@ -110,6 +130,17 @@ public class Permissions {
             case "append_fixed_memo" -> {
                 // v3.2 §3.1: 메모는 사용자 것. 채팅으로 직접 요청한 turn 에서만 덧붙일 수 있다.
                 return fromUser ? Decision.execute() : Decision.reject(MEMO_USER_ONLY);
+            }
+            case "extend_block", "end_block" -> {
+                // v3.3 §2: 진행 중 고정 일정은 비서가 직접 늘리거나 끝내지 않는다(사용자 말이면 반영).
+                Store.Block b = store.block(args.path("block_id").asLong(-1)).orElse(null);
+                if (b != null && b.fixed()) {
+                    if ("calendar".equals(b.source())) {
+                        return Decision.reject(CALENDAR_REJECT);
+                    }
+                    return fromUser ? Decision.execute() : Decision.confirm("fixed_change");
+                }
+                return Decision.execute();
             }
             case "create_work_product" -> {
                 // 사용자 요청(2026-11-02): 작업물은 허락받은 뒤에만 만든다. 허락은 사용자의 답(user_message)으로 온다.

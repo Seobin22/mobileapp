@@ -77,6 +77,18 @@
     </section>
 
     <section>
+        <h2>지도 연결 <span class="muted">(카카오 REST API 키 · 이동 시간 계산)</span></h2>
+        <div id="kakaoStatus" class="muted">-</div>
+        <div class="row">
+            <input id="kakaoKey" type="password" placeholder="카카오 REST API 키" autocomplete="off">
+            <button id="saveKakao">키 저장</button>
+        </div>
+        <div class="muted" style="font-size:13px">서버 /root/data/assistant/kakao_api_key 에만 저장하고 다시 표시하지 않습니다.
+            장소 검색·대중교통·도보는 카카오 개발자 콘솔의 '카카오맵 사용 설정'이 켜져 있어야 합니다. 키가 없거나 실패하면 어림값으로 계산합니다.</div>
+        <div class="error" id="kakaoError"></div>
+    </section>
+
+    <section>
         <h2>채팅 <button class="ghost" id="reloadChat" style="float:right">새로고침</button></h2>
         <div id="chat" style="max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fffafc">-</div>
         <div class="row" style="margin-top:8px">
@@ -419,11 +431,25 @@
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive()]);
+            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive(), loadKakao()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
     }
+
+    function showKakao(r) {
+        $('kakaoStatus').textContent = '상태: ' + r.status_text + ' · 오늘 호출 ' + r.calls_today + '/' + r.daily_limit
+            + ' · 집 주소 ' + (r.home_address || '없음') + (r.home_found ? ' (위치 확인됨)' : '');
+    }
+    async function loadKakao() { showKakao(await api('GET', '/v1/admin/kakao_status')); }
+    $('saveKakao').onclick = async () => {
+        $('kakaoError').textContent = '';
+        try {
+            showKakao(await api('POST', '/v1/admin/kakao_key', { key: $('kakaoKey').value.trim() }));
+            $('kakaoKey').value = '';
+            $('kakaoError').textContent = '저장했습니다';
+        } catch (e) { $('kakaoError').textContent = e.message; }
+    };
 
     $('saveKey').onclick = async () => {
         $('keyError').textContent = '';

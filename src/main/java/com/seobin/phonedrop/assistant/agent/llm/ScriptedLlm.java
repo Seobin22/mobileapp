@@ -54,6 +54,19 @@ public class ScriptedLlm implements LlmClient {
         toolResults.clear();
         webSearchFlags.clear();
         userTexts.clear();
+        onceImages.clear();
+    }
+
+    /** once 로 받은 이미지 수(문서 읽기 검증용). */
+    public final List<Integer> onceImages = new ArrayList<>();
+
+    @Override
+    public LlmResponse once(String system, String text, List<Image> images) {
+        synchronized (this) {
+            userContents.add(text);
+            onceImages.add(images.size());
+        }
+        return start(system, Json.array(), text).next();
     }
 
     @Override

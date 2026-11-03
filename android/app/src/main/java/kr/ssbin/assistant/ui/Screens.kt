@@ -303,6 +303,7 @@ fun SettingsScreen(onBack: () -> Unit, onReconfigure: () -> Unit) {
                     message = r.fold({ "저장했습니다" }, { ApiClient.errorMessage(it) })
                 }
             }) { Text("저장") }
+            TravelSection()
             AiModelSection()
             Spacer(Modifier.width(1.dp))
             OutlinedButton(onClick = onReconfigure) { Text("서버 주소·토큰 다시 입력") }

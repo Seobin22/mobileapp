@@ -96,6 +96,39 @@ interface AssistantApi {
     @DELETE("v1/fixed_blocks/{id}")
     suspend fun deleteFixedBlock(@Path("id") id: Long): JsonObject
 
+    /** v3.3 §2: 진행 중 고정 일정 [지금 끝내기] */
+    @POST("v1/fixed_blocks/{id}/end_now")
+    suspend fun endFixedNow(@Path("id") id: Long): JsonObject
+
+    // v3.3 §3 집 주소·이동수단, §4 자료
+    @GET("v1/travel")
+    suspend fun travel(): TravelStatusDto
+
+    @PUT("v1/travel")
+    suspend fun putTravel(@Body body: JsonObject): TravelStatusDto
+
+    @retrofit2.http.Multipart
+    @POST("v1/documents")
+    suspend fun uploadDocument(
+        @retrofit2.http.Part file: okhttp3.MultipartBody.Part,
+        @retrofit2.http.Part("goal_id") goalId: okhttp3.RequestBody? = null,
+        @retrofit2.http.Part("from_chat") fromChat: okhttp3.RequestBody? = null,
+        @retrofit2.http.Part("message") message: okhttp3.RequestBody? = null,
+    ): JsonObject
+
+    @GET("v1/documents")
+    suspend fun documents(@Query("goal_id") goalId: Long? = null): DocumentsResponse
+
+    @GET("v1/documents/{id}")
+    suspend fun document(@Path("id") id: Long): DocumentDto
+
+    @retrofit2.http.Streaming
+    @GET("v1/documents/{id}/file")
+    suspend fun documentFile(@Path("id") id: Long): okhttp3.ResponseBody
+
+    @DELETE("v1/documents/{id}")
+    suspend fun deleteDocument(@Path("id") id: Long): JsonObject
+
     // v3.2 달력·마감·처리 중 표시·블록 기록·반복 일정
     @GET("v1/calendar")
     suspend fun calendar(@Query("from") from: String, @Query("to") to: String): CalendarResponse
@@ -174,6 +207,7 @@ object ApiClient {
         val http = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS) // 자료 올리기(최대 20MB)
             .addInterceptor { chain ->
                 chain.proceed(
                     chain.request().newBuilder().header("Authorization", "Bearer $token").build()

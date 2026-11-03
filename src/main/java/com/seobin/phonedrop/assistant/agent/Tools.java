@@ -86,6 +86,9 @@ public class Tools {
     private final MemoService memos;
     private final BlockLogs logs;
     private final GoalPrompts goalPrompts;
+    private final InterruptPolicy interrupts;
+    private final TravelService travel;
+    private final DocumentService documents;
     private final JsonNode definitions;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
@@ -93,7 +96,8 @@ public class Tools {
                  InterventionService interventions, PlanService plan, PushService push, Jobs jobs, Facts facts,
                  ProactiveService proactive, FixedBlockService fixedBlocks, GoalService goals,
                  GoalCoverage coverage, SeriesService series, MemoService memos, BlockLogs logs,
-                 GoalPrompts goalPrompts) {
+                 GoalPrompts goalPrompts, InterruptPolicy interrupts, TravelService travel,
+                 DocumentService documents) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -117,6 +121,9 @@ public class Tools {
         this.memos = memos;
         this.logs = logs;
         this.goalPrompts = goalPrompts;
+        this.interrupts = interrupts;
+        this.travel = travel;
+        this.documents = documents;
         try (InputStream in = new ClassPathResource("assistant/agent/tools.json").getInputStream()) {
             this.definitions = Json.parse(new String(in.readAllBytes(), StandardCharsets.UTF_8));
         } catch (IOException e) {
@@ -137,7 +144,7 @@ public class Tools {
                     return error(d.message());
                 }
                 if (d.kind() == Permissions.Kind.CONFIRM) {
-                    return confirm(d.confirmationKind(), name, input);
+                    return confirm(ctx, d.confirmationKind(), name, input);
                 }
             }
             return switch (name) {
@@ -169,6 +176,9 @@ public class Tools {
                 case "append_fixed_memo" -> appendFixedMemo(input);
                 case "add_block_log" -> addBlockLog(input);
                 case "get_block_history" -> getBlockHistory(input);
+                case "set_interrupt_level" -> setInterruptLevel(ctx, input);
+                case "read_document" -> readDocument(input);
+                case "link_document" -> linkDocument(ctx, input);
                 default -> error("알 수 없는 도구입니다: " + name);
             };
         } catch (ApiException | IllegalArgumentException e) {
@@ -178,10 +188,10 @@ public class Tools {
 
     // ------------------------------------------------------------------ 확인 카드
 
-    private ObjectNode confirm(String kind, String tool, JsonNode args) {
+    private ObjectNode confirm(Context ctx, String kind, String tool, JsonNode args) {
         String text = args.path("confirm_text").asString("").trim();
         if (text.isEmpty()) {
-            text = autoConfirmText(kind, args);
+            text = autoConfirmText(kind, tool, args);
         }
         Instant now = clock.now();
         Instant expiresAt = now.plus(Duration.ofMinutes(settings.getInt("confirmation.expire_minutes")));
@@ -189,12 +199,15 @@ public class Tools {
                         INSERT INTO confirmations(kind, tool, args, text, expires_at, created_at)
                         VALUES (?, ?, ?, ?, ?, ?)""",
                 kind, tool, Json.write(args), text, expiresAt, now);
-        chat.sendAssistant(text, "confirmation", "normal", null, id);
-        Map<String, String> data = new LinkedHashMap<>();
-        data.put("type", "confirmation");
-        data.put("confirmation_id", String.valueOf(id));
-        data.put("text", text);
-        push.pushAll(data);
+        InterruptPolicy.Decision decision = interrupts.proactive(ctx.trigger);
+        interrupts.send(decision, text, "confirmation", "normal", null, id);
+        if (decision.mode() == InterruptPolicy.Mode.SEND) {
+            Map<String, String> data = new LinkedHashMap<>();
+            data.put("type", "confirmation");
+            data.put("confirmation_id", String.valueOf(id));
+            data.put("text", text);
+            push.pushAll(data);
+        }
         jobs.schedule(CONFIRMATION_EXPIRE, id, expiresAt, null);
         ObjectNode r = Json.object();
         r.put("ok", true);
@@ -203,9 +216,22 @@ public class Tools {
         return r;
     }
 
-    private String autoConfirmText(String kind, JsonNode args) {
+    private String describeEnd(String iso) {
+        try {
+            return time.hm(TimeUtil.parse(iso));
+        } catch (ApiException ex) {
+            return iso;
+        }
+    }
+
+    private String autoConfirmText(String kind, String tool, JsonNode args) {
         return switch (kind) {
-            case "fixed_change" -> args.hasNonNull("freq") || args.hasNonNull("start_time")
+            case "fixed_change" -> args.hasNonNull("new_end")
+                    ? store.block(args.path("block_id").asLong()).map(store::blockTitle).orElse("고정 일정") + " 끝 시각을 "
+                    + describeEnd(args.path("new_end").asString("")) + "(으)로 바꿀까요?"
+                    : args.hasNonNull("outcome") || "end_block".equals(tool)
+                    ? store.block(args.path("block_id").asLong()).map(store::blockTitle).orElse("고정 일정") + "을 지금 끝낼까요?"
+                    : args.hasNonNull("freq") || args.hasNonNull("start_time")
                     ? "반복 일정 '" + args.path("title").asString("") + "'(" + args.path("freq").asString("")
                     + " " + args.path("start_time").asString("") + ")을 " + (args.hasNonNull("id") ? "바꿀까요?" : "만들까요?")
                     : args.hasNonNull("block_id")
@@ -505,7 +531,10 @@ public class Tools {
         if (before == null || !before.start().equals(after.start()) || !before.end().equals(after.end())
                 || !before.title().equals(after.title())) {
             ctx.savedLines.add("저장됨: 고정 · " + time.dayText(after.start()) + " " + after.title()
-                    + (after.seriesId() != null ? " (이 날만)" : ""));
+                    + (after.seriesId() != null ? " (이 날만)" : "")
+                    + (after.placeName() != null ? " · 장소: " + after.placeName() : ""));
+        } else if (after.placeName() != null && !java.util.Objects.equals(before.placeName(), after.placeName())) {
+            ctx.savedLines.add("저장됨: " + after.title() + " · 장소: " + after.placeName());
         }
         store.block(r.id()).flatMap(coverage::goalOf).ifPresent(ctx.touchedGoals::add);
         ObjectNode out = okWithId(r.id());
@@ -518,6 +547,14 @@ public class Tools {
         }
         Store.Block b = store.block(r.id()).orElseThrow();
         out.put("intervention_at", time.iso(b.interventionAt()));
+        out.put("interrupt_level", b.level());
+        if (b.placeName() != null) {
+            out.put("place_name", b.placeName());
+        }
+        String travelText = travel.contextText(b);
+        if (!travelText.isEmpty()) {
+            out.put("travel", travelText.substring(3));
+        }
         if (time.firstQuietOverlap(b.interventionAt(), b.end()).isPresent()) {
             out.put("warning", "수면·방해 금지 시간과 겹쳐 이 블록의 알람(시작 화면)이 뜨지 않을 수 있습니다. 사용자에게 알려 주세요");
         }
@@ -823,7 +860,23 @@ public class Tools {
         if (!List.of("low", "normal", "high").contains(importance)) {
             importance = "normal";
         }
-        boolean silent = silentFor(kind, importance);
+        // v3.3 §1.2: 사용자에게 한 답이 아니면 방해 허용 정도를 따른다(방해 금지 일정 중이면 모아 둔다).
+        boolean answer = "reply".equals(kind) && Permissions.fromUser(ctx.trigger) || "intervention".equals(kind);
+        InterruptPolicy.Decision d = answer ? new InterruptPolicy.Decision(InterruptPolicy.Mode.SEND, null)
+                : interrupts.proactive(ctx.trigger);
+        if (d.mode() == InterruptPolicy.Mode.HOLD) {
+            long id = chat.holdAssistant(text, kind, importance, null, null, d.heldBlockId());
+            if ("reply".equals(kind)) {
+                ctx.sentReply = true;
+            }
+            ObjectNode r = Json.object();
+            r.put("ok", true);
+            r.put("message_id", id);
+            r.put("held_until_fixed_block_ends", d.heldBlockId());
+            r.put("note", "방해 금지 일정 중이라 일정이 끝나면 묶어서 보냅니다");
+            return r;
+        }
+        boolean silent = d.silent() || silentFor(kind, importance);
         // 풀스크린 대화의 답은 그 개입에 붙인다(앱이 화면에 표시하고 TTS 로 읽는다).
         Long interventionId = "reply".equals(kind) ? ctx.interventionId : null;
         long id = chat.sendAssistant(text, kind, importance, null, null, silent, interventionId);
@@ -843,7 +896,7 @@ public class Tools {
             return false;
         }
         Instant now = clock.now();
-        if (time.isQuiet(now) || proactive.fixedBlockInProgress(now)) {
+        if (time.isQuiet(now) || interrupts.quietFixedInProgress(now)) {
             return true;
         }
         if (!"checkin".equals(kind) && !store.startedBlocks().isEmpty()) {
@@ -867,7 +920,9 @@ public class Tools {
                 options.add(o.asString().trim());
             }
         }
-        long questionId = chat.askUser(text, options);
+        InterruptPolicy.Decision d = interrupts.proactive(ctx.trigger);
+        long questionId = chat.askUser(text, options,
+                d.mode() == InterruptPolicy.Mode.HOLD ? d.heldBlockId() : null);
         ctx.sentReply = true; // 질문도 사용자에게 한 답이다(텍스트를 다시 reply 로 보내지 않는다)
         ObjectNode r = Json.object();
         r.put("ok", true);
@@ -982,6 +1037,13 @@ public class Tools {
         if (b == null) {
             return error("블록#" + id + "이 없습니다");
         }
+        if (b.fixed() && !"started".equals(b.status())) {
+            // v3.3 §2: [시작]을 누르지 않은 진행 중 고정 일정 연장(사용자 말이거나 확인 카드 수락)
+            ObjectNode edit = Json.object();
+            edit.put("id", id);
+            edit.put("end", in.path("new_end").asString(""));
+            return upsertFixedBlock(ctx, edit);
+        }
         if (!"started".equals(b.status())) {
             return error("블록#" + id + "은 " + b.status() + " 상태라 늘릴 수 없습니다(started 만)");
         }
@@ -1007,6 +1069,9 @@ public class Tools {
         jobs.schedule(InterventionService.BLOCK_END, id, newEnd, null);
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
         logs.add(id, "moved", "assistant", "끝 " + time.hm(b.end()) + "→" + time.hm(newEnd) + " (연장)");
+        if (b.fixed() && interrupts.hasHeld(id)) {
+            interrupts.scheduleRelease(store.block(id).orElseThrow());
+        }
         plan.bumpAndSync();
         return okWithId(id);
     }
@@ -1017,6 +1082,15 @@ public class Tools {
         if (b == null) {
             return error("블록#" + id + "이 없습니다");
         }
+        if (b.fixed() && !"started".equals(b.status())) {
+            // v3.3 §2: "시험 끝났어" → [시작]을 누르지 않은 진행 중 고정 일정 지금 끝내기
+            FixedBlockService.Result r = fixedBlocks.endNow(id, ctx.turnId);
+            if (!r.ok()) {
+                return error(r.error());
+            }
+            ctx.savedLines.add("저장됨: 고정 · " + store.blockTitle(b) + " 지금 끝냄");
+            return okWithId(id);
+        }
         if (!"started".equals(b.status())) {
             return error("블록#" + id + "은 " + b.status() + " 상태라 끝낼 수 없습니다(started 만)");
         }
@@ -1025,6 +1099,9 @@ public class Tools {
         db.update("UPDATE blocks SET status = ?, actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 outcome, clock.now(), id);
         interventions.cancelBlockJobs(id);
+        if (b.fixed()) {
+            interrupts.releaseIfDone(id);
+        }
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
         logs.add(id, "ended", "assistant", "done".equals(outcome) ? "완료"
                 : "부분 완료" + (in.hasNonNull("remaining_minutes") ? "(남은 " + in.get("remaining_minutes").asInt() + "분)" : ""));
@@ -1177,6 +1254,49 @@ public class Tools {
         out.put("rule", SeriesService.describe(s));
         out.set("created_blocks", Json.MAPPER.valueToTree(r.created()));
         return out;
+    }
+
+    /** v3.3 §4.5: 자료에서 관련 부분만 읽는다. */
+    private ObjectNode readDocument(JsonNode in) {
+        long id = in.path("document_id").asLong(-1);
+        DocumentService.Document d = documents.find(id).orElse(null);
+        if (d == null) {
+            return error("자료#" + id + "이 없습니다");
+        }
+        if (!"ready".equals(d.status())) {
+            return error("자료#" + id + "은 " + d.status() + " 상태입니다");
+        }
+        Integer page = in.hasNonNull("page") ? Integer.valueOf(in.get("page").asInt()) : null;
+        List<Map<String, Object>> parts = documents.read(id, in.path("query").asString(""), page);
+        ObjectNode r = okWithId(id);
+        r.put("filename", d.filename());
+        r.set("parts", Json.MAPPER.valueToTree(parts));
+        if (parts.isEmpty()) {
+            r.put("note", "찾는 단어가 든 부분이 없습니다. 다른 단어로 찾거나 page 로 읽으세요");
+        }
+        return r;
+    }
+
+    private ObjectNode linkDocument(Context ctx, JsonNode in) {
+        long id = in.path("document_id").asLong(-1);
+        Long goalId = in.hasNonNull("goal_id") ? in.get("goal_id").asLong() : null;
+        Long taskId = in.hasNonNull("task_id") ? in.get("task_id").asLong() : null;
+        if (goalId == null && taskId == null) {
+            return error("goal_id 또는 task_id 가 필요합니다");
+        }
+        documents.link(id, goalId, taskId);
+        return okWithId(id);
+    }
+
+    /** v3.3 §1.4: 방해 허용 정도(확인 카드 없이). 사용자가 정한 단계면 거절. */
+    private ObjectNode setInterruptLevel(Context ctx, JsonNode in) {
+        String level = in.path("level").asString("");
+        if (in.hasNonNull("series_id")) {
+            SeriesService.Result r = series.setInterruptLevel(in.get("series_id").asLong(), level, ctx.turnId);
+            return r.ok() ? okWithId(r.id()) : error(r.error());
+        }
+        FixedBlockService.Result r = fixedBlocks.setInterruptLevel(in.path("block_id").asLong(-1), level, ctx.turnId);
+        return r.ok() ? okWithId(r.id()) : error(r.error());
     }
 
     private ObjectNode appendFixedMemo(JsonNode in) {

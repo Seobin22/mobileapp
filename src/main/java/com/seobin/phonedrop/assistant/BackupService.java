@@ -71,8 +71,30 @@ public class BackupService {
     private boolean onBackup(Jobs.Job job) {
         jobs.schedule(JOB, 0, nextRun(clock.now().plusSeconds(60)), null);
         Path file = db.backup("daily");
+        if (file != null) {
+            backupDocuments(file.getFileName().toString().replace("daily-", "daily-docs-"));
+        }
         prune();
         return file != null;
+    }
+
+    /** v3.3 §4.1: 올린 자료 파일도 DB 백업과 같이 백업한다(daily-docs-*.zip, 7일 보관). */
+    void backupDocuments(String name) {
+        Path docs = db.backupDir().getParent().resolve("documents");
+        if (!Files.isDirectory(docs)) {
+            return;
+        }
+        Path target = db.backupDir().resolve(name);
+        try (Stream<Path> files = Files.list(docs);
+             java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(target))) {
+            for (Path f : files.filter(Files::isRegularFile).toList()) {
+                zip.putNextEntry(new java.util.zip.ZipEntry(f.getFileName().toString()));
+                Files.copy(f, zip);
+                zip.closeEntry();
+            }
+        } catch (IOException e) {
+            log.warn("documents backup failed", e);
+        }
     }
 
     /** daily-*.zip 중 7일보다 오래된 것을 지운다. */

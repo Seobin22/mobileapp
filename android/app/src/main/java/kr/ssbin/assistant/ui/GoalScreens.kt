@@ -357,6 +357,7 @@ private fun GoalDetailDialog(goal: GoalDto, onDismiss: () -> Unit, onChanged: ()
                     Text("${time(b.start)} ${if (b.kind == "fixed") "[고정] " else ""}${b.title} · ${resultLabel(b.status)}",
                         style = MaterialTheme.typography.bodySmall)
                 }
+                DocumentsSection(goal.id)
                 if (active) {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

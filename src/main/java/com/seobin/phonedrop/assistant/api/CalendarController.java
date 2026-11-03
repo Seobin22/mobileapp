@@ -64,12 +64,14 @@ public class CalendarController {
     private final PlanService plan;
     private final com.seobin.phonedrop.assistant.InterventionService interventions;
     private final com.seobin.phonedrop.assistant.GoalCoverage coverage;
+    private final com.seobin.phonedrop.assistant.agent.TravelService travel;
 
     public CalendarController(Tx tx, AssistantDb db, AssistantClock clock, Store store, TimeUtil time, Timeline timeline,
                               Deadlines deadlines, SeriesService series, MemoService memos, BlockLogs logs,
                               TurnQueue turns, Changes changes, PlanService plan,
                               com.seobin.phonedrop.assistant.InterventionService interventions,
-                              com.seobin.phonedrop.assistant.GoalCoverage coverage) {
+                              com.seobin.phonedrop.assistant.GoalCoverage coverage,
+                              com.seobin.phonedrop.assistant.agent.TravelService travel) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -85,6 +87,7 @@ public class CalendarController {
         this.plan = plan;
         this.interventions = interventions;
         this.coverage = coverage;
+        this.travel = travel;
     }
 
     // ---------------------------------------------------------------- 달력
@@ -139,6 +142,25 @@ public class CalendarController {
         if (b.fixed()) {
             String memo = memos.fullMemo(b);
             m.put("memo", memo);
+            // v3.3: 방해 허용 정도(null = 비서가 정함, quiet 로 동작), 찾은 장소, 오는 길·가는 길
+            m.put("interrupt_level", b.interruptLevel());
+            m.put("interrupt_set_by", b.interruptSetBy());
+            m.put("place_name", b.placeName());
+            m.put("place_source", b.placeSource());
+            m.put("in_progress", b.fixed() && java.util.List.of("planned", "nudging", "started").contains(b.status())
+                    && ("started".equals(b.status()) || !b.start().isAfter(clock.now())));
+            List<Map<String, Object>> legs = new ArrayList<>();
+            for (com.seobin.phonedrop.assistant.agent.TravelService.Leg l : travel.legs(b.id())) {
+                Map<String, Object> lm = new LinkedHashMap<>();
+                lm.put("direction", l.direction());
+                lm.put("from", l.from());
+                lm.put("to", l.to());
+                lm.put("mode", l.mode());
+                lm.put("minutes", l.minutes());
+                lm.put("estimate", !"kakao".equals(l.source()));
+                legs.add(lm);
+            }
+            m.put("travel", legs);
             List<Map<String, Object>> prep = new ArrayList<>();
             for (long id : db.jdbc().sql("""
                             SELECT id FROM blocks WHERE linked_fixed_block_id = ? AND status <> 'cancelled' ORDER BY start_at""")
