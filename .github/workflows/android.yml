@@ -52,8 +52,9 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            install -m 700 -d ~/.android
-            printf '%s' "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/assistant.keystore"
+            # 빌드 설정(app/build.gradle.kts signingConfigs.debug)이 이 경로의 키로 서명한다.
+            echo "ASSISTANT_KEYSTORE=$RUNNER_TEMP/assistant.keystore" >> "$GITHUB_ENV"
             echo "fixed=true" >> "$GITHUB_OUTPUT"
             echo "fixed signing key installed"
           else
@@ -88,6 +89,11 @@ jobs:
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep -i 'SHA-256' | head -1 > cert.txt || true
           echo "::notice title=apk cert::$(cat cert.txt)"
+          # 고정 키(SHA-256 3C:0F:00:BB…)가 아니면 서버에 올리지 않도록 실패시킨다.
+          if [ "${{ steps.signing.outputs.fixed }}" = "true" ] && ! grep -qi '3c0f00bb69bf4edec632a93b430fd9a1da33acba1b82cd0c8e3f445488e9bda3' cert.txt; then
+            echo "::error title=apk cert::고정 키로 서명되지 않았습니다"
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -19,11 +19,27 @@ android {
         applicationId = "kr.ssbin.assistant"
         minSdk = 29
         targetSdk = 35
-        versionCode = 15
-        versionName = "3.2.5"
+        versionCode = 16
+        versionName = "3.2.6"
+    }
+
+    // 고정 서명 키(덮어 설치·앱 안 업데이트용). CI 가 Secret 에서 키 파일을 만들고 ASSISTANT_KEYSTORE 로 경로를 준다.
+    // 없으면(로컬 등) 기본 디버그 키.
+    signingConfigs {
+        getByName("debug") {
+            System.getenv("ASSISTANT_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { path ->
+                storeFile = file(path)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
