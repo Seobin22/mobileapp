@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -417,39 +418,74 @@ private fun TimeGrid(
     }
 }
 
-/** 시간표 칸: 모서리 없는 네모, 얇은 흰 테두리로만 구분. 고정은 차분한 남색, 계획은 목표 색. 끝난 블록은 흐리게. */
+/** 칸 상태 표시: 끝난 칸은 반투명 + 결과 배지(완료·일부·놓침·지남), 지금 칸은 진행 중·알림 중. */
+private data class CellState(val badge: String?, val badgeColor: Color, val finished: Boolean)
+
+private fun cellState(b: CalendarBlock): CellState {
+    val ended = runCatching { zoned(b.end).isBefore(ZonedDateTime.now()) }.getOrDefault(false)
+    return when (b.status) {
+        "done" -> CellState("✓ 완료", Color(0xFF2B8A3E), true)
+        "partial" -> CellState("◐ 일부", Color(0xFFE67700), true)
+        "missed" -> CellState("✕ 놓침", Color(0xFFC92A2A), true)
+        "started" -> CellState("▶ 진행 중", Color(0xFF1C7ED6), false)
+        "nudging" -> CellState("🔔 알림 중", Color(0xFFD6336C), false)
+        // 아직 처리 전인데 끝 시각이 지난 칸(서버가 곧 놓침으로 바꾼다)
+        else -> if (ended) CellState("지남", Color(0xFF868E96), true) else CellState(null, Color.Transparent, false)
+    }
+}
+
+/**
+ * 시간표 칸: 모서리 없는 네모, 얇은 흰 테두리로만 구분. 고정은 차분한 남색, 계획은 목표 색.
+ * 끝난 칸은 연한 반투명 바탕 + 왼쪽 색 띠 + 회색 글자로 바꾸고 결과 배지를 단다(놓친 칸은 제목에 취소선).
+ */
 @Composable
 private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
     val fixed = b.kind == "fixed"
     val base = if (fixed) Color(0xFF7C8DA6) else goalColor(b.goal_color.ifBlank { null })
-    val done = b.status in listOf("done", "partial", "missed")
-    Column(
-        modifier.background(base.copy(alpha = if (done) 0.45f else 0.95f)).border(0.5.dp, Color.White)
-            .padding(horizontal = 3.dp, vertical = 2.dp),
+    val state = cellState(b)
+    val textColor = if (state.finished) Color(0xFF868E96) else Color.White
+    val subColor = if (state.finished) Color(0xFFADB5BD) else Color.White.copy(alpha = 0.9f)
+    Row(
+        modifier.background(if (state.finished) base.copy(alpha = 0.12f) else base.copy(alpha = 0.95f))
+            .border(0.5.dp, Color.White),
     ) {
-        Text(
-            (if (b.series_id != null) "🔁" else "") + b.title,
-            fontSize = if (compact) 11.sp else 14.sp, fontWeight = FontWeight.Bold, color = Color.White,
-            maxLines = if (compact) 3 else 2, overflow = TextOverflow.Ellipsis, lineHeight = if (compact) 13.sp else 17.sp,
-        )
-        Text(
-            hm(b.start) + if (compact) "" else "–" + hm(b.end),
-            fontSize = if (compact) 9.sp else 12.sp, color = Color.White.copy(alpha = 0.9f), maxLines = 1,
-        )
-        val sub = when {
-            fixed && b.location != null -> b.location
-            fixed && b.memo.isNotBlank() -> b.memo.lines().first()
-            !fixed && b.linked_title != null -> "→ " + b.linked_title
-            else -> null
-        }
-        sub?.let {
-            Text(it, fontSize = if (compact) 9.sp else 12.sp, color = Color.White.copy(alpha = 0.9f),
-                maxLines = if (compact) 2 else 3, overflow = TextOverflow.Ellipsis)
-        }
-        if (fixed) {
-            b.linked_prep.filter { it.status != "cancelled" }.take(if (compact) 1 else 2).forEach { p ->
-                Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 8.sp else 11.sp,
-                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (state.finished) Box(Modifier.width(3.dp).fillMaxHeight().background(base.copy(alpha = 0.6f)))
+        Column(Modifier.padding(horizontal = 3.dp, vertical = 2.dp)) {
+            state.badge?.let { badge ->
+                Text(
+                    badge,
+                    fontSize = if (compact) 8.sp else 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (state.finished) state.badgeColor else Color.White,
+                    maxLines = 1,
+                    modifier = if (state.finished) Modifier else Modifier.background(state.badgeColor).padding(horizontal = 2.dp),
+                )
+            }
+            Text(
+                (if (b.series_id != null) "🔁" else "") + b.title,
+                fontSize = if (compact) 11.sp else 14.sp, fontWeight = FontWeight.Bold, color = textColor,
+                maxLines = if (compact) 3 else 2, overflow = TextOverflow.Ellipsis, lineHeight = if (compact) 13.sp else 17.sp,
+                textDecoration = if (b.status == "missed") TextDecoration.LineThrough else null,
+            )
+            Text(
+                hm(b.start) + if (compact) "" else "–" + hm(b.end),
+                fontSize = if (compact) 9.sp else 12.sp, color = subColor, maxLines = 1,
+            )
+            val sub = when {
+                fixed && b.location != null -> b.location
+                fixed && b.memo.isNotBlank() -> b.memo.lines().first()
+                !fixed && b.linked_title != null -> "→ " + b.linked_title
+                else -> null
+            }
+            if (!state.finished) sub?.let {
+                Text(it, fontSize = if (compact) 9.sp else 12.sp, color = subColor,
+                    maxLines = if (compact) 2 else 3, overflow = TextOverflow.Ellipsis)
+            }
+            if (fixed && !state.finished) {
+                b.linked_prep.filter { it.status != "cancelled" }.take(if (compact) 1 else 2).forEach { p ->
+                    Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 8.sp else 11.sp,
+                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
