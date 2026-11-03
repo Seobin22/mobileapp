@@ -260,10 +260,56 @@ private fun MonthView(anchor: LocalDate, from: LocalDate, data: CalendarResponse
     }
 }
 
+/** 시간표에 그릴 칸 하나: 그 날 안으로 자른 시작·끝(분, firstHour 기준)과 나란히 놓을 열. */
+private data class Placed(val block: CalendarBlock, val top: Long, val bottom: Long, var col: Int = 0, var cols: Int = 1)
+
+/** 끝난 블록은 실제로 끝난 시각까지만(일찍 끝난 '일부 완료'가 다음 블록과 겹쳐 보이지 않게). */
+private fun shownEnd(b: CalendarBlock): ZonedDateTime {
+    val planned = zoned(b.end)
+    val actual = b.actual_end?.let { runCatching { zoned(it) }.getOrNull() }
+    return if (actual != null && actual.isBefore(planned) && b.status in listOf("done", "partial")) actual else planned
+}
+
 /**
- * 주·일 보기: 에브리타임 같은 표준 시간표. 위에 요일 머리줄(고정), 왼쪽에 시(時) 눈금, 가로·세로 격자선,
- * 블록은 색 칸 안에 제목·시각·장소/메모를 쓴다. 보이는 시간은 min(8시, 가장 이른 블록) ~ 24시.
- * 빈 곳을 길게 누르면 그 시각(30분 단위)으로 고정 일정 추가.
+ * 하루 칸 배치: 시간이 겹치는 칸끼리 묶어 그 묶음 안에서만 나란히 놓는다(겹치지 않는 칸은 전체 폭).
+ * 짧은 칸은 최소 높이까지 늘리되 같은 열의 다음 칸 시작을 넘지 않는다.
+ */
+private fun layoutDay(blocks: List<CalendarBlock>, dayStart: ZonedDateTime, dayEnd: ZonedDateTime, minMinutes: Long): List<Placed> {
+    val placed = blocks.mapNotNull { b ->
+        val s = zoned(b.start).let { if (it.isBefore(dayStart)) dayStart else it }
+        val e = shownEnd(b).let { if (it.isAfter(dayEnd)) dayEnd else it }
+        if (!e.isAfter(s)) null
+        else Placed(b, java.time.Duration.between(dayStart, s).toMinutes(), java.time.Duration.between(dayStart, e).toMinutes())
+    }.sortedWith(compareBy({ it.top }, { -it.bottom }))
+    var group = mutableListOf<Placed>()
+    var groupEnd = -1L
+    fun close() {
+        val colEnds = mutableListOf<Long>()
+        for (p in group) {
+            val free = colEnds.indexOfFirst { it <= p.top }
+            if (free >= 0) { p.col = free; colEnds[free] = p.bottom } else { p.col = colEnds.size; colEnds.add(p.bottom) }
+        }
+        group.forEach { it.cols = colEnds.size.coerceAtLeast(1) }
+        group = mutableListOf()
+    }
+    for (p in placed) {
+        if (group.isNotEmpty() && p.top >= groupEnd) close()
+        group.add(p)
+        groupEnd = maxOf(groupEnd, p.bottom)
+    }
+    if (group.isNotEmpty()) close()
+    // 최소 높이: 같은 열에서 다음 칸 시작 전까지만 늘린다
+    return placed.map { p ->
+        val next = placed.filter { it !== p && it.col == p.col && it.top >= p.bottom }.minOfOrNull { it.top } ?: Long.MAX_VALUE
+        val wanted = maxOf(p.bottom, p.top + minMinutes)
+        p.copy(bottom = minOf(wanted, next)).also { it.col = p.col; it.cols = p.cols }
+    }
+}
+
+/**
+ * 주·일 보기: 에브리타임 같은 표준 시간표. 위에 요일 머리줄(마감 깃발도 여기), 왼쪽 시 눈금, 가로·세로 격자선.
+ * 칸은 모서리 없는 네모로 격자에 딱 맞게 붙이고, 왼쪽 위에 제목, 그 아래 시각·장소/메모.
+ * 겹치는 시간대만 칸을 나란히 나눈다. 마감은 칸을 가리지 않는 얇은 빨간 선. 빈 곳을 길게 누르면 고정 일정 추가.
  */
 @Composable
 private fun TimeGrid(
@@ -275,50 +321,60 @@ private fun TimeGrid(
     onLongPress: (LocalDateTime) -> Unit,
     onDay: (LocalDate) -> Unit,
 ) {
-    val hourHeight: Dp = if (compact) 64.dp else 76.dp
-    val labelWidth = 28.dp
+    val hourHeight: Dp = if (compact) 60.dp else 72.dp
+    val labelWidth = 24.dp
     val density = LocalDensity.current
     val hourPx = with(density) { hourHeight.toPx() }
     val zone = ZoneId.systemDefault()
-    val earliest = data.blocks.filter { b -> dates.any { zoned(b.start).toLocalDate() == it } }
-        .minOfOrNull { zoned(it.start).hour } ?: 8
-    val firstHour = minOf(8, earliest)
+    // 주 보기는 월~금, 주말에 일정·마감이 있을 때만 토·일
+    val shown = if (dates.size > 1) dates.filter { d ->
+        d.dayOfWeek.value <= 5 || data.blocks.any { zoned(it.start).toLocalDate() == d } ||
+            data.deadlines.any { zoned(it.at).toLocalDate() == d }
+    } else dates
+    val earliest = data.blocks.filter { b -> shown.any { zoned(b.start).toLocalDate() == it } }
+        .minOfOrNull { zoned(it.start).hour } ?: 9
+    val firstHour = minOf(9, earliest)
     val hours = 24 - firstHour
     val scroll = rememberScrollState()
     val today = LocalDate.now()
     val line = Color(0xFFE9ECEF)
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 6.dp)) {
-        // 요일 머리줄
+    Column(Modifier.fillMaxSize().padding(horizontal = 4.dp)) {
         Row(Modifier.fillMaxWidth().border(1.dp, line).background(Color.White)) {
             Spacer(Modifier.width(labelWidth))
-            dates.forEach { date ->
+            shown.forEach { date ->
                 val isToday = date == today
+                val dls = data.deadlines.filter { zoned(it.at).toLocalDate() == date }
                 Column(
-                    Modifier.weight(1f).border(0.5.dp, line).clickable { onDay(date) }.padding(vertical = 6.dp),
+                    Modifier.weight(1f).border(0.5.dp, line).clickable { onDay(date) }.padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(DAY_NAMES[date.dayOfWeek.value - 1].toString(), fontSize = 12.sp,
+                    Text(DAY_NAMES[date.dayOfWeek.value - 1].toString() + " " + date.dayOfMonth, fontSize = 12.sp,
                         color = if (isToday) CAL_PINK else Color(0xFF495057), fontWeight = FontWeight.Bold)
-                    Text(date.dayOfMonth.toString(), fontSize = 11.sp, color = if (isToday) CAL_PINK else Color.Gray)
+                    dls.take(2).forEach { dl ->
+                        Text("⚑ " + dl.title, fontSize = 9.sp, color = FLAG, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { dl.task_id?.let(onTask) }.padding(horizontal = 2.dp))
+                    }
+                    if (dls.size > 2) Text("+${dls.size - 2}", fontSize = 9.sp, color = FLAG)
                 }
             }
         }
         Row(Modifier.fillMaxSize().verticalScroll(scroll).border(1.dp, line).background(Color.White)) {
-            // 시 눈금
             Column(Modifier.width(labelWidth)) {
                 for (h in firstHour until 24) {
                     Box(Modifier.height(hourHeight).fillMaxWidth().border(0.5.dp, line), contentAlignment = Alignment.TopEnd) {
-                        Text("$h", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(end = 4.dp, top = 2.dp))
+                        Text("${if (h > 12) h - 12 else h}", fontSize = 10.sp, color = Color.Gray,
+                            modifier = Modifier.padding(end = 3.dp, top = 2.dp))
                     }
                 }
             }
-            dates.forEach { date ->
+            shown.forEach { date ->
                 val dayStart = date.atStartOfDay(zone).plusHours(firstHour.toLong())
                 val dayEnd = date.plusDays(1).atStartOfDay(zone)
-                Box(
+                val dayBlocks = data.blocks.filter { zoned(it.start).isBefore(dayEnd) && shownEnd(it).isAfter(dayStart) }
+                val placed = layoutDay(dayBlocks, dayStart, dayEnd, if (compact) 30 else 25)
+                androidx.compose.foundation.layout.BoxWithConstraints(
                     Modifier.weight(1f).height(hourHeight * hours)
-                        .background(if (date == today && dates.size > 1) Color(0xFFFFF8FA) else Color.White)
                         .pointerInput(date, firstHour) {
                             detectTapGestures(onLongPress = { offset ->
                                 val minutes = ((offset.y / hourPx) * 60).toInt() / 30 * 30
@@ -327,57 +383,49 @@ private fun TimeGrid(
                             })
                         },
                 ) {
-                    // 격자: 시마다 가로선, 30분 점선 대신 옅은 선, 열 경계 세로선
+                    val colWidth = maxWidth
                     for (h in 0 until hours) {
                         Box(Modifier.offset(y = hourHeight * h).fillMaxWidth().height(1.dp).background(line))
-                        Box(Modifier.offset(y = hourHeight * h + hourHeight / 2).fillMaxWidth().height(1.dp)
-                            .background(Color(0xFFF8F9FA)))
                     }
                     Box(Modifier.fillMaxHeight().width(1.dp).background(line))
-                    data.blocks.filter { zoned(it.start).isBefore(dayEnd) && zoned(it.end).isAfter(dayStart) }.forEach { b ->
-                        val s = zoned(b.start).let { if (it.isBefore(dayStart)) dayStart else it }
-                        val e = zoned(b.end).let { if (it.isAfter(dayEnd)) dayEnd else it }
-                        val top = java.time.Duration.between(dayStart, s).toMinutes()
-                        val len = java.time.Duration.between(s, e).toMinutes().coerceAtLeast(25)
-                        BlockCell(b, compact, Modifier.offset(y = hourHeight * (top / 60f))
-                            .height(hourHeight * (len / 60f)).fillMaxWidth().padding(horizontal = 1.dp, vertical = 1.dp)
-                            .clickable { onBlock(b.id) })
+                    placed.forEach { p ->
+                        val w = colWidth / p.cols
+                        BlockCell(p.block, compact, Modifier
+                            .offset(x = w * p.col, y = hourHeight * (p.top / 60f))
+                            .width(w).height(hourHeight * ((p.bottom - p.top) / 60f))
+                            .clickable { onBlock(p.block.id) })
                     }
-                    // 마감: 그 시각에 빨간 선 + 깃발
                     data.deadlines.filter { zoned(it.at).toLocalDate() == date }.forEach { dl ->
                         val top = java.time.Duration.between(dayStart, zoned(dl.at)).toMinutes().coerceAtLeast(0)
                         Box(Modifier.offset(y = hourHeight * (top / 60f)).fillMaxWidth().height(2.dp).background(FLAG))
-                        DeadlineFlag(dl, compact, Modifier.offset(y = hourHeight * (top / 60f) - 16.dp)
-                            .clickable { dl.task_id?.let(onTask) })
                     }
-                    // 지금 시각
                     if (date == today) {
                         val nowMin = java.time.Duration.between(dayStart, ZonedDateTime.now(zone)).toMinutes()
                         if (nowMin in 0..(hours * 60L)) {
                             Box(Modifier.offset(y = hourHeight * (nowMin / 60f)).fillMaxWidth().height(2.dp)
-                                .background(CAL_PINK.copy(alpha = 0.7f)))
+                                .background(CAL_PINK.copy(alpha = 0.6f)))
                         }
                     }
                 }
             }
         }
     }
-    LaunchedEffect(firstHour, dates.firstOrNull()) {
+    LaunchedEffect(firstHour, shown.firstOrNull()) {
         val nowHour = ZonedDateTime.now(zone).hour
-        val target = if (dates.contains(today)) (nowHour - 1).coerceAtLeast(firstHour) else firstHour
+        val target = if (shown.contains(today)) (nowHour - 1).coerceAtLeast(firstHour) else firstHour
         scroll.scrollTo(((target - firstHour) * hourPx).toInt())
     }
 }
 
-/** 시간표 칸: 고정은 차분한 남색 계열, 계획은 목표 색. 글자는 흰색, 끝난 블록은 흐리게. */
+/** 시간표 칸: 모서리 없는 네모, 얇은 흰 테두리로만 구분. 고정은 차분한 남색, 계획은 목표 색. 끝난 블록은 흐리게. */
 @Composable
 private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
     val fixed = b.kind == "fixed"
     val base = if (fixed) Color(0xFF7C8DA6) else goalColor(b.goal_color.ifBlank { null })
     val done = b.status in listOf("done", "partial", "missed")
     Column(
-        modifier.background(base.copy(alpha = if (done) 0.45f else 0.92f), RoundedCornerShape(5.dp))
-            .padding(horizontal = 4.dp, vertical = 3.dp),
+        modifier.background(base.copy(alpha = if (done) 0.45f else 0.95f)).border(0.5.dp, Color.White)
+            .padding(horizontal = 3.dp, vertical = 2.dp),
     ) {
         Text(
             (if (b.series_id != null) "🔁" else "") + b.title,
@@ -389,10 +437,9 @@ private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
             fontSize = if (compact) 9.sp else 12.sp, color = Color.White.copy(alpha = 0.9f), maxLines = 1,
         )
         val sub = when {
-            fixed && b.memo.isNotBlank() -> b.memo.lines().first()
             fixed && b.location != null -> b.location
+            fixed && b.memo.isNotBlank() -> b.memo.lines().first()
             !fixed && b.linked_title != null -> "→ " + b.linked_title
-            !fixed && b.goal_label.isNotBlank() -> b.goal_label
             else -> null
         }
         sub?.let {
@@ -404,23 +451,8 @@ private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
                 Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 8.sp else 11.sp,
                     color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-        } else if (b.deadline != null) {
-            Text("⚑" + runCatching { zoned(b.deadline).format(DateTimeFormatter.ofPattern("E HH:mm")) }.getOrDefault(""),
-                fontSize = if (compact) 8.sp else 11.sp, color = Color.White, maxLines = 1)
         }
     }
-}
-
-@Composable
-private fun DeadlineFlag(d: DeadlineDto, compact: Boolean, modifier: Modifier) {
-    Text(
-        "⚑ " + d.title + " 마감",
-        color = Color.White,
-        fontSize = if (compact) 9.sp else 12.sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier.background(FLAG, RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
-    )
 }
 
 // ------------------------------------------------------------------ 블록 상세 (§8.3)

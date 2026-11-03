@@ -118,6 +118,9 @@ public class CalendarController {
         m.put("start", time.iso(b.start()));
         m.put("end", time.iso(b.end()));
         m.put("status", b.status());
+        // 일찍 끝난 블록(일부 완료 등)은 실제 끝 시각까지만 그리도록(앱 시간표 겹침 방지)
+        m.put("actual_start", time.iso(b.actualStart()));
+        m.put("actual_end", time.iso(b.actualEnd()));
         m.put("title", timeline.blockTitle(b));
         m.put("task_id", b.taskId());
         Store.Goal g = timeline.goalOf(b);

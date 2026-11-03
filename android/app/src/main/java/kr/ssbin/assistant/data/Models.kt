@@ -230,6 +230,8 @@ data class CalendarBlock(
     val start: String,
     val end: String,
     val status: String,
+    val actual_start: String? = null,
+    val actual_end: String? = null,
     val title: String = "",
     val task_id: Long? = null,
     val goal_id: Long? = null,
