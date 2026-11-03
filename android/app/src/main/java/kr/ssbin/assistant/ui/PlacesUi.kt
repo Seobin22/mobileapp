@@ -7,6 +7,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -262,6 +265,7 @@ class MapPickActivity : ComponentActivity() {
             if (key.isNullOrBlank()) mapError.value = "지도 키가 없어요(관리 화면 '지도 연결'에 네이티브 앱 키를 넣어 주세요). 검색으로는 고를 수 있어요."
             mapReady.value = ok
         }
+        enableEdgeToEdge()
         setContent {
             Surface(Modifier.fillMaxSize()) {
                 PickScreen(title, query, startLat, startLng)
@@ -322,12 +326,21 @@ class MapPickActivity : ComponentActivity() {
             }
         }
 
-        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
             Text("$title 위치", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(12.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(q, { q = it }, label = { Text("장소 이름으로 찾기") }, modifier = Modifier.weight(1f), singleLine = true)
                 Spacer(Modifier.padding(2.dp))
                 Button(onClick = { search() }, enabled = !searching) { Text(if (searching) "…" else "찾기") }
+            }
+            // [이 위치로]는 위쪽에 둔다(아래쪽은 내비게이션 바에 가려 누르기 어렵다).
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { finishWith(center.first, center.second, chosenName) },
+                    enabled = ready == true || chosenName.isNotBlank()) { Text("이 위치로") }
+                OutlinedButton(onClick = { finish() }) { Text("취소") }
+                Text(if (chosenName.isNotBlank()) chosenName else "핀을 맞추거나 찾아 고르세요",
+                    style = MaterialTheme.typography.bodySmall, maxLines = 2, modifier = Modifier.weight(1f))
             }
             message?.let { Text(it, color = PLACE_ERR, modifier = Modifier.padding(horizontal = 12.dp)) }
             results.forEach { c ->
@@ -376,15 +389,6 @@ class MapPickActivity : ComponentActivity() {
                 error?.let {
                     Text(it, color = Color.White, modifier = Modifier.align(Alignment.TopCenter).padding(8.dp)
                         .background(PLACE_ERR.copy(alpha = 0.9f), RoundedCornerShape(8.dp)).padding(8.dp))
-                }
-            }
-            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(if (chosenName.isNotBlank()) "고른 곳: $chosenName" else "지도를 움직여 핀을 맞추거나 위에서 찾아 고르세요",
-                    style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { finishWith(center.first, center.second, chosenName) },
-                        enabled = ready == true || chosenName.isNotBlank()) { Text("이 위치로") }
-                    OutlinedButton(onClick = { finish() }) { Text("취소") }
                 }
             }
         }

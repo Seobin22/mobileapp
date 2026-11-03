@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -109,6 +111,8 @@ class InterventionActivity : ComponentActivity() {
             resultCallback = { text -> listening.value = false; send(text, "fullscreen_voice") },
             errorCallback = { msg -> listening.value = false; error.value = msg })
 
+        // 키보드가 올라오면 화면을 줄여 입력란이 키보드 위에 보이게 한다(edge-to-edge 라야 imePadding 이 동작).
+        enableEdgeToEdge()
         setContent { MaterialTheme { Screen() } }
 
         load(intent)
@@ -138,19 +142,23 @@ class InterventionActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
     @androidx.compose.runtime.Composable
     private fun Screen() {
         val current = entity.value
+        // 키보드가 떠 있으면 위쪽 안내를 줄여 대화와 입력란이 보이게 한다.
+        val imeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
         val listState = rememberLazyListState()
         LaunchedEffect(lines.size, thinking.value) {
             val count = lines.size + if (thinking.value) 1 else 0
             if (count > 0) listState.animateScrollToItem(count - 1)
         }
         Column(
-            modifier = Modifier.fillMaxSize().background(BG).imePadding().padding(horizontal = 24.dp, vertical = 20.dp),
+            modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().imePadding()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(if (lines.isEmpty()) 56.dp else 12.dp))
+            Spacer(Modifier.height(if (imeVisible) 4.dp else if (lines.isEmpty()) 56.dp else 12.dp))
             if (!current?.goalLabel.isNullOrBlank()) {
                 Text(
                     current!!.goalLabel,
@@ -170,8 +178,8 @@ class InterventionActivity : ComponentActivity() {
                 textAlign = TextAlign.Center,
                 lineHeight = if (lines.isEmpty()) 48.sp else 34.sp,
             )
-            Spacer(Modifier.height(14.dp))
-            Text(
+            if (!imeVisible) Spacer(Modifier.height(14.dp))
+            if (!imeVisible) Text(
                 text = current?.screenText ?: "",
                 color = Color(0xFFFFD8E4),
                 fontSize = if (lines.isEmpty()) 22.sp else 17.sp,
@@ -179,7 +187,7 @@ class InterventionActivity : ComponentActivity() {
                 lineHeight = if (lines.isEmpty()) 30.sp else 24.sp,
             )
             // v3.2 §3.3: 고정 블록이면 사용자가 쓴 메모를 그대로 보여준다.
-            if (!current?.memo.isNullOrBlank()) {
+            if (!imeVisible && !current?.memo.isNullOrBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     text = "📝 " + current!!.memo,
@@ -189,12 +197,12 @@ class InterventionActivity : ComponentActivity() {
                     modifier = Modifier.background(Color(0xFF3A3135), RoundedCornerShape(10.dp)).padding(10.dp),
                 )
             }
-            Spacer(Modifier.height(if (lines.isEmpty()) 40.dp else 16.dp))
+            Spacer(Modifier.height(if (imeVisible) 8.dp else if (lines.isEmpty()) 40.dp else 16.dp))
             Button(
                 onClick = { onStartPressed() },
                 enabled = current != null,
                 colors = ButtonDefaults.buttonColors(containerColor = PINK),
-                modifier = Modifier.fillMaxWidth().height(72.dp),
+                modifier = Modifier.fillMaxWidth().height(if (imeVisible) 48.dp else 72.dp),
             ) {
                 Text("시작", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             }

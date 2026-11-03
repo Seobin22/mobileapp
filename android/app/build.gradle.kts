@@ -19,8 +19,8 @@ android {
         applicationId = "kr.ssbin.assistant"
         minSdk = 29
         targetSdk = 35
-        versionCode = 18
-        versionName = "3.3.1"
+        versionCode = 19
+        versionName = "3.3.2"
     }
 
     // 고정 서명 키(덮어 설치·앱 안 업데이트용). CI 가 Secret 에서 키 파일을 만들고 ASSISTANT_KEYSTORE 로 경로를 준다.

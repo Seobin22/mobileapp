@@ -45,7 +45,8 @@
             android:launchMode="singleTask"
             android:showWhenLocked="true"
             android:taskAffinity="kr.ssbin.assistant.intervention"
-            android:turnScreenOn="true" />
+            android:turnScreenOn="true"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".ui.WorkProductActivity"
@@ -53,7 +54,8 @@
 
         <activity
             android:name=".ui.MapPickActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".chat.QuickInputActivity"
