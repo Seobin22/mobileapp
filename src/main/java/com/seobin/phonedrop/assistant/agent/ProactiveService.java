@@ -52,11 +52,12 @@ public class ProactiveService {
     private final TurnQueue turns;
     private final ChatService chat;
     private final GoalCoverage coverage;
+    private final GoalPrompts goalPrompts;
     private final boolean enabled;
 
     public ProactiveService(AssistantDb db, AssistantClock clock, Tx tx, Jobs jobs, Store store, TimeUtil time,
                             SettingsService settings, TurnQueue turns, ChatService chat, GoalCoverage coverage,
-                            @Value("${assistant.worker.enabled:true}") boolean enabled) {
+                            GoalPrompts goalPrompts, @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
         this.tx = tx;
@@ -67,6 +68,7 @@ public class ProactiveService {
         this.turns = turns;
         this.chat = chat;
         this.coverage = coverage;
+        this.goalPrompts = goalPrompts;
         this.enabled = enabled;
         jobs.register(PULSE, this::onPulse);
         jobs.register(MORNING_FALLBACK, this::onMorningFallback);
@@ -205,6 +207,7 @@ public class ProactiveService {
 
     /** v3.1 §3.4-3: 아침·저녁이 이미 처리됐는데 누락 목표가 있으면 따로 goal_needs_blocks. */
     private void needsBlocksForMissingGoals() {
+        goalPrompts.sweepAll();
         for (Store.Goal g : coverage.missing()) {
             coverage.enqueueNeedsBlocks(g.id(), clock.now());
         }

@@ -40,10 +40,12 @@ public class GoalService {
     private final PlanService plan;
     private final Changes changes;
     private final TurnQueue turns;
+    private final GoalPrompts goalPrompts;
 
     public GoalService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, Timeline timeline,
                        GoalCoverage coverage, InterventionService interventions, PlanService plan, Changes changes,
-                       TurnQueue turns) {
+                       TurnQueue turns, GoalPrompts goalPrompts) {
+        this.goalPrompts = goalPrompts;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -170,6 +172,10 @@ public class GoalService {
         JsonNode before = changes.snapshot("goal", goalId);
         update(goalId, set);
         changes.record(turnId, "goal", goalId, before, changes.snapshot("goal", goalId));
+        if (set.containsKey("deadline")) {
+            // 마감을 바꾸면 마감 지남·시간 없음 질문 기록을 지우고 마감 작업을 다시 예약한다.
+            goalPrompts.deadlineChanged(goalId);
+        }
         return Map.of("ok", true, "goal", view(store.goal(goalId).orElseThrow()));
     }
 

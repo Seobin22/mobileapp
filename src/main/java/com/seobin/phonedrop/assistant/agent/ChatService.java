@@ -173,6 +173,10 @@ public class ChatService {
             if (intervention != null) {
                 m.put("intervention_id", intervention);
             }
+            Long goal = AssistantDb.nullableLong(rs, "goal_id");
+            if (goal != null) {
+                m.put("goal_id", goal);
+            }
             if (rs.getString("source") != null) {
                 m.put("source", rs.getString("source"));
             }

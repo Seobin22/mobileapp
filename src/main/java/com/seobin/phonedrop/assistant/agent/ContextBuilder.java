@@ -41,10 +41,11 @@ public class ContextBuilder {
     private final Deadlines deadlines;
     private final MemoService memos;
     private final BlockLogs logs;
+    private final GoalPrompts goalPrompts;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                           Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
-                          Deadlines deadlines, MemoService memos, BlockLogs logs) {
+                          Deadlines deadlines, MemoService memos, BlockLogs logs, GoalPrompts goalPrompts) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -58,6 +59,7 @@ public class ContextBuilder {
         this.deadlines = deadlines;
         this.memos = memos;
         this.logs = logs;
+        this.goalPrompts = goalPrompts;
     }
 
     public String build(String trigger, JsonNode ref) {
@@ -85,6 +87,7 @@ public class ContextBuilder {
         sb.append("# 지금 상태\n").append(userState.contextSection()).append('\n');
         sb.append("# 다가오는 마감(").append(Deadlines.CONTEXT_DAYS).append("일 안, 지난 미완료 포함)\n")
                 .append(deadlines.contextSection()).append('\n');
+        sb.append("# 답을 기다리는 목표 질문(코드가 버튼으로 물음)\n").append(goalPrompts.contextSection(trigger)).append('\n');
         appendMemos(sb, trigger, ref, now);
         appendBlockLogs(sb, ref);
 
@@ -287,6 +290,9 @@ public class ContextBuilder {
                     + ("cancelled".equals(ref.path("change").asString("")) ? "이 삭제되어 연결 블록 " + ref.path("linked")
                     + "과 그 할 일을 코드가 취소했다. 사용자에게 짧게 알린다"
                     : "의 시각이 바뀌었다. 연결 블록 " + ref.path("linked") + "을 다시 배치하거나 알린다");
+            case GoalPrompts.AFTER_DEADLINE_TRIGGER -> "goal_blocks_after_deadline: 목표#" + ref.path("goal_id").asLong()
+                    + "의 계획 블록 " + ref.path("blocks") + "이 목표 마감 뒤에 끝난다. 마감 안으로 다시 배치한다(set_schedule)."
+                    + " 마감 안에 넣을 수 없으면 사용자에게 알리기만 한다. 목표를 지우거나 마감을 바꾸지 않는다";
             case "task_changed_by_user" -> "task_changed_by_user: 사용자가 앱에서 할일#" + ref.path("task_id").asLong()
                     + "을 직접 바꿈(" + ref.path("fields").asString("") + "). 이미 반영된 결정이니 시간표를 맞추고 짧게 알린다";
             case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()

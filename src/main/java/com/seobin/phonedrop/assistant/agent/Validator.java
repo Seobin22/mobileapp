@@ -70,6 +70,13 @@ public class Validator {
                     // v3.2 P1.2: 마감이 있는 할 일의 블록은 마감 전에 끝나야 한다.
                     violations.add(label + ": " + t.title() + " 마감(" + time.dayText(t.deadline())
                             + ") 이후에 끝나는 블록입니다");
+                } else {
+                    // 계획 블록의 마감 기준은 min(할 일 마감, 목표 마감). 고정 블록은 이 검사를 타지 않는다.
+                    Store.Goal g = t.goalId() == null ? null : store.goal(t.goalId()).orElse(null);
+                    if (g != null && g.deadline() != null && b.end().isAfter(g.deadline())) {
+                        violations.add(label + ": 목표 '" + g.title() + "' 마감(" + time.dayText(g.deadline())
+                                + ") 이후에 끝나는 블록입니다");
+                    }
                 }
             }
             // v3.2 §6: 연결 블록은 연결된 고정 일정의 금지 구간(출발·준비 포함) 시작 전에 끝나야 한다.

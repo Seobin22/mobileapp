@@ -37,15 +37,23 @@ public class GoalCoverage {
     private final SettingsService settings;
     private final TurnQueue turns;
     private final Jobs jobs;
+    private final com.seobin.phonedrop.assistant.agent.Timeline timeline;
+
+    /** 목표 상태(2026-11-02): MISSING 만 '블록 없음'. 마감 지남·시간 없음·할 일 모두 끝남은 코드가 한 번 묻는다. */
+    public enum Gap { OK, MISSING, WAITING, DEADLINE_PASSED, NO_TIME, TASKS_DONE }
+
+    /** 빈 시간이 이만큼도 없으면 '시간 없음'(블록 최소 길이와 같다). */
+    public static final int MIN_SLOT_MINUTES = 5;
 
     public GoalCoverage(AssistantDb db, AssistantClock clock, Store store, SettingsService settings, TurnQueue turns,
-                        Jobs jobs) {
+                        Jobs jobs, com.seobin.phonedrop.assistant.agent.Timeline timeline) {
         this.db = db;
         this.clock = clock;
         this.store = store;
         this.settings = settings;
         this.turns = turns;
         this.jobs = jobs;
+        this.timeline = timeline;
         jobs.register(WAITING_CHECK, this::onWaitingCheck);
     }
 
@@ -61,19 +69,52 @@ public class GoalCoverage {
     }
 
     public boolean isMissing(Store.Goal g, Instant now) {
-        if (!"active".equals(g.status()) || waiting(g, now)) {
-            return false;
-        }
-        Instant next = nextBlockStart(g.id(), now);
-        return next == null || !next.isBefore(now.plus(Duration.ofDays(settings.getInt("goal.min_horizon_days"))));
+        return gap(g, now) == Gap.MISSING;
     }
 
-    /** ok | missing | waiting (get_goal_coverage). */
-    public String status(Store.Goal g, Instant now) {
-        if (waiting(g, now)) {
-            return "waiting";
+    /**
+     * 검사 범위 = 지금 ~ min(지금 + min_horizon_days, 목표 마감). 그 안에 미래 블록이 없을 때:
+     * 마감이 지났으면 DEADLINE_PASSED, 할 일이 있었는데 모두 끝났으면 TASKS_DONE,
+     * 마감까지 5분짜리 빈 시간도 없으면 NO_TIME, 아니면 MISSING.
+     */
+    public Gap gap(Store.Goal g, Instant now) {
+        if (!"active".equals(g.status())) {
+            return Gap.OK;
         }
-        return isMissing(g, now) ? "missing" : "ok";
+        if (waiting(g, now)) {
+            return Gap.WAITING;
+        }
+        if (g.deadline() != null && !g.deadline().isAfter(now)) {
+            return Gap.DEADLINE_PASSED;
+        }
+        Instant horizon = now.plus(Duration.ofDays(settings.getInt("goal.min_horizon_days")));
+        if (g.deadline() != null && g.deadline().isBefore(horizon)) {
+            horizon = g.deadline();
+        }
+        Instant next = nextBlockStart(g.id(), now);
+        if (next != null && next.isBefore(horizon)) {
+            return Gap.OK;
+        }
+        if (tasksAllDone(g.id())) {
+            return Gap.TASKS_DONE;
+        }
+        if (g.deadline() != null && !timeline.hasFreeSlot(now, g.deadline(), MIN_SLOT_MINUTES)) {
+            return Gap.NO_TIME;
+        }
+        return Gap.MISSING;
+    }
+
+    /** 할 일이 하나 이상 있었고, 남은 active 할 일이 없으며, 끝낸(done) 할 일이 있다. 처음부터 할 일이 없던 목표는 아니다. */
+    boolean tasksAllDone(long goalId) {
+        return db.jdbc().sql("""
+                        SELECT (SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND status = 'active') = 0
+                        AND (SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND status = 'done') > 0""")
+                .param(goalId).param(goalId).query(Boolean.class).single();
+    }
+
+    /** ok | missing | waiting | deadline_passed | no_time | tasks_done (get_goal_coverage·목표 탭). */
+    public String status(Store.Goal g, Instant now) {
+        return gap(g, now).name().toLowerCase();
     }
 
     public List<Store.Goal> missing() {

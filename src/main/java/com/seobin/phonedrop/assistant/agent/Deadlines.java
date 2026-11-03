@@ -70,7 +70,7 @@ public class Deadlines {
             sb.append("- ").append(d.taskId() != null ? "할일#" + d.taskId() : "목표#" + d.goalId()).append(' ')
                     .append(d.title()).append(" · 마감 ").append(time.dayText(d.at()));
             if (!d.at().isAfter(now)) {
-                sb.append(" (지남");
+                sb.append(d.goalId() != null && asked(d.goalId()) ? " (지남 — 이미 사용자에게 물었다, 다시 묻지 말 것" : " (지남");
             } else {
                 sb.append(" (남은 ").append(left(Duration.between(now, d.at())));
             }
@@ -91,6 +91,11 @@ public class Deadlines {
         m.put("blocks_before", d.blocksBefore());
         m.put("passed", !d.at().isAfter(clock.now()));
         return m;
+    }
+
+    private boolean asked(long goalId) {
+        return db.jdbc().sql("SELECT deadline_prompted_at IS NOT NULL FROM goals WHERE id = ?").param(goalId)
+                .query(Boolean.class).optional().orElse(false);
     }
 
     private int blocksBeforeTask(long taskId, Instant deadline) {

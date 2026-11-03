@@ -389,6 +389,9 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
                     Text("답함", style = MaterialTheme.typography.bodySmall)
                 }
             }
+            if (m.kind.startsWith("goal_")) {
+                GoalPromptButtons(m, onChanged = { Chat.requestRefresh() })
+            }
             if (m.kind == "confirmation") {
                 if (m.confirmation_status == "pending") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

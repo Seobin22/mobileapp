@@ -170,6 +170,33 @@ public class Timeline {
         return total;
     }
 
+    /** from~to 에 minutes 분 이상 이어진 빈 시간이 있는가(최대 14일만 본다). */
+    public boolean hasFreeSlot(Instant from, Instant until, int minutes) {
+        Instant to = until.isAfter(from.plus(Duration.ofDays(MAX_DAYS))) ? from.plus(Duration.ofDays(MAX_DAYS)) : until;
+        if (!to.isAfter(from)) {
+            return false;
+        }
+        List<Store.Block> active = store.activeBlocks();
+        for (LocalDate d = time.logicalDay(from); !d.isAfter(time.logicalDay(to.minusSeconds(1))); d = d.plusDays(1)) {
+            TimeUtil.Window window = time.activeWindow(d);
+            Instant s = max(window.start(), from);
+            Instant e = min(window.end(), to);
+            if (!s.isBefore(e)) {
+                continue;
+            }
+            List<TimeUtil.Window> busy = new ArrayList<>();
+            active.stream().filter(b -> b.blockedStart().isBefore(e) && s.isBefore(b.blockedEnd()))
+                    .forEach(b -> busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd())));
+            busy.addAll(time.quietWindows(s, e));
+            for (TimeUtil.Window f : subtract(s, e, busy)) {
+                if (Duration.between(f.start(), f.end()).toMinutes() >= minutes) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** get_load_summary (빌드문서 v2 §5.1). */
     public Map<String, Object> loadSummary() {
         Instant now = clock.now();

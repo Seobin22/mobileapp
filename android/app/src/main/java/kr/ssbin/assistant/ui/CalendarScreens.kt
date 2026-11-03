@@ -1,6 +1,8 @@
 package kr.ssbin.assistant.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -258,7 +260,11 @@ private fun MonthView(anchor: LocalDate, from: LocalDate, data: CalendarResponse
     }
 }
 
-/** 주·일 보기: 시간 축(0~24시)에 블록 칸. 빈 곳을 길게 누르면 그 시각(30분 단위)으로 고정 일정 추가. */
+/**
+ * 주·일 보기: 에브리타임 같은 표준 시간표. 위에 요일 머리줄(고정), 왼쪽에 시(時) 눈금, 가로·세로 격자선,
+ * 블록은 색 칸 안에 제목·시각·장소/메모를 쓴다. 보이는 시간은 min(8시, 가장 이른 블록) ~ 24시.
+ * 빈 곳을 길게 누르면 그 시각(30분 단위)으로 고정 일정 추가.
+ */
 @Composable
 private fun TimeGrid(
     dates: List<LocalDate>,
@@ -269,100 +275,138 @@ private fun TimeGrid(
     onLongPress: (LocalDateTime) -> Unit,
     onDay: (LocalDate) -> Unit,
 ) {
-    val hourHeight: Dp = if (compact) 44.dp else 60.dp
+    val hourHeight: Dp = if (compact) 64.dp else 76.dp
+    val labelWidth = 28.dp
     val density = LocalDensity.current
     val hourPx = with(density) { hourHeight.toPx() }
+    val zone = ZoneId.systemDefault()
+    val earliest = data.blocks.filter { b -> dates.any { zoned(b.start).toLocalDate() == it } }
+        .minOfOrNull { zoned(it.start).hour } ?: 8
+    val firstHour = minOf(8, earliest)
+    val hours = 24 - firstHour
     val scroll = rememberScrollState()
-    LaunchedEffect(Unit) { scroll.scrollTo((hourPx * 7).toInt()) }
     val today = LocalDate.now()
-    Column(Modifier.fillMaxSize()) {
-        if (dates.size > 1) {
-            Row(Modifier.fillMaxWidth().padding(start = 34.dp)) {
-                dates.forEach { date ->
-                    Text(
-                        "${DAY_NAMES[date.dayOfWeek.value - 1]}\n${date.dayOfMonth}",
-                        Modifier.weight(1f).clickable { onDay(date) }.padding(2.dp),
-                        fontSize = 11.sp,
-                        fontWeight = if (date == today) FontWeight.Bold else null,
-                        color = if (date == today) CAL_PINK else Color.Unspecified,
-                    )
+    val line = Color(0xFFE9ECEF)
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 6.dp)) {
+        // 요일 머리줄
+        Row(Modifier.fillMaxWidth().border(1.dp, line).background(Color.White)) {
+            Spacer(Modifier.width(labelWidth))
+            dates.forEach { date ->
+                val isToday = date == today
+                Column(
+                    Modifier.weight(1f).border(0.5.dp, line).clickable { onDay(date) }.padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(DAY_NAMES[date.dayOfWeek.value - 1].toString(), fontSize = 12.sp,
+                        color = if (isToday) CAL_PINK else Color(0xFF495057), fontWeight = FontWeight.Bold)
+                    Text(date.dayOfMonth.toString(), fontSize = 11.sp, color = if (isToday) CAL_PINK else Color.Gray)
                 }
             }
         }
-        Row(Modifier.fillMaxSize().verticalScroll(scroll)) {
-            Column(Modifier.width(34.dp)) {
-                for (h in 0 until 24) {
-                    Text("%02d".format(h), Modifier.height(hourHeight), fontSize = 10.sp, color = Color.Gray)
+        Row(Modifier.fillMaxSize().verticalScroll(scroll).border(1.dp, line).background(Color.White)) {
+            // 시 눈금
+            Column(Modifier.width(labelWidth)) {
+                for (h in firstHour until 24) {
+                    Box(Modifier.height(hourHeight).fillMaxWidth().border(0.5.dp, line), contentAlignment = Alignment.TopEnd) {
+                        Text("$h", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(end = 4.dp, top = 2.dp))
+                    }
                 }
             }
             dates.forEach { date ->
+                val dayStart = date.atStartOfDay(zone).plusHours(firstHour.toLong())
+                val dayEnd = date.plusDays(1).atStartOfDay(zone)
                 Box(
-                    Modifier.weight(1f).height(hourHeight * 24).padding(horizontal = 1.dp)
-                        .background(if (date == today && dates.size > 1) Color(0xFFFFF0F5) else Color.White)
-                        .pointerInput(date) {
+                    Modifier.weight(1f).height(hourHeight * hours)
+                        .background(if (date == today && dates.size > 1) Color(0xFFFFF8FA) else Color.White)
+                        .pointerInput(date, firstHour) {
                             detectTapGestures(onLongPress = { offset ->
                                 val minutes = ((offset.y / hourPx) * 60).toInt() / 30 * 30
-                                onLongPress(date.atStartOfDay().plusMinutes(minutes.toLong().coerceIn(0, 23 * 60 + 30)))
+                                onLongPress(date.atStartOfDay().plusHours(firstHour.toLong())
+                                    .plusMinutes(minutes.toLong().coerceIn(0, hours * 60L - 30)))
                             })
                         },
                 ) {
-                    for (h in 1 until 24) {
-                        Box(Modifier.offset(y = hourHeight * h).fillMaxWidth().height(1.dp).background(Color(0xFFF1F3F5)))
+                    // 격자: 시마다 가로선, 30분 점선 대신 옅은 선, 열 경계 세로선
+                    for (h in 0 until hours) {
+                        Box(Modifier.offset(y = hourHeight * h).fillMaxWidth().height(1.dp).background(line))
+                        Box(Modifier.offset(y = hourHeight * h + hourHeight / 2).fillMaxWidth().height(1.dp)
+                            .background(Color(0xFFF8F9FA)))
                     }
-                    val dayStart = date.atStartOfDay(ZoneId.systemDefault())
-                    val dayEnd = dayStart.plusDays(1)
+                    Box(Modifier.fillMaxHeight().width(1.dp).background(line))
                     data.blocks.filter { zoned(it.start).isBefore(dayEnd) && zoned(it.end).isAfter(dayStart) }.forEach { b ->
                         val s = zoned(b.start).let { if (it.isBefore(dayStart)) dayStart else it }
                         val e = zoned(b.end).let { if (it.isAfter(dayEnd)) dayEnd else it }
                         val top = java.time.Duration.between(dayStart, s).toMinutes()
-                        val len = java.time.Duration.between(s, e).toMinutes().coerceAtLeast(20)
-                        BlockCell(b, compact, Modifier.offset(y = hourHeight * (top / 60f)).height(hourHeight * (len / 60f))
-                            .fillMaxWidth().clickable { onBlock(b.id) })
+                        val len = java.time.Duration.between(s, e).toMinutes().coerceAtLeast(25)
+                        BlockCell(b, compact, Modifier.offset(y = hourHeight * (top / 60f))
+                            .height(hourHeight * (len / 60f)).fillMaxWidth().padding(horizontal = 1.dp, vertical = 1.dp)
+                            .clickable { onBlock(b.id) })
                     }
+                    // 마감: 그 시각에 빨간 선 + 깃발
                     data.deadlines.filter { zoned(it.at).toLocalDate() == date }.forEach { dl ->
-                        val top = java.time.Duration.between(dayStart, zoned(dl.at)).toMinutes()
-                        DeadlineFlag(dl, compact, Modifier.offset(y = hourHeight * (top / 60f) - 10.dp)
+                        val top = java.time.Duration.between(dayStart, zoned(dl.at)).toMinutes().coerceAtLeast(0)
+                        Box(Modifier.offset(y = hourHeight * (top / 60f)).fillMaxWidth().height(2.dp).background(FLAG))
+                        DeadlineFlag(dl, compact, Modifier.offset(y = hourHeight * (top / 60f) - 16.dp)
                             .clickable { dl.task_id?.let(onTask) })
+                    }
+                    // 지금 시각
+                    if (date == today) {
+                        val nowMin = java.time.Duration.between(dayStart, ZonedDateTime.now(zone)).toMinutes()
+                        if (nowMin in 0..(hours * 60L)) {
+                            Box(Modifier.offset(y = hourHeight * (nowMin / 60f)).fillMaxWidth().height(2.dp)
+                                .background(CAL_PINK.copy(alpha = 0.7f)))
+                        }
                     }
                 }
             }
         }
     }
+    LaunchedEffect(firstHour, dates.firstOrNull()) {
+        val nowHour = ZonedDateTime.now(zone).hour
+        val target = if (dates.contains(today)) (nowHour - 1).coerceAtLeast(firstHour) else firstHour
+        scroll.scrollTo(((target - firstHour) * hourPx).toInt())
+    }
 }
 
+/** 시간표 칸: 고정은 차분한 남색 계열, 계획은 목표 색. 글자는 흰색, 끝난 블록은 흐리게. */
 @Composable
 private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
     val fixed = b.kind == "fixed"
-    val bg = if (fixed) FIXED_BG else goalColor(b.goal_color.ifBlank { null }).copy(alpha = 0.22f)
+    val base = if (fixed) Color(0xFF7C8DA6) else goalColor(b.goal_color.ifBlank { null })
     val done = b.status in listOf("done", "partial", "missed")
     Column(
-        modifier.padding(1.dp).background(bg, RoundedCornerShape(4.dp)).padding(horizontal = 3.dp, vertical = 1.dp),
+        modifier.background(base.copy(alpha = if (done) 0.45f else 0.92f), RoundedCornerShape(5.dp))
+            .padding(horizontal = 4.dp, vertical = 3.dp),
     ) {
-        val head = buildString {
-            if (fixed) append("고정 ")
-            if (b.series_id != null) append("🔁 ")
-            if (!compact) append(hm(b.start)).append(' ')
-            if (!fixed && b.goal_label.isNotBlank()) append('[').append(b.goal_label).append("] ")
-            append(b.title)
+        Text(
+            (if (b.series_id != null) "🔁" else "") + b.title,
+            fontSize = if (compact) 11.sp else 14.sp, fontWeight = FontWeight.Bold, color = Color.White,
+            maxLines = if (compact) 3 else 2, overflow = TextOverflow.Ellipsis, lineHeight = if (compact) 13.sp else 17.sp,
+        )
+        Text(
+            hm(b.start) + if (compact) "" else "–" + hm(b.end),
+            fontSize = if (compact) 9.sp else 12.sp, color = Color.White.copy(alpha = 0.9f), maxLines = 1,
+        )
+        val sub = when {
+            fixed && b.memo.isNotBlank() -> b.memo.lines().first()
+            fixed && b.location != null -> b.location
+            !fixed && b.linked_title != null -> "→ " + b.linked_title
+            !fixed && b.goal_label.isNotBlank() -> b.goal_label
+            else -> null
         }
-        Text(head, fontSize = if (compact) 10.sp else 13.sp, fontWeight = FontWeight.Bold,
-            color = if (done) Color.Gray else FIXED_TEXT, maxLines = if (compact) 2 else 1, overflow = TextOverflow.Ellipsis)
-        if (fixed && b.memo.isNotBlank()) {
-            // 메모 첫 줄(일 보기는 2~3줄, 주 보기는 잘라서)
-            Text(b.memo.lines().first(), fontSize = if (compact) 9.sp else 12.sp, color = FIXED_TEXT,
-                maxLines = if (compact) 1 else 3, overflow = TextOverflow.Ellipsis)
+        sub?.let {
+            Text(it, fontSize = if (compact) 9.sp else 12.sp, color = Color.White.copy(alpha = 0.9f),
+                maxLines = if (compact) 2 else 3, overflow = TextOverflow.Ellipsis)
         }
         if (fixed) {
-            b.linked_prep.filter { it.status != "cancelled" }.take(2).forEach { p ->
-                Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 9.sp else 11.sp, color = CAL_PINK,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            b.linked_prep.filter { it.status != "cancelled" }.take(if (compact) 1 else 2).forEach { p ->
+                Text("준비: ${mdHm(p.start)} ${p.title}", fontSize = if (compact) 8.sp else 11.sp,
+                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-        } else {
-            if (b.linked_title != null) Text("→ ${b.linked_title}", fontSize = if (compact) 9.sp else 11.sp, maxLines = 1)
-            if (b.deadline != null) {
-                Text("⚑" + runCatching { zoned(b.deadline).format(DateTimeFormatter.ofPattern("E HH:mm")) }.getOrDefault(""),
-                    fontSize = if (compact) 9.sp else 11.sp, color = FLAG, maxLines = 1)
-            }
+        } else if (b.deadline != null) {
+            Text("⚑" + runCatching { zoned(b.deadline).format(DateTimeFormatter.ofPattern("E HH:mm")) }.getOrDefault(""),
+                fontSize = if (compact) 8.sp else 11.sp, color = Color.White, maxLines = 1)
         }
     }
 }

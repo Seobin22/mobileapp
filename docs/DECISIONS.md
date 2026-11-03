@@ -232,3 +232,15 @@
 - **연결 블록 변경 알림**: 연결된 미래 계획 블록이 있을 때만 fixed_changed(앱·도구·반복 재생성 모두, 대기 중이면 중복 없음). 고정 삭제 시 연결 블록과 그 할 일을 코드가 취소한다.
 - **앱 API**: `GET /v1/calendar`(최대 62일), `GET/PATCH /v1/tasks/{id}`(PATCH 는 task_changed_by_user turn, priority 10), `GET /v1/turns/{id}/status`, `GET /v1/blocks/{id}`·`/logs`, `/v1/fixed_series` CRUD(scope·from_date 는 쿼리). `PATCH /v1/fixed_blocks/{id}` 에 memo 만 있으면 메모만 저장(시작한 블록도 가능).
 - **앱 3.2.0**: 시간표 탭 → 달력(월·주·일, 시간 축 0~24시, 7시로 스크롤). 채팅은 열 때 최신, 맨 아래면 따라가고 위면 [↓ n]. 보낸 메시지마다 turn 진행 상태를 1.5초마다 읽어 자리 표시(점 + 문구, 20초 넘으면 "(조금 오래 걸리고 있어요)"), 실패면 [다시 시도], 뒤에 보낸 것은 "대기 중". 개입 화면에 메모, "생각 중…" 을 진행 문구로. Room 스키마 5(파괴적).
+
+## 목표 마감 처리 (2026-11-02, 사용자 지시 + 검토 수정안) — 앱 3.2.1
+
+- **복귀 지점**: 태그 `1102_5_목표마감수정전`(= `3a3939f`). DB V8 은 NULL 허용 칸만 추가해 코드만 되돌려도 동작한다.
+- **검증기**: 계획 블록의 마감 기준 = min(할 일 마감, 목표 마감). 고정 블록(validateFixed)·즉시 시작(start_now)은 이 검사를 타지 않는다.
+- **목표 블록 검사(GoalCoverage.gap)**: 검사 범위 = 지금 ~ min(지금+2일, 목표 마감). 블록이 없을 때 마감 지남 → DEADLINE_PASSED, 할 일이 있었는데 모두 done → TASKS_DONE(처음부터 할 일이 없던 새 목표는 MISSING 그대로), 마감까지 5분 이상 이어진 빈 시간이 없으면 → NO_TIME(14일까지만 본다), 그 밖 MISSING. MISSING 만 '블록 없음'.
+- **질문은 코드가 한 번만(GoalPrompts, LLM 없음)**: 메시지 kind `goal_deadline`·`goal_shortage`·`goal_done_check` + messages.goal_id. 기록 칸 goals.`deadline_prompted_at`·`deadline_reminded_at`·`shortage_prompted_at`·`done_prompted_at`. 마감이 바뀌면(비서 도구·앱 목표 탭) 마감 관련 기록을 지우고 마감 작업(`goal_deadline` job, 마감 시각)을 다시 예약. 새 active 할 일이 생기면 done 기록을 지운다. 되돌리기(undo)는 칸을 함께 되돌리지만 마감 작업은 다시 예약하지 않는다(다음 sweep 이 처리).
+- **확인 시점**: 마감 시각 작업, 시작할 때, turn 끝(손댄 목표), 아침·저녁 점검.
+- **마감 지남 시 '알람 보류' 대신 취소**: 그 목표의 미래 계획 블록을 취소하고(블록 기록 남김) 묻는다. 연장하면 goal_changed_by_user turn 에서 비서가 새 마감 안에 다시 배치한다(보류 상태를 새로 만들면 set_schedule 교체·블록 끝 처리·로컬 알람·되돌리기가 모두 다시 걸 수 있어서).
+- **아침 상기 1회**: 마감 지남 질문을 전날 이전에 보냈고 상기하지 않았으면 morning 맥락에 "한 번만 짧게 상기"로 표시하고, morning turn 이 끝나면 상기한 것으로 기록. 다른 turn 에는 "다시 묻지 말 것".
+- **배포 시 한 번**(data_migrations `goal_deadline_cleanup_v1`): 마감 지난 목표는 위 질문 흐름, 마감 전인데 마감 뒤에 끝나는 계획 블록이 있는 목표는 `goal_blocks_after_deadline` turn(비서가 마감 안으로 재배치, 목표·마감은 바꾸지 않음). 2026-11-02 운영 DB: 해당 목표 1개(마감 11/2 15:00 지남, 미래 계획 블록 4개).
+- **앱 3.2.1**: 채팅의 목표 질문에 버튼([마감 연장]은 날짜·시각 선택기 → 목표 PATCH, [완료]·[취소]는 목표 탭 API, [할 일 더 있어]는 비서에게 메시지). 처리한 질문은 이 기기에서 버튼을 숨긴다. 목표 탭 마감 변경도 날짜·시각 선택기. 달력 주·일 보기를 표준 시간표(요일 머리줄 고정, 시 눈금, 격자선, 색 칸에 제목·시각·메모, 시간 높이 64/76dp, 8시부터, 지금 시각 선)로 바꿨다.

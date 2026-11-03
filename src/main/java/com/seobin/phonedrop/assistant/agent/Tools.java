@@ -85,13 +85,15 @@ public class Tools {
     private final SeriesService series;
     private final MemoService memos;
     private final BlockLogs logs;
+    private final GoalPrompts goalPrompts;
     private final JsonNode definitions;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
                  InterventionService interventions, PlanService plan, PushService push, Jobs jobs, Facts facts,
                  ProactiveService proactive, FixedBlockService fixedBlocks, GoalService goals,
-                 GoalCoverage coverage, SeriesService series, MemoService memos, BlockLogs logs) {
+                 GoalCoverage coverage, SeriesService series, MemoService memos, BlockLogs logs,
+                 GoalPrompts goalPrompts) {
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -114,6 +116,7 @@ public class Tools {
         this.series = series;
         this.memos = memos;
         this.logs = logs;
+        this.goalPrompts = goalPrompts;
         try (InputStream in = new ClassPathResource("assistant/agent/tools.json").getInputStream()) {
             this.definitions = Json.parse(new String(in.readAllBytes(), StandardCharsets.UTF_8));
         } catch (IOException e) {
@@ -335,6 +338,7 @@ public class Tools {
                     in.hasNonNull("waiting_reason") ? text(in, "waiting_reason") : null, in.path("priority").asInt(3));
             changes.record(ctx.turnId, "goal", id, null, changes.snapshot("goal", id));
             savedDeadline(ctx, title, optTime(in, "deadline"));
+            goalPrompts.scheduleDeadline(id, optTime(in, "deadline"));
             coverage.scheduleWaitingCheck(id, optTime(in, "waiting_until"));
             ctx.touchedGoals.add(id);
             return okWithId(id);
@@ -367,6 +371,7 @@ public class Tools {
         changes.record(ctx.turnId, "goal", id, before, changes.snapshot("goal", id));
         if (set.containsKey("deadline") && !java.util.Objects.equals(set.get("deadline"), g.deadline())) {
             savedDeadline(ctx, g.title(), (Instant) set.get("deadline"));
+            goalPrompts.deadlineChanged(id);
         }
         if (in.has("waiting_until")) {
             coverage.scheduleWaitingCheck(id, optTime(in, "waiting_until"));

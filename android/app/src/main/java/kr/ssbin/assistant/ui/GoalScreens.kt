@@ -377,25 +377,25 @@ private fun GoalDetailDialog(goal: GoalDto, onDismiss: () -> Unit, onChanged: ()
 
     val api = ApiClient.get(context)
     when (edit) {
-        GoalEdit.DEADLINE -> {
-            var value by remember { mutableStateOf(localText(goal.deadline, "yyyy-MM-dd")) }
-            AlertDialog(
-                onDismissRequest = { edit = GoalEdit.NONE },
-                title = { Text("마감 변경") },
-                text = { OutlinedTextField(value, { value = it }, label = { Text("YYYY-MM-DD (비우면 마감 없음)") }) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val deadline = if (value.isBlank()) JsonNull else runCatching {
-                            JsonPrimitive(LocalDate.parse(value.trim()).atTime(23, 59)
-                                .atZone(ZoneId.systemDefault()).toOffsetDateTime().toString())
-                        }.getOrNull()
-                        if (deadline == null) { error = "날짜 형식을 확인하세요"; edit = GoalEdit.NONE; return@TextButton }
-                        act { api.patchGoal(goal.id, JsonObject(mapOf("deadline" to deadline))) }
-                    }) { Text("저장") }
-                },
-                dismissButton = { TextButton(onClick = { edit = GoalEdit.NONE }) { Text("취소") } },
-            )
-        }
+        GoalEdit.DEADLINE -> AlertDialog(
+            onDismissRequest = { edit = GoalEdit.NONE },
+            title = { Text("마감 변경") },
+            text = { Text("지금 마감: " + localText(goal.deadline, "M/d(E) HH:mm").ifEmpty { "없음" }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val initial = goal.deadline?.let { runCatching { OffsetDateTime.parse(it).atZoneSameInstant(ZoneId.systemDefault()) }.getOrNull() }
+                    pickDateTime(context, initial) { iso ->
+                        act { api.patchGoal(goal.id, JsonObject(mapOf("deadline" to JsonPrimitive(iso)))) }
+                    }
+                }) { Text("날짜·시각 고르기") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { act { api.patchGoal(goal.id, JsonObject(mapOf("deadline" to JsonNull))) } }) { Text("마감 없애기") }
+                    TextButton(onClick = { edit = GoalEdit.NONE }) { Text("취소") }
+                }
+            },
+        )
         GoalEdit.PRIORITY -> AlertDialog(
             onDismissRequest = { edit = GoalEdit.NONE },
             title = { Text("우선순위 (1이 가장 높음)") },

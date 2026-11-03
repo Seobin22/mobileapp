@@ -55,11 +55,12 @@ public class AgentRunner {
     private final ProactiveService proactive;
     private final GoalCoverage coverage;
     private final Store store;
+    private final GoalPrompts goalPrompts;
     private final String systemTemplate;
 
     public AgentRunner(Tx tx, AssistantDb db, AssistantClock clock, SettingsService settings, ContextBuilder context,
                        Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive,
-                       GoalCoverage coverage, Store store) {
+                       GoalCoverage coverage, Store store, GoalPrompts goalPrompts) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -72,6 +73,7 @@ public class AgentRunner {
         this.proactive = proactive;
         this.coverage = coverage;
         this.store = store;
+        this.goalPrompts = goalPrompts;
         try (InputStream in = new ClassPathResource("assistant/prompts/system.md").getInputStream()) {
             this.systemTemplate = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -253,9 +255,17 @@ public class AgentRunner {
             chat.sendAssistant(text.trim(), "reply", "normal", null, null, false, ctx.interventionId);
         }
         // 되돌려 보내기를 다 써도 누락이면 turn 은 끝내고 30분 뒤 goal_needs_blocks (§3.4-1).
+        // 마감 지남·시간 없음·할 일 모두 끝남은 누락이 아니다: 코드가 한 번만 묻는다(GoalPrompts).
         for (long goalId : ctx.touchedGoals) {
-            store.goal(goalId).filter(g -> coverage.isMissing(g, clock.now()))
-                    .ifPresent(g -> coverage.giveUpForNow(g.id(), turnId));
+            store.goal(goalId).ifPresent(g -> {
+                if (coverage.isMissing(g, clock.now())) {
+                    coverage.giveUpForNow(g.id(), turnId);
+                }
+                goalPrompts.sweep(g);
+            });
+        }
+        if ("morning".equals(trigger)) {
+            goalPrompts.markReminded();
         }
         // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
         if (fromUser && !ctx.savedLines.isEmpty()) {

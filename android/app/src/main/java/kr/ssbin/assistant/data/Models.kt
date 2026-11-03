@@ -116,6 +116,8 @@ data class MessageDto(
     /** v3.1: 시작 화면(풀스크린)에서 오간 말. */
     val intervention_id: Long? = null,
     val source: String? = null,
+    /** 목표 질문(goal_deadline·goal_shortage·goal_done_check)의 목표. */
+    val goal_id: Long? = null,
 )
 
 // ------------------------------------------------------------------ v3 작업물
