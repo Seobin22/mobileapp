@@ -293,6 +293,9 @@ public class ContextBuilder {
             case GoalPrompts.AFTER_DEADLINE_TRIGGER -> "goal_blocks_after_deadline: 목표#" + ref.path("goal_id").asLong()
                     + "의 계획 블록 " + ref.path("blocks") + "이 목표 마감 뒤에 끝난다. 마감 안으로 다시 배치한다(set_schedule)."
                     + " 마감 안에 넣을 수 없으면 사용자에게 알리기만 한다. 목표를 지우거나 마감을 바꾸지 않는다";
+            case "block_result_by_user" -> "block_result_by_user: 사용자가 블록#" + ref.path("block_id").asLong()
+                    + "의 결과를 직접 '" + ref.path("status").asString("") + "'(으)로 바꿨다(전: " + ref.path("before").asString("")
+                    + "). 이미 반영된 사실이다. 할 일의 남은 시간·다음 블록을 맞추고, 필요할 때만 짧게 알린다";
             case "task_changed_by_user" -> "task_changed_by_user: 사용자가 앱에서 할일#" + ref.path("task_id").asLong()
                     + "을 직접 바꿈(" + ref.path("fields").asString("") + "). 이미 반영된 결정이니 시간표를 맞추고 짧게 알린다";
             case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()

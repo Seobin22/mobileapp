@@ -112,6 +112,10 @@ interface AssistantApi {
     @GET("v1/blocks/{id}")
     suspend fun block(@Path("id") id: Long): BlockDetailDto
 
+    /** 블록 결과를 직접 바꾸기 {status: done | partial | missed} */
+    @PATCH("v1/blocks/{id}/result")
+    suspend fun patchBlockResult(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
     @POST("v1/fixed_series")
     suspend fun createSeries(@Body body: SeriesRequest): JsonObject
 

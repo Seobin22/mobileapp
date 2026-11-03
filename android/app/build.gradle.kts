@@ -19,8 +19,8 @@ android {
         applicationId = "kr.ssbin.assistant"
         minSdk = 29
         targetSdk = 35
-        versionCode = 14
-        versionName = "3.2.4"
+        versionCode = 15
+        versionName = "3.2.5"
     }
 
     buildTypes {

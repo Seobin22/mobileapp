@@ -5,6 +5,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -322,7 +327,12 @@ private fun TimeGrid(
     onLongPress: (LocalDateTime) -> Unit,
     onDay: (LocalDate) -> Unit,
 ) {
-    val hourHeight: Dp = if (compact) 60.dp else 72.dp
+    // 두 손가락으로 벌리고 오므리면 시간 높이가 바뀐다(보기마다 기기에 기억).
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("calendar", android.content.Context.MODE_PRIVATE) }
+    val zoomKey = if (compact) "hour_dp_week" else "hour_dp_day"
+    var hourDp by remember(compact) { mutableFloatStateOf(prefs.getFloat(zoomKey, if (compact) 72f else 88f)) }
+    val hourHeight: Dp = hourDp.dp
     val labelWidth = 24.dp
     val density = LocalDensity.current
     val hourPx = with(density) { hourHeight.toPx() }
@@ -340,7 +350,23 @@ private fun TimeGrid(
     val today = LocalDate.now()
     val line = Color(0xFFE9ECEF)
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 4.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 4.dp).pointerInput(compact) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            do {
+                // 스크롤보다 먼저(Initial) 받아서 두 손가락일 때만 확대·축소하고 스크롤은 막는다.
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } >= 2) {
+                    val zoom = event.calculateZoom()
+                    if (zoom != 1f) {
+                        hourDp = (hourDp * zoom).coerceIn(36f, 220f)
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            } while (event.changes.any { it.pressed })
+            prefs.edit().putFloat(zoomKey, hourDp).apply()
+        }
+    }) {
         Row(Modifier.fillMaxWidth().border(1.dp, line).background(Color.White)) {
             Spacer(Modifier.width(labelWidth))
             shown.forEach { date ->
@@ -556,6 +582,37 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
                     if (d.linked_prep.isNotEmpty()) {
                         Text("준비 블록", fontWeight = FontWeight.Bold)
                         d.linked_prep.forEach { p -> Text("· ${mdHm(p.start)} ${p.title} (${p.status})") }
+                    }
+                }
+                // 결과(완료·일부·놓침)는 시작 시각이 지난 블록이면 사용자가 직접 바꿀 수 있다.
+                val started = runCatching { !zoned(d.start).isAfter(ZonedDateTime.now()) }.getOrDefault(false)
+                if (started && d.status != "cancelled") {
+                    Text("결과", fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("done" to "✓ 완료", "partial" to "◐ 일부", "missed" to "✕ 놓침").forEach { (key, label) ->
+                            val selected = d.status == key
+                            Text(
+                                label,
+                                color = if (selected) Color.White else CAL_PINK,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.background(if (selected) CAL_PINK else Color.Transparent)
+                                    .border(1.dp, CAL_PINK)
+                                    .clickable(enabled = !saving && !selected) {
+                                        saving = true
+                                        scope.launch {
+                                            val r = withContext(Dispatchers.IO) {
+                                                runCatching {
+                                                    ApiClient.get(context).patchBlockResult(blockId,
+                                                        JsonObject(mapOf("status" to JsonPrimitive(key))))
+                                                }
+                                            }
+                                            saving = false
+                                            r.onSuccess { onChanged(); reload++ }.onFailure { error = ApiClient.errorMessage(it) }
+                                        }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
                     }
                 }
                 Text("기록", fontWeight = FontWeight.Bold)

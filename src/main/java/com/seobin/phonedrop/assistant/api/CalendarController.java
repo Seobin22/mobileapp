@@ -62,10 +62,14 @@ public class CalendarController {
     private final TurnQueue turns;
     private final Changes changes;
     private final PlanService plan;
+    private final com.seobin.phonedrop.assistant.InterventionService interventions;
+    private final com.seobin.phonedrop.assistant.GoalCoverage coverage;
 
     public CalendarController(Tx tx, AssistantDb db, AssistantClock clock, Store store, TimeUtil time, Timeline timeline,
                               Deadlines deadlines, SeriesService series, MemoService memos, BlockLogs logs,
-                              TurnQueue turns, Changes changes, PlanService plan) {
+                              TurnQueue turns, Changes changes, PlanService plan,
+                              com.seobin.phonedrop.assistant.InterventionService interventions,
+                              com.seobin.phonedrop.assistant.GoalCoverage coverage) {
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -79,6 +83,8 @@ public class CalendarController {
         this.turns = turns;
         this.changes = changes;
         this.plan = plan;
+        this.interventions = interventions;
+        this.coverage = coverage;
     }
 
     // ---------------------------------------------------------------- 달력
@@ -169,6 +175,55 @@ public class CalendarController {
             }
             m.put("logs", logs.ofBlock(id, 100).stream().map(l -> BlockLogs.toMap(l, time)).toList());
             return m;
+        });
+    }
+
+    /** 사용자가 결과를 직접 바꾼 상태 → 기록 문구 */
+    private static final Map<String, String> RESULT_LABELS = Map.of("done", "완료", "partial", "일부 완료", "missed", "놓침");
+
+    /**
+     * 블록 결과를 사용자가 직접 바꾼다 {status: done | partial | missed}(2026-11-03 사용자 요청).
+     * 시작 시각이 지난 블록만. 진행 중 개입·예약은 끝내고, 비서에게 block_result_by_user turn 으로 알린다.
+     */
+    @PatchMapping("/blocks/{id}/result")
+    public Map<String, Object> patchResult(@PathVariable long id, @RequestBody JsonNode body) {
+        String status = body.path("status").asString("");
+        if (!RESULT_LABELS.containsKey(status)) {
+            throw ApiException.badRequest("status 는 done·partial·missed 중 하나입니다");
+        }
+        return tx.run(() -> {
+            Store.Block b = store.block(id).orElseThrow(() -> ApiException.notFound("블록#" + id + "이 없습니다"));
+            Instant now = clock.now();
+            if (b.start().isAfter(now)) {
+                throw ApiException.unprocessable("아직 시작 전인 블록은 결과를 정할 수 없어요");
+            }
+            if ("cancelled".equals(b.status())) {
+                throw ApiException.unprocessable("취소된 블록입니다");
+            }
+            String before = b.status();
+            if (status.equals(before)) {
+                return Map.<String, Object>of("ok", true, "id", id, "status", status);
+            }
+            ObjectNode ref = Json.object();
+            ref.put("block_id", id);
+            ref.put("status", status);
+            ref.put("before", before);
+            long turnId = turns.enqueue("block_result_by_user", ref, TurnQueue.PRIORITY_DEFAULT);
+            JsonNode snapBefore = changes.snapshot("block", id);
+            interventions.cancelRunningForBlock(id);
+            interventions.cancelBlockJobs(id);
+            Instant end = b.actualEnd() != null ? b.actualEnd() : (now.isBefore(b.end()) ? now : b.end());
+            Instant start = "missed".equals(status) ? b.actualStart() : (b.actualStart() != null ? b.actualStart() : b.start());
+            db.update("""
+                            UPDATE blocks SET status = ?, actual_start = ?, actual_end = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?""",
+                    status, start, "missed".equals(status) ? null : end, id);
+            changes.record(turnId, "block", id, snapBefore, changes.snapshot("block", id));
+            logs.add(id, "note", "user", "사용자가 결과를 바꿈: " + RESULT_LABELS.getOrDefault(before, before) + " → "
+                    + RESULT_LABELS.get(status));
+            coverage.onBlockClosed(id);
+            plan.bumpAndSync();
+            return Map.<String, Object>of("ok", true, "id", id, "status", status, "turn_id", turnId);
         });
     }
 
