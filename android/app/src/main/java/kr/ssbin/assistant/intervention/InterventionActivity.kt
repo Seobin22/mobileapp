@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -147,7 +149,7 @@ class InterventionActivity : ComponentActivity() {
     private fun Screen() {
         val current = entity.value
         // 키보드가 떠 있으면 위쪽 안내를 줄여 대화와 입력란이 보이게 한다.
-        val imeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+        val imeVisible = WindowInsets.isImeVisible
         val listState = rememberLazyListState()
         LaunchedEffect(lines.size, thinking.value) {
             val count = lines.size + if (thinking.value) 1 else 0
