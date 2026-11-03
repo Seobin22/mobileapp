@@ -348,3 +348,11 @@ data class SeriesRequest(
     val first_action: String? = null,
     val memo: String? = null,
 )
+
+@Serializable
+data class AppLatestDto(
+    val available: Boolean = false,
+    val version_code: Long = 0,
+    val version_name: String = "",
+    val size: Long = 0,
+)

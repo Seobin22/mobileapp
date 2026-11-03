@@ -130,6 +130,14 @@ interface AssistantApi {
         @Query("from_date") fromDate: String? = null,
     ): JsonObject
 
+    // 앱 안 업데이트
+    @GET("v1/app/latest")
+    suspend fun appLatest(): AppLatestDto
+
+    @retrofit2.http.Streaming
+    @GET("v1/app/apk")
+    suspend fun appApk(): okhttp3.ResponseBody
+
     // AI 모델 선택(제공자 anthropic | factchat)
     @GET("v1/admin/agent")
     suspend fun agent(): JsonObject

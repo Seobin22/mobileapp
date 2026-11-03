@@ -124,6 +124,12 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     var localTick by remember { mutableIntStateOf(0) }
     val allGranted = remember(tick) { Capabilities.allGranted(context) }
     LaunchedEffect(openChat) { if (openChat > 0) tab = 0 }
+    // 앱 안 업데이트: 화면에 돌아올 때마다 서버의 최신 버전을 확인한다.
+    var update by remember { mutableStateOf<kr.ssbin.assistant.data.AppLatestDto?>(null) }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(tick) {
+        update = withContext(Dispatchers.IO) { kr.ssbin.assistant.work.Updater.check(context.applicationContext) }
+    }
 
     Scaffold(
         topBar = {
@@ -150,6 +156,35 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
                     color = Color.White,
                     modifier = Modifier.fillMaxWidth().background(Color(0xFFC92A2A))
                         .clickable { navigate(Screen.Permissions) }.padding(12.dp),
+                )
+            }
+            update?.let { u ->
+                Text(
+                    updateStatus ?: "새 버전 ${u.version_name}이 있어요 · 눌러서 업데이트",
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth().background(Color(0xFF1C7ED6)).clickable {
+                        if (updateStatus != null) return@clickable
+                        val app = context.applicationContext
+                        if (!kr.ssbin.assistant.work.Updater.canInstall(app)) {
+                            updateStatus = null
+                            kr.ssbin.assistant.work.Updater.openInstallPermission(context)
+                            return@clickable
+                        }
+                        updateStatus = "받는 중… 0%"
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    kr.ssbin.assistant.work.Updater.download(app) { pct ->
+                                        scope.launch { updateStatus = "받는 중… $pct%" }
+                                    }
+                                }
+                            }
+                            file.onSuccess {
+                                updateStatus = null
+                                kr.ssbin.assistant.work.Updater.install(context, it)
+                            }.onFailure { updateStatus = "받지 못했어요(" + ApiClient.errorMessage(it) + ") · 다시 눌러 주세요"; kotlinx.coroutines.delay(3000); updateStatus = null }
+                        }
+                    }.padding(12.dp),
                 )
             }
             when (tab) {

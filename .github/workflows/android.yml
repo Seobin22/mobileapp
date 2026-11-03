@@ -44,6 +44,23 @@ jobs:
             echo "::warning::GOOGLE_SERVICES_JSON secret 없음 - FCM 없이 빌드"
           fi
 
+      # 서명 키를 고정해 새 APK 를 기존 앱 위에 덮어 설치(업데이트)할 수 있게 한다. 키는 Secrets 에만 있다.
+      # 디버그 서명은 ~/.android/debug.keystore 를 쓰므로 그 자리에 고정 키를 둔다(별칭 androiddebugkey, 비밀번호 android).
+      - name: Use fixed signing key
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            install -m 700 -d ~/.android
+            printf '%s' "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "fixed=true" >> "$GITHUB_OUTPUT"
+            echo "fixed signing key installed"
+          else
+            echo "fixed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 secret 없음 - 빌드마다 서명이 달라 덮어 설치가 안 된다(서버 업로드도 건너뜀)"
+          fi
+
       - name: Build debug APK
         working-directory: android
         run: |
@@ -71,3 +88,28 @@ jobs:
           name: assistant-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+      # 앱 안 업데이트용: 고정 키로 서명한 APK 만 서버 /root/data/assistant/app/ 에 올린다(앱이 버전을 보고 받아 설치).
+      - name: Publish APK to server
+        if: steps.signing.outputs.fixed == 'true'
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+          SSH_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          code=$(grep -oE 'versionCode = [0-9]+' android/app/build.gradle.kts | grep -oE '[0-9]+')
+          name=$(grep -oE 'versionName = "[^"]+"' android/app/build.gradle.kts | cut -d'"' -f2)
+          printf '{"version_code":%s,"version_name":"%s","commit":"%s"}' "$code" "$name" "$GITHUB_SHA" > version.json
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'mkdir -p /root/data/assistant/app'
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" android/app/build/outputs/apk/debug/app-debug.apk "$SSH_USER@$SSH_HOST:/root/data/assistant/app/app.apk.new"
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" version.json "$SSH_USER@$SSH_HOST:/root/data/assistant/app/version.json.new"
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'cd /root/data/assistant/app && mv app.apk.new app.apk && mv version.json.new version.json'
+          rm -f ~/.ssh/deploy_key
+          echo "published $name ($code)"

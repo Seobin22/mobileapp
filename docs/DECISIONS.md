@@ -244,3 +244,10 @@
 - **아침 상기 1회**: 마감 지남 질문을 전날 이전에 보냈고 상기하지 않았으면 morning 맥락에 "한 번만 짧게 상기"로 표시하고, morning turn 이 끝나면 상기한 것으로 기록. 다른 turn 에는 "다시 묻지 말 것".
 - **배포 시 한 번**(data_migrations `goal_deadline_cleanup_v1`): 마감 지난 목표는 위 질문 흐름, 마감 전인데 마감 뒤에 끝나는 계획 블록이 있는 목표는 `goal_blocks_after_deadline` turn(비서가 마감 안으로 재배치, 목표·마감은 바꾸지 않음). 2026-11-02 운영 DB: 해당 목표 1개(마감 11/2 15:00 지남, 미래 계획 블록 4개).
 - **앱 3.2.1**: 채팅의 목표 질문에 버튼([마감 연장]은 날짜·시각 선택기 → 목표 PATCH, [완료]·[취소]는 목표 탭 API, [할 일 더 있어]는 비서에게 메시지). 처리한 질문은 이 기기에서 버튼을 숨긴다. 목표 탭 마감 변경도 날짜·시각 선택기. 달력 주·일 보기를 표준 시간표(요일 머리줄 고정, 시 눈금, 격자선, 색 칸에 제목·시각·메모, 시간 높이 64/76dp, 8시부터, 지금 시각 선)로 바꿨다.
+
+## 앱 업데이트(덮어 설치)와 앱 안 업데이트 (2026-11-03, 앱 3.2.4)
+
+- 디버그 APK 를 CI 러너마다 새로 만든 키로 서명해서 매번 지우고 다시 깔아야 했다. 고정 키를 Secret `ANDROID_DEBUG_KEYSTORE_B64`(keystore 의 base64)로 두고, android.yml 이 빌드 전에 `~/.android/debug.keystore` 자리에 놓는다(별칭 androiddebugkey, 비밀번호 android — 디버그 기본값이라 키 파일 자체가 비밀). 키 원본은 사용자 PC `C:\Users\ssbin\.assistant-signing\debug.keystore`(저장소 밖). **잃어버리면 다시 지우고 깔아야 하므로 따로 백업한다.**
+- Secret 이 없으면 예전처럼 임시 키로 빌드하고 서버 업로드를 건너뛴다(경고 annotation).
+- 고정 키로 빌드하면 android.yml 이 APK·version.json 을 서버 `/root/data/assistant/app/`에 올린다(기존 SERVER_* Secrets). 서버 `GET /api/assistant/v1/app/latest`·`/app/apk`(API 토큰 필요). 앱은 홈 화면에 돌아올 때마다 확인하고, 새 버전이면 파란 띠 "새 버전 …이 있어요" → 받기 → 설치 화면. 첫 사용 때 '출처를 알 수 없는 앱 설치' 허용 화면이 열린다.
+- 고정 키로 바꾼 첫 APK 는 키가 달라 한 번 더 지우고 깔아야 한다. 그 뒤부터 덮어 설치된다.
