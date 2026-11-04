@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>내 저장소</title>
+
+    <style>
+        body { max-width: 800px; margin: 30px auto; padding: 0 16px; font-family: sans-serif; }
+        section { margin-bottom: 28px; }
+        input { padding: 6px; margin: 4px 0; }
+        .hint { color: #666; font-size: 0.9em; }
+        .error { color: #c92a2a; min-height: 1.2em; }
+        .ok { color: #2b8a3e; min-height: 1.2em; }
+        .hidden { display: none; }
+        #dropZone { border: 2px dashed #aaa; border-radius: 8px; padding: 24px; text-align: center; color: #666; margin: 8px 0; }
+        #dropZone.over { border-color: #1c7ed6; background: #e7f5ff; }
+        ul { list-style: none; padding: 0; }
+        li { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+             padding: 8px 0; border-bottom: 1px solid #eee; }
+        .name { overflow-wrap: anywhere; }
+        .actions { flex: none; }
+        .actions button { margin-left: 4px; }
+    </style>
+</head>
+
+<body>
+    <h1>🔒 내 저장소</h1>
+    <p><a href="/">메인으로</a> · <span class="hint">여기 올린 파일은 본인만 보고 받을 수 있습니다. 메인 화면 공개 목록에는 나오지 않습니다.</span></p>
+
+    <section id="loginBox" class="hidden">
+        <h2>로그인</h2>
+        <form id="loginForm">
+            <div><input id="username" placeholder="아이디" autocomplete="username" required></div>
+            <div><input id="password" type="password" placeholder="비밀번호" autocomplete="current-password" required></div>
+            <button type="submit">로그인</button>
+        </form>
+        <p class="error" id="loginError"></p>
+        <p class="hint">계정이 없으면 <a href="/account.html">회원가입</a></p>
+    </section>
+
+    <div id="driveBox" class="hidden">
+        <p><b id="who"></b> 의 저장소 <button type="button" id="logoutButton">로그아웃</button></p>
+
+        <section>
+            <h2>파일 올리기</h2>
+            <form id="uploadForm">
+                <input id="fileInput" type="file" multiple required>
+                <button type="submit">업로드</button>
+            </form>
+            <div id="dropZone">여기에 파일을 끌어다 놓아도 됩니다</div>
+            <p class="hint">파일 하나 50MB까지, 전체 1GB까지</p>
+            <p id="uploadResult"></p>
+        </section>
+
+        <section>
+            <h2>내 파일 <span class="hint" id="usage"></span></h2>
+            <ul id="fileList"></ul>
+        </section>
+    </div>
+
+    <script>
+        const loginBox = document.getElementById("loginBox");
+        const driveBox = document.getElementById("driveBox");
+        const uploadResult = document.getElementById("uploadResult");
+
+        function size(bytes) {
+            if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + " GB";
+            if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+            if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
+            return bytes + " B";
+        }
+
+        function showResult(text, ok) {
+            uploadResult.textContent = text;
+            uploadResult.className = ok ? "ok" : "error";
+        }
+
+        async function refresh() {
+            const response = await fetch("/api/users/me", { cache: "no-store" });
+            const loggedIn = response.ok;
+            loginBox.classList.toggle("hidden", loggedIn);
+            driveBox.classList.toggle("hidden", !loggedIn);
+            if (loggedIn) {
+                document.getElementById("who").textContent = (await response.json()).username;
+                await loadFiles();
+            }
+        }
+
+        async function loadFiles() {
+            const response = await fetch("/api/private/files", { cache: "no-store" });
+            if (response.status === 401) return refresh();
+            const data = await response.json();
+
+            document.getElementById("usage").textContent =
+                `(${size(data.usedBytes)} / ${size(data.quotaBytes)} 사용)`;
+
+            const list = document.getElementById("fileList");
+            list.innerHTML = "";
+            if (!data.files.length) {
+                const li = document.createElement("li");
+                li.textContent = "아직 올린 파일이 없습니다.";
+                list.append(li);
+                return;
+            }
+
+            for (const f of data.files) {
+                const li = document.createElement("li");
+                const info = document.createElement("div");
+                const name = document.createElement("div");
+                name.className = "name";
+                name.textContent = f.name;
+                const meta = document.createElement("div");
+                meta.className = "hint";
+                meta.textContent = new Date(f.modifiedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) + " · " + size(f.size);
+                info.append(name, meta);
+
+                const actions = document.createElement("div");
+                actions.className = "actions";
+                const down = document.createElement("button");
+                down.textContent = "다운로드";
+                down.onclick = () => {
+                    location.href = "/api/private/files/download?name=" + encodeURIComponent(f.name);
+                };
+                const del = document.createElement("button");
+                del.textContent = "삭제";
+                del.onclick = async () => {
+                    if (!confirm(f.name + " 을(를) 삭제할까요?")) return;
+                    const r = await fetch("/api/private/files?name=" + encodeURIComponent(f.name), { method: "DELETE" });
+                    showResult(await r.text(), r.ok);
+                    loadFiles();
+                };
+                actions.append(down, del);
+                li.append(info, actions);
+                list.append(li);
+            }
+        }
+
+        async function upload(files) {
+            if (!files.length) return;
+            const form = new FormData();
+            for (const f of files) form.append("files", f);
+            showResult("업로드 중...", true);
+            try {
+                const r = await fetch("/api/private/files", { method: "POST", body: form });
+                const text = await r.text();
+                showResult(r.ok ? text : (r.status === 413 && !text ? "파일이 너무 큽니다(파일 하나 50MB까지)." : text || "업로드 실패"), r.ok);
+            } catch (e) {
+                showResult("업로드 실패: " + e.message, false);
+            }
+            document.getElementById("fileInput").value = "";
+            loadFiles();
+        }
+
+        document.getElementById("loginForm").addEventListener("submit", async event => {
+            event.preventDefault();
+            const r = await fetch("/api/users/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    username: document.getElementById("username").value,
+                    password: document.getElementById("password").value
+                })
+            });
+            document.getElementById("loginError").textContent = r.ok ? "" : await r.text();
+            if (r.ok) {
+                document.getElementById("password").value = "";
+                refresh();
+            }
+        });
+
+        document.getElementById("logoutButton").onclick = async () => {
+            await fetch("/api/users/logout", { method: "POST" });
+            refresh();
+        };
+
+        document.getElementById("uploadForm").addEventListener("submit", event => {
+            event.preventDefault();
+            upload(document.getElementById("fileInput").files);
+        });
+
+        const dropZone = document.getElementById("dropZone");
+        dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("over"); });
+        dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
+        dropZone.addEventListener("drop", e => {
+            e.preventDefault();
+            dropZone.classList.remove("over");
+            upload(e.dataTransfer.files);
+        });
+
+        refresh();
+    </script>
+</body>
+</html>

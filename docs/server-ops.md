@@ -16,6 +16,7 @@
 | 관리자 계정 | `/root/data/admin/account` (아이디 + PBKDF2 해시). 처음 시작할 때 아이디 `admin` 과 무작위 비밀번호를 만들어 `/root/data/admin/initial_password`(600)에 적는다. 관리자 페이지에서 바꾸면 그 파일은 지워진다. 비밀번호를 잊으면 `account` 파일을 지우고 앱 재시작 → 새 initial_password |
 | 텍스트 전송 데이터 | H2 파일 `/root/data/texts/texts.mv.db` (실행 비서 DB와 별도, 백업 없음). `GET /texts?date=YYYY-MM-DD`(없으면 오늘, 한국 시간, 메인에서 지운 것 제외), `POST /texts`, `DELETE /texts/{id}`·`DELETE /texts?date=`(누구나, **숨김만**: `deleted_at` 기록). 관리자 페이지는 숨긴 것까지 모두 보이고(점선 표시), 관리자 삭제만 영구 삭제 |
 | 회원 계정 | H2 파일 `/root/data/users/users.mv.db` (다른 DB와 별도, 백업 없음, 2026-11-02). 화면 `seobin.page/account.html`(회원가입·로그인·비밀번호 변경·로그아웃), API `/api/users/` (`signup`, `login`, `logout`, `me`, `password`). 아이디는 소문자 시작 `[a-z][a-z0-9_]{2,19}`(입력은 소문자로 바꿔 저장), 비밀번호 8~100자, PBKDF2 해시. 아이디별 5번 연속 실패 시 5분 잠금, 회원가입 전체 시간당 30개 제한. 관리자 계정과는 별개 |
+| 개인 저장소 | `seobin.page/private.html`, API `/api/private/files`. 회원(`data/users/`) 로그인 후 본인 파일만 `/root/data/private/<회원 id>/` 에 저장. 회원당 1GB, 파일당 50MB. 공개 `uploads/` 와 별개 (2026-11-04) |
 | 파일 아카이브 토큰(선택) | 없으면 다운로드 버튼이 GitHub 화면으로 연결(로그인 필요). `/root/data/check/github_token` 파일(권한 600) 또는 환경변수 `CHECK_GITHUB_TOKEN` 에 `actions:read` 권한 토큰을 넣으면 zip 바로 다운로드. 현재 미설정 |
 | 실행 비서 데이터 | `/root/data/assistant/` (H2 DB, `api_token`, `firebase.json`). 자세한 내용은 [assistant.md](assistant.md) |
 | 실행 비서 자료·지도 키 | v3.3: 올린 자료 `/root/data/assistant/documents/`(매일 `backups/daily-docs-*.zip` 로 같이 백업), 카카오 REST 키 `/root/data/assistant/kakao_api_key`(600, 관리 화면 '지도 연결'이 저장) |
