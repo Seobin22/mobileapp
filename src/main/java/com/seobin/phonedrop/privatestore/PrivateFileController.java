@@ -9,9 +9,17 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
@@ -79,9 +87,14 @@ public class PrivateFileController {
     }
 
     @PostMapping("/files")
-    public String upload(@RequestParam("files") MultipartFile[] files, HttpServletRequest request)
-            throws IOException {
+    public String upload(@RequestParam("files") MultipartFile[] files,
+                         @RequestParam(value = "bundle", defaultValue = "false") boolean bundle,
+                         @RequestParam(value = "bundleName", required = false) String bundleName,
+                         HttpServletRequest request) throws IOException {
         Path dir = userDir(session.require(request));
+        if (bundle) {
+            return uploadBundle(dir, files, bundleName);
+        }
         long used = usedBytes(dir);
         int saved = 0;
 
@@ -89,9 +102,7 @@ public class PrivateFileController {
             if (file.isEmpty() || file.getOriginalFilename() == null) {
                 continue;
             }
-            String original = file.getOriginalFilename();
-            // 브라우저가 경로를 붙여 보내도 마지막 파일 이름만 쓴다.
-            Path target = safePath(dir, original.substring(Math.max(original.lastIndexOf('/'), original.lastIndexOf('\\')) + 1));
+            Path target = safePath(dir, baseName(file.getOriginalFilename()));
             long replaced = Files.isRegularFile(target) ? Files.size(target) : 0;
 
             if (used - replaced + file.getSize() > QUOTA_BYTES) {
@@ -116,6 +127,82 @@ public class PrivateFileController {
         return saved + "개 파일을 내 저장소에 저장했습니다.";
     }
 
+    /** 한 번에 올린 파일들을 zip 하나로 묶어 저장한다. 디스크로 바로 써서 메모리를 거의 쓰지 않는다. */
+    private String uploadBundle(Path dir, MultipartFile[] files, String bundleName) throws IOException {
+        List<MultipartFile> parts = Stream.of(files)
+                .filter(f -> !f.isEmpty() && f.getOriginalFilename() != null)
+                .toList();
+        if (parts.isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "저장할 파일이 없습니다.");
+        }
+
+        Path target = safePath(dir, bundleFileName(bundleName));
+        long replaced = Files.isRegularFile(target) ? Files.size(target) : 0;
+        long used = usedBytes(dir) - replaced;
+        long total = parts.stream().mapToLong(MultipartFile::getSize).sum();
+        if (used + total > QUOTA_BYTES) {
+            throw new ResponseStatusException(CONTENT_TOO_LARGE, "저장 공간(1GB)이 부족합니다.");
+        }
+
+        Path tmp = Files.createTempFile(dir, ".upload-", ".tmp");
+        try {
+            Set<String> names = new HashSet<>();
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(tmp), StandardCharsets.UTF_8)) {
+                for (MultipartFile part : parts) {
+                    zip.putNextEntry(new ZipEntry(uniqueName(names, baseName(part.getOriginalFilename()))));
+                    try (InputStream in = part.getInputStream()) {
+                        in.transferTo(zip);
+                    }
+                    zip.closeEntry();
+                }
+            }
+            if (used + Files.size(tmp) > QUOTA_BYTES) {
+                throw new ResponseStatusException(CONTENT_TOO_LARGE, "저장 공간(1GB)이 부족합니다.");
+            }
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+        return parts.size() + "개 파일을 " + target.getFileName() + " 로 묶어 저장했습니다.";
+    }
+
+    /** 묶음 이름: 입력한 이름(없으면 "묶음-날짜-시각") 뒤에 .zip. */
+    static String bundleFileName(String requested) {
+        String name = requested == null ? "" : baseName(requested.trim());
+        if (name.isBlank()) {
+            name = "묶음-" + LocalDateTime.now(ZoneId.of("Asia/Seoul")).format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        }
+        if (!name.toLowerCase(Locale.ROOT).endsWith(".zip")) {
+            name += ".zip";
+        }
+        return name;
+    }
+
+    /** zip 안에서 같은 이름이 겹치면 "이름 (2).확장자" 처럼 바꾼다. */
+    private static String uniqueName(Set<String> used, String name) {
+        if (name.isBlank() || name.equals(".") || name.equals("..")) {
+            name = "file";
+        }
+        String candidate = name;
+        int dot = name.lastIndexOf('.');
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        for (int i = 2; !used.add(candidate.toLowerCase(Locale.ROOT)); i++) {
+            candidate = stem + " (" + i + ")" + ext;
+        }
+        return candidate;
+    }
+
+    /** filename* 를 모르는 브라우저용 이름: 한글 등은 _ 로 바꾸고 확장자는 남긴다. */
+    private static String asciiFallback(String name) {
+        return name.replaceAll("[^A-Za-z0-9._ -]", "_");
+    }
+
+    /** 브라우저가 경로를 붙여 보내도 마지막 파일 이름만 쓴다. */
+    private static String baseName(String original) {
+        return original.substring(Math.max(original.lastIndexOf('/'), original.lastIndexOf('\\')) + 1);
+    }
+
     @GetMapping("/files/download")
     public ResponseEntity<Resource> download(@RequestParam("name") String name, HttpServletRequest request)
             throws IOException {
@@ -124,7 +211,8 @@ public class PrivateFileController {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .contentLength(Files.size(file))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encoded)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + asciiFallback(file.getFileName().toString())
+                        + "\"; filename*=UTF-8''" + encoded)
                 .header("X-Content-Type-Options", "nosniff")
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(new FileSystemResource(file));

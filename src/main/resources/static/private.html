@@ -47,6 +47,12 @@
             <form id="uploadForm">
                 <input id="fileInput" type="file" multiple required>
                 <button type="submit">업로드</button>
+                <div>
+                    <label><input type="checkbox" id="bundleCheck"> 묶어서 올리기 (zip 하나로 저장해 한 번에 다운로드)</label>
+                </div>
+                <div id="bundleNameBox" class="hidden">
+                    <input id="bundleName" placeholder="묶음 이름 (비우면 묶음-날짜-시각)" maxlength="100">
+                </div>
             </form>
             <div id="dropZone">여기에 파일을 끌어다 놓아도 됩니다</div>
             <p class="hint">파일 하나 50MB까지, 전체 1GB까지</p>
@@ -140,6 +146,10 @@
             if (!files.length) return;
             const form = new FormData();
             for (const f of files) form.append("files", f);
+            if (document.getElementById("bundleCheck").checked) {
+                form.append("bundle", "true");
+                form.append("bundleName", document.getElementById("bundleName").value);
+            }
             showResult("업로드 중...", true);
             try {
                 const r = await fetch("/api/private/files", { method: "POST", body: form });
@@ -177,6 +187,10 @@
         document.getElementById("uploadForm").addEventListener("submit", event => {
             event.preventDefault();
             upload(document.getElementById("fileInput").files);
+        });
+
+        document.getElementById("bundleCheck").addEventListener("change", e => {
+            document.getElementById("bundleNameBox").classList.toggle("hidden", !e.target.checked);
         });
 
         const dropZone = document.getElementById("dropZone");

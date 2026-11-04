@@ -65,9 +65,9 @@ class PrivateStoreTest {
         users.signup(new Credentials("bob", "password-1"), bob);
 
         assertThat(status(() -> drive.list(new MockHttpServletRequest()))).isEqualTo("401");
-        assertThat(status(() -> drive.upload(file("a.txt", "x"), new MockHttpServletRequest()))).isEqualTo("401");
+        assertThat(status(() -> drive.upload(file("a.txt", "x"), false, null, new MockHttpServletRequest()))).isEqualTo("401");
 
-        drive.upload(file("secret.txt", "alice data"), alice);
+        drive.upload(file("secret.txt", "alice data"), false, null, alice);
         assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("secret.txt");
         assertThat(files(drive.list(bob))).isEmpty();
         assertThat(status(() -> drive.download("secret.txt", bob))).isEqualTo("404");
@@ -85,6 +85,40 @@ class PrivateStoreTest {
     }
 
     @Test
+    void bundleStoresAllFilesInOneZipOnlyWhenChecked() throws Exception {
+        PrivateFileController drive = new PrivateFileController(session, dir.toString());
+        MockHttpServletRequest alice = new MockHttpServletRequest();
+        users.signup(new Credentials("alice", "password-1"), alice);
+        MultipartFile[] three = {
+                new MockMultipartFile("files", "a.txt", "text/plain", "A".getBytes(StandardCharsets.UTF_8)),
+                new MockMultipartFile("files", "사진.jpg", "image/jpeg", "B".getBytes(StandardCharsets.UTF_8)),
+                new MockMultipartFile("files", "dir/a.txt", "text/plain", "C".getBytes(StandardCharsets.UTF_8)) };
+
+        drive.upload(three, true, "여행", alice);
+        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("여행.zip");
+
+        Map<String, String> entries = new java.util.LinkedHashMap<>();
+        try (var zip = new java.util.zip.ZipInputStream(
+                drive.download("여행.zip", alice).getBody().getInputStream(), StandardCharsets.UTF_8)) {
+            for (var e = zip.getNextEntry(); e != null; e = zip.getNextEntry()) {
+                entries.put(e.getName(), new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(entries).containsExactly(
+                Map.entry("a.txt", "A"), Map.entry("사진.jpg", "B"), Map.entry("a (2).txt", "C"));
+
+        // 체크하지 않으면 기존처럼 파일마다 따로 저장된다.
+        drive.upload(three, false, "무시됨", alice);
+        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name)
+                .containsExactlyInAnyOrder("여행.zip", "a.txt", "사진.jpg");
+
+        // 이름을 비우면 자동 이름.
+        drive.upload(three, true, " ", alice);
+        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name)
+                .anyMatch(n -> n.startsWith("묶음-") && n.endsWith(".zip"));
+    }
+
+    @Test
     void rejectsPathTricks() throws Exception {
         PrivateFileController drive = new PrivateFileController(session, dir.toString());
         MockHttpServletRequest alice = new MockHttpServletRequest();
@@ -95,7 +129,7 @@ class PrivateStoreTest {
             assertThat(status(() -> drive.delete(bad, alice))).as(bad).isEqualTo("400");
         }
         // 브라우저가 경로를 붙여 보내도 파일 이름만 쓴다.
-        drive.upload(file("../../evil.txt", "x"), alice);
+        drive.upload(file("../../evil.txt", "x"), false, null, alice);
         assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("evil.txt");
         assertThat(Files.exists(dir.resolve("evil.txt"))).isFalse();
     }
