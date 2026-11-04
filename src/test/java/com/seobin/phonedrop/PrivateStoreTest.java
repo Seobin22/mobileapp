@@ -84,38 +84,62 @@ class PrivateStoreTest {
         assertThat(files(drive.list(alice))).isEmpty();
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<PrivateFileController.BundleInfo> bundles(Map<String, Object> listing) {
+        return (List<PrivateFileController.BundleInfo>) listing.get("bundles");
+    }
+
+    private static String body(org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> r)
+            throws Exception {
+        return new String(r.getBody().getContentAsByteArray(), StandardCharsets.UTF_8);
+    }
+
     @Test
-    void bundleStoresAllFilesInOneZipOnlyWhenChecked() throws Exception {
+    void bundleKeepsFilesSeparateInsideOneBundleOnlyWhenChecked() throws Exception {
         PrivateFileController drive = new PrivateFileController(session, dir.toString());
         MockHttpServletRequest alice = new MockHttpServletRequest();
+        MockHttpServletRequest bob = new MockHttpServletRequest();
         users.signup(new Credentials("alice", "password-1"), alice);
+        users.signup(new Credentials("bob", "password-1"), bob);
         MultipartFile[] three = {
                 new MockMultipartFile("files", "a.txt", "text/plain", "A".getBytes(StandardCharsets.UTF_8)),
                 new MockMultipartFile("files", "사진.jpg", "image/jpeg", "B".getBytes(StandardCharsets.UTF_8)),
                 new MockMultipartFile("files", "dir/a.txt", "text/plain", "C".getBytes(StandardCharsets.UTF_8)) };
 
         drive.upload(three, true, "여행", alice);
-        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("여행.zip");
+        Map<String, Object> listing = drive.list(alice);
+        assertThat(files(listing)).isEmpty();
+        assertThat(bundles(listing)).extracting(PrivateFileController.BundleInfo::name).containsExactly("여행");
+        assertThat(bundles(listing).get(0).files()).extracting(PrivateFileController.FileInfo::name)
+                .containsExactlyInAnyOrder("a.txt", "사진.jpg", "a (2).txt");
+        assertThat(listing.get("usedBytes")).isEqualTo(3L);
 
-        Map<String, String> entries = new java.util.LinkedHashMap<>();
-        try (var zip = new java.util.zip.ZipInputStream(
-                drive.download("여행.zip", alice).getBody().getInputStream(), StandardCharsets.UTF_8)) {
-            for (var e = zip.getNextEntry(); e != null; e = zip.getNextEntry()) {
-                entries.put(e.getName(), new String(zip.readAllBytes(), StandardCharsets.UTF_8));
-            }
-        }
-        assertThat(entries).containsExactly(
-                Map.entry("a.txt", "A"), Map.entry("사진.jpg", "B"), Map.entry("a (2).txt", "C"));
+        // 묶음 안의 파일은 압축 없이 낱개로 받는다.
+        assertThat(body(drive.downloadFromBundle("여행", "a.txt", alice))).isEqualTo("A");
+        assertThat(body(drive.downloadFromBundle("여행", "a (2).txt", alice))).isEqualTo("C");
+        assertThat(status(() -> drive.downloadFromBundle("여행", "a.txt", bob))).isEqualTo("404");
+        assertThat(status(() -> drive.downloadFromBundle("여행", "../a.txt", alice))).isEqualTo("400");
+        assertThat(status(() -> drive.download("여행", alice))).isEqualTo("404");
+
+        // 같은 이름으로 다시 묶으면 덮어쓰지 않고 새 묶음을 만든다.
+        drive.upload(three, true, "여행", alice);
+        assertThat(bundles(drive.list(alice))).extracting(PrivateFileController.BundleInfo::name)
+                .containsExactlyInAnyOrder("여행", "여행 (2)");
 
         // 체크하지 않으면 기존처럼 파일마다 따로 저장된다.
         drive.upload(three, false, "무시됨", alice);
         assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name)
-                .containsExactlyInAnyOrder("여행.zip", "a.txt", "사진.jpg");
+                .containsExactlyInAnyOrder("a.txt", "사진.jpg");
 
         // 이름을 비우면 자동 이름.
         drive.upload(three, true, " ", alice);
-        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name)
-                .anyMatch(n -> n.startsWith("묶음-") && n.endsWith(".zip"));
+        assertThat(bundles(drive.list(alice))).extracting(PrivateFileController.BundleInfo::name)
+                .anyMatch(n -> n.startsWith("묶음-"));
+
+        drive.deleteBundle("여행", alice);
+        assertThat(bundles(drive.list(alice))).extracting(PrivateFileController.BundleInfo::name)
+                .doesNotContain("여행");
+        assertThat(status(() -> drive.deleteBundle("여행", alice))).isEqualTo("404");
     }
 
     @Test

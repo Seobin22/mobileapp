@@ -20,7 +20,11 @@
              padding: 8px 0; border-bottom: 1px solid #eee; }
         .name { overflow-wrap: anywhere; }
         .actions { flex: none; }
-        .actions button { margin-left: 4px; }
+        .actions button { margin: 2px 0 2px 4px; }
+        .bundle { display: block; }
+        .bundle > .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .bundle ul { margin: 6px 0 0 16px; }
+        .bundle li { padding: 6px 0; }
     </style>
 </head>
 
@@ -48,7 +52,7 @@
                 <input id="fileInput" type="file" multiple required>
                 <button type="submit">업로드</button>
                 <div>
-                    <label><input type="checkbox" id="bundleCheck"> 묶어서 올리기 (zip 하나로 저장해 한 번에 다운로드)</label>
+                    <label><input type="checkbox" id="bundleCheck"> 묶어서 올리기 (나중에 묶음 다운로드로 한 번에 받기)</label>
                 </div>
                 <div id="bundleNameBox" class="hidden">
                     <input id="bundleName" placeholder="묶음 이름 (비우면 묶음-날짜-시각)" maxlength="100">
@@ -103,43 +107,116 @@
 
             const list = document.getElementById("fileList");
             list.innerHTML = "";
-            if (!data.files.length) {
+            if (!data.files.length && !data.bundles.length) {
                 const li = document.createElement("li");
                 li.textContent = "아직 올린 파일이 없습니다.";
                 list.append(li);
                 return;
             }
 
-            for (const f of data.files) {
-                const li = document.createElement("li");
-                const info = document.createElement("div");
-                const name = document.createElement("div");
-                name.className = "name";
-                name.textContent = f.name;
-                const meta = document.createElement("div");
-                meta.className = "hint";
-                meta.textContent = new Date(f.modifiedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) + " · " + size(f.size);
-                info.append(name, meta);
+            const items = [
+                ...data.bundles.map(b => ({ bundle: b, at: b.modifiedAt })),
+                ...data.files.map(f => ({ file: f, at: f.modifiedAt }))
+            ].sort((a, b) => b.at.localeCompare(a.at));
 
-                const actions = document.createElement("div");
-                actions.className = "actions";
-                const down = document.createElement("button");
-                down.textContent = "다운로드";
-                down.onclick = () => {
-                    location.href = "/api/private/files/download?name=" + encodeURIComponent(f.name);
-                };
-                const del = document.createElement("button");
-                del.textContent = "삭제";
-                del.onclick = async () => {
-                    if (!confirm(f.name + " 을(를) 삭제할까요?")) return;
-                    const r = await fetch("/api/private/files?name=" + encodeURIComponent(f.name), { method: "DELETE" });
-                    showResult(await r.text(), r.ok);
-                    loadFiles();
-                };
-                actions.append(down, del);
-                li.append(info, actions);
-                list.append(li);
+            for (const item of items) {
+                list.append(item.bundle ? bundleRow(item.bundle) : fileRow(item.file, null));
             }
+        }
+
+        function when(iso) {
+            return new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+        }
+
+        function button(text, onclick) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = text;
+            b.onclick = onclick;
+            return b;
+        }
+
+        function infoBox(title, meta) {
+            const info = document.createElement("div");
+            const name = document.createElement("div");
+            name.className = "name";
+            name.textContent = title;
+            const m = document.createElement("div");
+            m.className = "hint";
+            m.textContent = meta;
+            info.append(name, m);
+            return info;
+        }
+
+        function fileUrl(f, bundle) {
+            return bundle
+                ? "/api/private/bundles/download?bundle=" + encodeURIComponent(bundle) + "&name=" + encodeURIComponent(f.name)
+                : "/api/private/files/download?name=" + encodeURIComponent(f.name);
+        }
+
+        function startDownload(url) {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "";
+            document.body.append(a);
+            a.click();
+            a.remove();
+        }
+
+        async function remove(url, question) {
+            if (!confirm(question)) return;
+            const r = await fetch(url, { method: "DELETE" });
+            showResult(await r.text(), r.ok);
+            loadFiles();
+        }
+
+        function fileRow(f, bundle) {
+            const li = document.createElement("li");
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            actions.append(button("다운로드", () => startDownload(fileUrl(f, bundle))));
+            if (!bundle) {
+                actions.append(button("삭제", () => remove(
+                    "/api/private/files?name=" + encodeURIComponent(f.name), f.name + " 을(를) 삭제할까요?")));
+            }
+            li.append(infoBox(f.name, when(f.modifiedAt) + " · " + size(f.size)), actions);
+            return li;
+        }
+
+        function bundleRow(b) {
+            const li = document.createElement("li");
+            li.className = "bundle";
+            const row = document.createElement("div");
+            row.className = "row";
+            const inner = document.createElement("ul");
+            inner.className = "hidden";
+            b.files.forEach(f => inner.append(fileRow(f, b.name)));
+
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            const all = button("묶음 다운로드", async () => {
+                all.disabled = true;
+                for (let i = 0; i < b.files.length; i++) {
+                    showResult(`${b.name}: ${i + 1}/${b.files.length} 다운로드 중 (${b.files[i].name})`, true);
+                    startDownload(fileUrl(b.files[i], b.name));
+                    // 브라우저가 연속 다운로드를 하나씩 받도록 간격을 둔다.
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                showResult(`${b.name}: ${b.files.length}개 파일 다운로드를 시작했습니다. `
+                    + "브라우저가 '여러 파일 다운로드'를 물으면 허용해 주세요.", true);
+                all.disabled = false;
+            });
+            const toggle = button("펼치기", () => {
+                const open = inner.classList.toggle("hidden");
+                toggle.textContent = open ? "펼치기" : "접기";
+            });
+            actions.append(all, toggle, button("삭제", () => remove(
+                "/api/private/bundles?bundle=" + encodeURIComponent(b.name),
+                `묶음 '${b.name}' 과 안의 파일 ${b.files.length}개를 모두 삭제할까요?`)));
+
+            row.append(infoBox("📦 " + b.name, `묶음 · ${b.files.length}개 · ${when(b.modifiedAt)} · ${size(b.size)}`), actions);
+            li.append(row, inner);
+            return li;
         }
 
         async function upload(files) {
