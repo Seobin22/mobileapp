@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 연결 블록 사용 현황 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서 이동 블록·lead 정리 결과 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,11 +41,10 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'LINKED_ALL' AS q, COUNT(*) AS n, SUM(CASE WHEN status <> 'cancelled' THEN 1 ELSE 0 END) AS not_cancelled FROM blocks WHERE linked_fixed_block_id IS NOT NULL;
-SELECT 'LINKED_LIST' AS q, b.id, FORMATDATETIME(b.created_at, 'MM-dd HH:mm', 'en', 'Asia/Seoul') AS made, FORMATDATETIME(b.start_at, 'MM-dd HH:mm', 'en', 'Asia/Seoul') AS starts, b.status, b.linked_fixed_block_id AS fixed_id, FORMATDATETIME(f.start_at, 'MM-dd HH:mm', 'en', 'Asia/Seoul') AS fixed_starts FROM blocks b LEFT JOIN blocks f ON f.id = b.linked_fixed_block_id WHERE b.linked_fixed_block_id IS NOT NULL ORDER BY b.id DESC LIMIT 15;
-SELECT 'FIXED14' AS q, COUNT(*) AS fixed_next_14d, SUM(CASE WHEN memo <> '' THEN 1 ELSE 0 END) AS with_once_memo, SUM(CASE WHEN location IS NOT NULL AND location <> '' THEN 1 ELSE 0 END) AS with_location, SUM(CASE WHEN series_id IS NULL THEN 1 ELSE 0 END) AS single FROM blocks WHERE kind = 'fixed' AND status IN ('planned','nudging') AND start_at > CURRENT_TIMESTAMP AND start_at < DATEADD('DAY', 14, CURRENT_TIMESTAMP);
-SELECT 'SERIESMEMO' AS q, COUNT(*) AS active, SUM(CASE WHEN memo <> '' THEN 1 ELSE 0 END) AS with_memo FROM fixed_series WHERE active = TRUE;
-SELECT 'TURNS' AS q, trigger, COUNT(*) AS n, SUM(CASE WHEN tool_names LIKE '%set_schedule%' THEN 1 ELSE 0 END) AS with_set_schedule FROM turns WHERE started_at >= TIMESTAMP WITH TIME ZONE '2026-11-03 00:00:00+09:00' GROUP BY trigger ORDER BY n DESC;
+SELECT 'MIG' AS q, name, result FROM data_migrations WHERE name = 'travel_lead_v1';
+SELECT 'TRAVEL' AS q, travel_direction, status, COUNT(*) AS n, SUM(CASE WHEN travel_tight_min > 0 THEN 1 ELSE 0 END) AS tight FROM blocks WHERE link_role = 'travel' GROUP BY travel_direction, status;
+SELECT 'FIXEDCOORD' AS q, COUNT(*) AS next14, SUM(CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END) AS with_coords FROM blocks WHERE kind = 'fixed' AND status = 'planned' AND start_at > CURRENT_TIMESTAMP AND start_at < DATEADD('DAY', 14, CURRENT_TIMESTAMP);
+SELECT 'HOME' AS q, key, CASE WHEN value = 'null' OR value = '""' THEN 'empty' ELSE 'set' END AS v FROM settings WHERE key IN ('travel.home_lat', 'travel.home_address');
 SQL
 
 while IFS= read -r q; do
