@@ -142,6 +142,10 @@ interface AssistantApi {
     @PUT("v1/blocks/{id}/travel")
     suspend fun setTravel(@Path("id") id: Long, @Body body: JsonObject): JsonObject
 
+    /** v3.4: 이동 블록의 이동 시간만 고치기 {minutes: 숫자 | null(자동으로 되돌리기)} */
+    @PATCH("v1/travel_blocks/{id}")
+    suspend fun patchTravelBlock(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
     @GET("v1/app/map_key")
     suspend fun mapKey(): JsonObject
 

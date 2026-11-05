@@ -113,6 +113,11 @@ public class Timeline {
                     item.put("memo", fullMemo(b));
                 }
                 item.put("linked_fixed_block_id", b.linkedFixedBlockId());
+                if (b.travel()) {
+                    item.put("link_role", "travel");
+                    item.put("travel_direction", b.travelDirection());
+                    item.put("travel_tight_min", b.travelTightMin());
+                }
                 items.add(item);
                 if (List.of("planned", "nudging", "started").contains(b.status())) {
                     busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd()));

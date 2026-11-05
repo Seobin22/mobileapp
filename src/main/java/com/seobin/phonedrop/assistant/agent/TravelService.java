@@ -66,10 +66,11 @@ public class TravelService {
     private final BlockLogs logs;
     private final Jobs jobs;
     private final Tx tx;
+    private final TravelBlocks travelBlocks;
     private final boolean enabled;
 
     public TravelService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
-                         MapApi map, BlockLogs logs, Jobs jobs, Tx tx,
+                         MapApi map, BlockLogs logs, Jobs jobs, Tx tx, TravelBlocks travelBlocks,
                          @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
@@ -80,6 +81,7 @@ public class TravelService {
         this.logs = logs;
         this.jobs = jobs;
         this.tx = tx;
+        this.travelBlocks = travelBlocks;
         this.enabled = enabled;
         jobs.register(JOB, this::onDaily);
     }
@@ -91,6 +93,11 @@ public class TravelService {
                 db.update("UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE status = 'scheduled' AND type = ?",
                         JOB);
                 jobs.schedule(JOB, 0, nextRun(clock.now()), null);
+                // v3.4: 이동 블록을 앞으로 14일 만들고, 한 번만 lead 를 '준비 시간'으로 정리한 뒤 다시 맞춘다.
+                recomputeAhead(14);
+                if (travelBlocks.migrateLeads().isPresent()) {
+                    recomputeAhead(14);
+                }
             });
         }
     }
@@ -104,6 +111,7 @@ public class TravelService {
     private boolean onDaily(Jobs.Job job) {
         jobs.schedule(JOB, 0, nextRun(clock.now().plusSeconds(60)), null);
         checkAhead(7);
+        recomputeAhead(7); // 이동 블록 점검(v3.4 §2.1)
         return true;
     }
 
@@ -283,6 +291,12 @@ public class TravelService {
                 save(b.id(), "depart", here, next, mode, b.end());
             }
         }
+        // v3.4: 이동 블록. 이미 끝낸(done·partial) 고정 일정도 출발지·귀가 계산에 넣는다.
+        List<Store.Block> forTravel = db.jdbc().sql("""
+                        SELECT * FROM blocks WHERE kind = 'fixed' AND status IN ('planned', 'nudging', 'started', 'done', 'partial')
+                        AND lat IS NOT NULL AND lng IS NOT NULL AND start_at >= ? AND start_at < ? ORDER BY start_at, id""")
+                .param(AssistantDb.ts(from)).param(AssistantDb.ts(to)).query(Store::block).list();
+        travelBlocks.sync(day, forTravel, home == null ? null : new double[]{home.lat(), home.lng()});
     }
 
     private void save(long blockId, String direction, Point from, Point to, String mode, Instant at) {
@@ -506,6 +520,19 @@ public class TravelService {
                 blockId, direction, from, to, old != null ? old.mode() : settings.getString("travel.mode"), minutes,
                 old != null ? old.distanceM() : 0, clock.now());
         logs.add(blockId, "note", "user", ("arrive".equals(direction) ? "오는 길 " : "가는 길 ") + minutes + "분으로 직접 고침");
+        computeDay(time.local(b.start()).toLocalDate()); // 이동 블록도 맞춘다(v3.4)
+    }
+
+    /** v3.4 §8: 이동 블록의 이동 시간을 직접 고치거나(null 이면 되돌리기) 그날을 다시 계산한다. */
+    public Store.Block setTravelBlockMinutes(long travelId, Integer minutes) {
+        Store.Block t = travelBlocks.setUserMinutes(travelId, minutes);
+        Store.Block target = t.linkedFixedBlockId() == null ? t : store.block(t.linkedFixedBlockId()).orElse(t);
+        computeDay(time.local(target.start()).toLocalDate());
+        return store.block(travelId).orElseThrow();
+    }
+
+    public Map<String, Object> travelInfo(Store.Block t) {
+        return travelBlocks.info(t);
     }
 
     /** 장소 탭: 앞으로 days 일의 활성 고정 일정과 장소·바로 앞 장소에서 오는 길. */
@@ -571,6 +598,12 @@ public class TravelService {
     }
 
     public List<Warning> warnings(Instant from, Instant to) {
+        // v3.4 §3: '이동 불가능' 대신 이동 블록의 '이동 촉박 · N분 부족'
+        return travelBlocks.tightWarnings(from, to);
+    }
+
+    /** v3.3 의 '이동 불가능' 경고(이동 블록이 없던 때). 지금은 쓰지 않는다. */
+    List<Warning> legacyWarnings(Instant from, Instant to) {
         List<Warning> out = new ArrayList<>();
         List<Store.Block> located = fixedBetween(from, to).stream().filter(Store.Block::hasCoords).toList();
         for (int i = 1; i < located.size(); i++) {

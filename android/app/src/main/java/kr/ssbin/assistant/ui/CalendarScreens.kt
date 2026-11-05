@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -466,6 +467,10 @@ private fun cellState(b: CalendarBlock): CellState {
  */
 @Composable
 private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
+    if (b.link_role == "travel") {
+        TravelCell(b, compact, modifier)
+        return
+    }
     val fixed = b.kind == "fixed"
     val base = if (fixed) Color(0xFF7C8DA6) else goalColor(b.goal_color.ifBlank { null })
     val state = cellState(b)
@@ -517,6 +522,33 @@ private fun BlockCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
     }
 }
 
+/** v3.4 §8: 이동 블록 — 점선 테두리, 🚌, 촉박이면 주황 + "N분 부족", 귀가는 연한 색. */
+@Composable
+private fun TravelCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
+    val tight = (b.travel_tight_min ?: 0) > 0
+    val home = b.travel_direction == "home"
+    val color = when {
+        tight -> Color(0xFFF76707)
+        home -> Color(0xFFADB5BD)
+        else -> Color(0xFF4C6EF5)
+    }
+    val label = b.title.replace(Regex("^(이동|귀가): "), "")
+    Column(
+        modifier.background(color.copy(alpha = 0.10f))
+            .drawBehind {
+                drawRect(color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx(),
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(8f, 6f))))
+            }
+            .padding(horizontal = 3.dp, vertical = 2.dp),
+    ) {
+        Text((if (home) "🏠 " else "🚌 ") + hm(b.start) + " " + label, fontSize = if (compact) 9.sp else 12.sp,
+            color = color, fontWeight = FontWeight.Bold, maxLines = if (compact) 3 else 2, overflow = TextOverflow.Ellipsis,
+            lineHeight = if (compact) 11.sp else 15.sp)
+        if (tight) Text("${b.travel_tight_min}분 부족", fontSize = if (compact) 8.sp else 11.sp, color = color,
+            fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
 // ------------------------------------------------------------------ 블록 상세 (§8.3)
 
 @Composable
@@ -552,13 +584,22 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
                 }
                 return@AlertDialog
             }
+            if (d.link_role == "travel") {
+                TravelDetail(d, onChanged = { onChanged(); reload++ })
+                return@AlertDialog
+            }
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 val fixed = d.kind == "fixed"
                 Text((if (fixed) "고정" else "계획") + (if (d.series != null) " · 🔁 " + d.series.rule_text else "") +
                     " · " + mdHm(d.start) + "–" + hm(d.end))
                 if (d.goal_label.isNotBlank()) GoalChip(d.goal_label, d.goal_color)
                 d.location?.let { Text("장소: $it" + (d.place_name?.takeIf { p -> p != it }?.let { p -> " → $p" } ?: "")) }
-                if (fixed && d.lead_minutes > 0) Text("출발·준비 ${d.lead_minutes}분 전")
+                if (fixed && d.lead_minutes > 0) Text("출발 전 준비 ${d.lead_minutes}분(이동 시간 제외)")
+                if (fixed) d.travel_blocks.forEach { t ->
+                    Text((if (t.direction == "home") "🏠 " else "🚌 ") + hm(t.start) + "–" + hm(t.end) + " " +
+                        t.title.replace(Regex("^(이동|귀가): "), "") + ((t.tight_min ?: 0).takeIf { it > 0 }?.let { " · ${it}분 부족" } ?: ""),
+                        color = if ((t.tight_min ?: 0) > 0) Color(0xFFF76707) else Color(0xFF4C6EF5))
+                }
                 if (fixed) {
                     Text("방해 허용: " + interruptIcon(d.interrupt_level) + interruptText(d.interrupt_level) +
                         if (d.interrupt_set_by == "assistant") " (비서가 정함)" else "")
@@ -646,7 +687,8 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
         },
         confirmButton = {
             val d = detail
-            val editable = d != null && (d.status in listOf("planned", "nudging") || (d.kind == "fixed" && d.in_progress))
+            val editable = d != null && d.link_role != "travel" &&
+                (d.status in listOf("planned", "nudging") || (d.kind == "fixed" && d.in_progress))
             if (d != null && editable && d.kind == "fixed") {
                 TextButton(onClick = onEdit) { Text("수정·삭제") }
             } else if (d != null && editable) {
@@ -661,6 +703,57 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
         detail?.let { d ->
             PlannedBlockDialog(TimelineItem(kind = "planned_block", start = d.start, end = d.end, id = d.id, title = d.title),
                 onDismiss = { askPlanned = false }, onSent = { askPlanned = false; onDismiss() })
+        }
+    }
+}
+
+/** v3.4 §8: 이동 블록 상세 — 출발지·도착지·수단·시간·출처, 이동 시간만 고칠 수 있다. */
+@Composable
+private fun TravelDetail(d: BlockDetailDto, onChanged: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val info = d.travel_info
+    var minutes by remember(d.id, info?.minutes) { mutableStateOf(info?.minutes?.toString() ?: "") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    fun send(value: Int?) {
+        saving = true
+        scope.launch {
+            val body = JsonObject(mapOf("minutes" to (value?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)))
+            val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).patchTravelBlock(d.id, body) } }
+            saving = false
+            r.onSuccess { error = null; onChanged() }.onFailure { error = ApiClient.errorMessage(it) }
+        }
+    }
+    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val home = d.travel_direction == "home"
+        Text((if (home) "🏠 귀가" else "🚌 이동") + " · " + mdHm(d.start) + "–" + hm(d.end))
+        Text(d.title.replace(Regex("^(이동|귀가): "), ""))
+        val source = when (info?.source) {
+            "kakao" -> "카카오"
+            "user" -> "직접 입력"
+            null -> "-"
+            else -> "어림"
+        }
+        val mode = when (info?.mode) { "car" -> "자동차"; "walk" -> "도보"; else -> "대중교통" }
+        Text("수단 $mode · 약 ${info?.minutes ?: "?"}분 · 출처 $source")
+        (d.travel_tight_min ?: 0).takeIf { it > 0 }?.let {
+            Text("이동 촉박 · ${it}분 부족(앞 일정이 끝나면 바로 출발해야 해요)", color = Color(0xFFF76707))
+        }
+        Text("시스템이 관리하는 블록이에요. 이동 시간만 고칠 수 있어요.", style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(3) }, label = { Text("이동 시간(분)") })
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(onClick = { minutes.toIntOrNull()?.let { send(it) } }, enabled = !saving && minutes.toIntOrNull() != null) {
+                Text("저장")
+            }
+            if (info?.user_minutes != null) {
+                OutlinedButton(onClick = { send(null) }, enabled = !saving) { Text("자동으로 되돌리기") }
+            }
+        }
+        error?.let { Text(it, color = CAL_ERR) }
+        if (d.logs.isNotEmpty()) {
+            Text("기록", fontWeight = FontWeight.Bold)
+            d.logs.forEach { l -> Text("⚙️ ${mdHm(l.at)}  ${l.content}", style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
@@ -899,7 +992,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
                 if (inProgress) Text("이미 시작된 일정이라 시작 시각은 바꿀 수 없어요. 길이로 끝 시각을 늘리거나 줄이세요.",
                     style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
-                if (!inProgress) OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
+                if (!inProgress) OutlinedTextField(lead, { lead = it }, label = { Text("출발 전 준비(분, 이동 시간 제외·선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
                 OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
                 detail?.place_name?.let { Text("찾은 장소: $it (틀리면 장소를 다시 입력하세요)", style = MaterialTheme.typography.bodySmall) }
                 Text("방해 허용", fontWeight = FontWeight.Bold)

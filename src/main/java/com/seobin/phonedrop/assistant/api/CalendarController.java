@@ -163,19 +163,41 @@ public class CalendarController {
             }
             m.put("travel", legs);
             List<Map<String, Object>> prep = new ArrayList<>();
+            List<Map<String, Object>> moves = new ArrayList<>();
             for (long id : db.jdbc().sql("""
                             SELECT id FROM blocks WHERE linked_fixed_block_id = ? AND status <> 'cancelled' ORDER BY start_at""")
                     .param(b.id()).query(Long.class).list()) {
-                store.block(id).ifPresent(p -> prep.add(Map.of("id", p.id(), "start", time.iso(p.start()),
-                        "title", timeline.blockTitle(p), "status", p.status())));
+                store.block(id).ifPresent(p -> {
+                    Map<String, Object> pm = new LinkedHashMap<>();
+                    pm.put("id", p.id());
+                    pm.put("start", time.iso(p.start()));
+                    pm.put("end", time.iso(p.end()));
+                    pm.put("title", timeline.blockTitle(p));
+                    pm.put("status", p.status());
+                    if (p.travel()) {
+                        pm.put("direction", p.travelDirection());
+                        pm.put("tight_min", p.travelTightMin());
+                        moves.add(pm); // v3.4: 이동·귀가 블록은 준비 블록과 따로
+                    } else {
+                        prep.add(pm);
+                    }
+                });
             }
             m.put("linked_prep", prep);
+            m.put("travel_blocks", moves);
         } else {
             m.put("memo", "");
             Store.Task task = b.taskId() == null ? null : store.task(b.taskId()).orElse(null);
             m.put("deadline", task == null ? null : time.iso(task.deadline()));
         }
         m.put("linked_fixed_block_id", b.linkedFixedBlockId());
+        // v3.4 §8: 이동 블록(시스템 관리)
+        m.put("link_role", b.linkRole());
+        if (b.travel()) {
+            m.put("travel_direction", b.travelDirection());
+            m.put("travel_tight_min", b.travelTightMin());
+            m.put("travel_info", travel.travelInfo(b));
+        }
         if (b.linkedFixedBlockId() != null) {
             m.put("linked_title", store.block(b.linkedFixedBlockId()).map(timeline::blockTitle).orElse(""));
         }
@@ -216,6 +238,9 @@ public class CalendarController {
         }
         return tx.run(() -> {
             Store.Block b = store.block(id).orElseThrow(() -> ApiException.notFound("블록#" + id + "이 없습니다"));
+            if (b.travel()) {
+                throw ApiException.unprocessable("이동 블록은 결과를 정하지 않아요(끝 시각에 자동으로 끝나요)");
+            }
             Instant now = clock.now();
             if (b.start().isAfter(now)) {
                 throw ApiException.unprocessable("아직 시작 전인 블록은 결과를 정할 수 없어요");
@@ -247,6 +272,26 @@ public class CalendarController {
             coverage.onBlockClosed(id);
             plan.bumpAndSync();
             return Map.<String, Object>of("ok", true, "id", id, "status", status, "turn_id", turnId);
+        });
+    }
+
+    /** v3.4 §8: 이동 블록의 이동 시간만 고친다 {minutes: 숫자 | null(자동으로 되돌리기)}. */
+    @PatchMapping("/travel_blocks/{id}")
+    public Map<String, Object> patchTravelBlock(@PathVariable long id, @RequestBody JsonNode body) {
+        if (!body.has("minutes") || !(body.get("minutes").isNull() || body.get("minutes").isNumber())) {
+            throw ApiException.badRequest("minutes 는 숫자 또는 null 입니다");
+        }
+        Integer minutes = body.get("minutes").isNull() ? null : Integer.valueOf(body.get("minutes").asInt());
+        return tx.run(() -> {
+            Store.Block t = travel.setTravelBlockMinutes(id, minutes);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", true);
+            m.put("id", id);
+            m.put("status", t.status());
+            m.put("start", time.iso(t.start()));
+            m.put("end", time.iso(t.end()));
+            m.put("travel_info", travel.travelInfo(t));
+            return m;
         });
     }
 

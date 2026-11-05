@@ -69,6 +69,10 @@ public class InterruptPolicy {
         if (trigger != null && Permissions.fromUser(trigger)) {
             return new Decision(Mode.SEND, null);
         }
+        // v3.4 §4: 이동 중에는 알림 허용처럼 보낸다(수면·방해 금지 시간대는 무음).
+        if (store.travelInProgress(now)) {
+            return new Decision(time.isQuiet(now) ? Mode.SILENT : Mode.SEND, null);
+        }
         Optional<Store.Block> dnd = store.dndInProgress(now, null);
         if (dnd.isPresent()) {
             scheduleRelease(dnd.get());

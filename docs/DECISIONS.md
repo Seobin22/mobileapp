@@ -282,3 +282,17 @@
 - API: GET /v1/places, GET /v1/places/search?q, PUT /v1/blocks/{id}/place {lat,lng,name?,series?}, PUT /v1/blocks/{id}/travel {direction,minutes}, GET /v1/app/map_key.
 - 지도 SDK 는 REST 키가 아니라 네이티브 앱 키를 쓴다. 저장소에 두지 않고 관리 화면 '지도 연결'이 `/root/data/assistant/kakao_native_key` 에 저장, 앱이 지도 화면을 열 때 받아 KakaoMapSdk.init. 콘솔 [플랫폼 → Android]에 패키지 `kr.ssbin.assistant`, 키 해시 `8RIKncx9ROmE1inTU75hGhZ4mh0=`(고정 서명 키 SHA-1 base64) 등록 필요.
 - 지도가 실패해도(키 없음·인증 오류) 화면은 열리고 검색 후보로 고를 수 있다. SDK 는 arm64-v8a·armeabi-v7a 만 있다.
+
+## v3.4 (2026-11-05) — 이동 블록(연결 블록, link_role=travel)
+복귀: 태그 `1105_1_v3.4전`(0a60132). DB 는 V10 직전 자동 백업(`backups/pre-V10-*.zip`). V10 컬럼은 NULL 허용·기본값이 있어 옛 jar 로 되돌려도 동작한다(이동 블록은 할 일 없는 계획 블록으로 보인다).
+- 이동 블록은 `TravelBlocks.sync(날짜)`가 만든다. `TravelService.computeDay` 끝에서 부르므로, 고정 일정 생성·변경·삭제·진행 중 연장·장소 지정·이동 시간 수정·집 주소·이동수단·매일 04:20 점검·반복 회차 생성이 모두 같은 길을 탄다. 디바운스(1분)는 넣지 않고 바로 계산한다(경로는 캐시라 가볍고, 결과는 멱등).
+- 출발지 계산에는 이미 끝낸(done·partial) 고정 일정도 넣는다(귀가 블록이 사라지지 않게). arrive 는 아직 시작 전(planned·nudging)인 일정에만 만든다.
+- 틈이 1분 미만이면 이동 블록을 만들지 않는다(경고만은 OPEN_ISSUES).
+- 알림: 준비·도착·촉박·귀가는 `travel_notice` 작업이 보내는 가벼운 알림(채팅 메시지 kind=notice, 알림 있음, 수면·방해 금지 시간에는 무음, 메시지 예산에 안 셈). 출발은 이동 블록의 시작 화면(기존 개입). 이동 블록이 있는 고정 일정은 자기 시작 화면을 예약하지 않는다.
+- 도착 알림 시각(B.start)에 이동 블록에서 [시작](출발함)을 눌렀으면 알림 없이 고정 일정을 started 로 둔다. 안 눌렀으면 "지금 ○○ 시간이에요"만 보내고 고정 일정은 planned(끝나면 기존처럼 놓침).
+- 이동 블록의 lead_minutes = 고정 일정의 준비 시간(촉박이면 0). 그래서 이동 블록의 금지 구간이 준비 시간까지 덮어 계획 블록이 그 사이에 들어가지 않는다.
+- lead 의미 변경: 앞으로 앱·비서가 정하는 lead 는 '이동 전 준비'만. v3.3 이전 사용자 lead 는 `lead_includes_travel=TRUE` 로 표시해 준비 알림을 이동 시작 − (lead − 이동)에 보낸다. 사용자가 앱에서 준비 시간을 다시 정하면 표시를 지운다.
+- lead 정리(일회성, data_migrations `travel_lead_v1`): 배포 후 시작 때 앞으로 14일 이동 블록을 먼저 만들고, 이동 블록이 생긴 고정 일정 중 비서가 정한 lead 를 0 + prep_set_by NULL(비서가 아직 안 정함)로. 결과는 서버 로그 `travel lead migration: target=… changed=… skipped=…` 와 data_migrations 에 남는다.
+- 비서 도구 move_block·extend_block·end_block·start_now·attach_work_product 가 이동 블록을 가리키면 거절. set_schedule 은 이동 블록을 교체하지 않고 유지 블록으로 본다. 검증기의 고정 블록 검사는 이동 블록을 건너뛴다(고정 일정이 바뀐 뒤 다시 맞춘다). 연결 블록 알림(fixed_changed)에서도 뺀다.
+- API: `PATCH /v1/travel_blocks/{id} {minutes|null}`, 달력 블록에 `link_role`·`travel_direction`·`travel_tight_min`·`travel_info`, 고정 블록에 `travel_blocks`(linked_prep 에서는 뺀다). 이동 블록 결과 바꾸기는 거절.
+- 앱 3.4.0: 달력 이동 블록 점선·🚌(귀가 🏠 연한 색, 촉박 주황 "N분 부족"), 이동 블록 상세(수단·시간·출처, 이동 시간 고치기·자동으로 되돌리기), 고정 일정 상세 '출발 전 준비(이동 시간 제외)'와 연결된 이동 블록 표시.

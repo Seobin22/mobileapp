@@ -327,6 +327,32 @@ data class CalendarBlock(
     val place_name: String? = null,
     val in_progress: Boolean = false,
     val travel: List<TravelLegDto> = emptyList(),
+    // v3.4 이동 블록(시스템 관리)
+    val link_role: String? = null,
+    val travel_direction: String? = null,
+    val travel_tight_min: Int? = null,
+    val travel_info: TravelInfoDto? = null,
+    val travel_blocks: List<TravelBlockRef> = emptyList(),
+)
+
+@Serializable
+data class TravelInfoDto(
+    val minutes: Int? = null,
+    val auto_minutes: Int? = null,
+    val user_minutes: Int? = null,
+    val source: String? = null,
+    val mode: String = "",
+)
+
+@Serializable
+data class TravelBlockRef(
+    val id: Long,
+    val start: String,
+    val end: String = "",
+    val title: String = "",
+    val status: String = "",
+    val direction: String? = null,
+    val tight_min: Int? = null,
 )
 
 @Serializable
@@ -416,6 +442,12 @@ data class BlockDetailDto(
     val place_source: String? = null,
     val in_progress: Boolean = false,
     val travel: List<TravelLegDto> = emptyList(),
+    // v3.4 이동 블록(시스템 관리)
+    val link_role: String? = null,
+    val travel_direction: String? = null,
+    val travel_tight_min: Int? = null,
+    val travel_info: TravelInfoDto? = null,
+    val travel_blocks: List<TravelBlockRef> = emptyList(),
 )
 
 @Serializable

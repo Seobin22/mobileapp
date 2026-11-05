@@ -457,8 +457,7 @@ public class ContextBuilder {
                                 .append(nz(item.get("title")))
                                 .append(item.get("place_name") == null ? "" : "(" + item.get("place_name") + ")")
                                 .append(" 블록#").append(item.get("id"))
-                                .append(lead > 0 ? " (출발 " + hm(java.time.Instant.parse(isoUtc(item.get("start")))
-                                        .minusSeconds(lead * 60L)) + ")" : "")
+                                .append(lead > 0 ? " · 준비 " + lead + "분" : "")
                                 .append(after > 0 ? " (끝난 뒤 " + after + "분 이동)" : "")
                                 .append(goalTag(item))
                                 .append(item.get("task_id") == null ? "" : " (할일#" + item.get("task_id") + ")")
@@ -471,7 +470,16 @@ public class ContextBuilder {
                                 .append(store.block(((Number) item.get("id")).longValue()).map(travel::contextText).orElse(""))
                                 .append('\n');
                     }
-                    case "planned_block" -> sb.append("- ").append(range)
+                    case "planned_block" -> {
+                        if ("travel".equals(item.get("link_role"))) {
+                            // v3.4 §7.1: 시스템이 관리하는 이동 블록
+                            sb.append("- ").append(range).append("home".equals(item.get("travel_direction")) ? " [귀가] " : " [이동] ")
+                                    .append(String.valueOf(item.get("title")).replaceFirst("^(이동|귀가): ", ""))
+                                    .append(item.get("travel_tight_min") == null ? "" : " · " + item.get("travel_tight_min") + "분 부족")
+                                    .append(" (시스템 관리)\n");
+                            continue;
+                        }
+                        sb.append("- ").append(range)
                             .append(String.valueOf(item.get("goal_label")).isEmpty() ? "" : " [" + item.get("goal_label") + "]")
                             .append(" 블록#").append(item.get("id")).append(' ').append(nz(item.get("title")))
                             .append(" (할일#").append(item.get("task_id")).append(") ").append(item.get("status"))
@@ -479,6 +487,7 @@ public class ContextBuilder {
                             .append(item.get("linked_fixed_block_id") == null ? ""
                                     : " (→ 고정 블록#" + item.get("linked_fixed_block_id") + " 준비)")
                             .append('\n');
+                    }
                     case "quiet" -> sb.append("- ").append(range).append(" 방해금지\n");
 
                     default -> {

@@ -39,7 +39,7 @@ public class UserState {
         Instant dayStart = time.activeWindow(time.logicalDay(now)).start();
         // 오늘 시작 예정이던 블록(시작 시각이 지났고 취소되지 않음)
         List<Store.Block> due = db.jdbc().sql("""
-                        SELECT * FROM blocks WHERE start_at >= ? AND start_at <= ? AND status <> 'cancelled'
+                        SELECT * FROM blocks WHERE link_role IS NULL AND start_at >= ? AND start_at <= ? AND status <> 'cancelled'
                         ORDER BY start_at, id""")
                 .param(AssistantDb.ts(dayStart)).param(AssistantDb.ts(now)).query(Store::block).list();
         long onTime = due.stream().filter(UserState::onTime).count();
@@ -61,9 +61,9 @@ public class UserState {
                     .append(Duration.between(b.start(), b.end()).toMinutes()).append("분)\n");
         }
         Instant since = now.minus(Duration.ofDays(3));
-        int done = count("SELECT COUNT(*) FROM blocks WHERE status IN ('done', 'partial') AND start_at >= ? AND start_at <= ?",
+        int done = count("SELECT COUNT(*) FROM blocks WHERE link_role IS NULL AND status IN ('done', 'partial') AND start_at >= ? AND start_at <= ?",
                 since, now);
-        int missed3 = count("SELECT COUNT(*) FROM blocks WHERE status = 'missed' AND start_at >= ? AND start_at <= ?",
+        int missed3 = count("SELECT COUNT(*) FROM blocks WHERE link_role IS NULL AND status = 'missed' AND start_at >= ? AND start_at <= ?",
                 since, now);
         sb.append("최근 3일: 완료 ").append(done).append(", 놓침 ").append(missed3).append('\n');
         Instant lastUser = db.jdbc().sql("SELECT created_at FROM messages WHERE role = 'user' ORDER BY id DESC LIMIT 1")
@@ -76,7 +76,7 @@ public class UserState {
     /** 최근부터 거꾸로 센 연속 제시간 시작 횟수(아직 개입 중인 블록은 건너뛴다). */
     int streak(Instant now) {
         List<Store.Block> past = db.jdbc().sql("""
-                        SELECT * FROM blocks WHERE start_at <= ? AND status NOT IN ('cancelled', 'planned', 'nudging')
+                        SELECT * FROM blocks WHERE link_role IS NULL AND start_at <= ? AND status NOT IN ('cancelled', 'planned', 'nudging')
                         ORDER BY start_at DESC, id DESC LIMIT 50""")
                 .param(AssistantDb.ts(now)).query(Store::block).list();
         int n = 0;

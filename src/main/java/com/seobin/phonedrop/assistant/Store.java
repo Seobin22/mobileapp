@@ -30,7 +30,13 @@ public class Store {
                         String location, String source, String externalId, boolean sensitive,
                         String prepSetBy, Long seriesId, java.time.LocalDate occurrenceDate, String memo,
                         Long linkedFixedBlockId, String interruptLevel, String interruptSetBy, String placeName,
-                        Double lat, Double lng, String placeSource) {
+                        Double lat, Double lng, String placeSource, String linkRole, String travelDirection,
+                        Integer travelTightMin, Integer travelMinutesUser, boolean leadIncludesTravel) {
+
+        /** v3.4: 코드가 관리하는 이동 블록(연결 블록, link_role=travel). */
+        public boolean travel() {
+            return "travel".equals(linkRole);
+        }
 
         public boolean fixed() {
             return "fixed".equals(kind);
@@ -107,6 +113,22 @@ public class Store {
         return fixedInProgress(now).stream()
                 .filter(b -> "dnd".equals(b.level()) && (exceptId == null || b.id() != exceptId))
                 .findFirst();
+    }
+
+    /** v3.4: 이 고정 블록으로 가는 아직 끝나지 않은 이동 블록(arrive). */
+    public Optional<Block> activeArriveTravel(long fixedId) {
+        return db.jdbc().sql("""
+                        SELECT * FROM blocks WHERE linked_fixed_block_id = ? AND link_role = 'travel' AND travel_direction = 'arrive'
+                        AND status IN ('planned', 'nudging', 'started') ORDER BY id DESC""")
+                .param(fixedId).query(Store::block).list().stream().findFirst();
+    }
+
+    /** v3.4: 지금 진행 중인 이동 블록(이 동안은 알림 허용처럼 보낸다). */
+    public boolean travelInProgress(Instant now) {
+        return db.jdbc().sql("""
+                        SELECT COUNT(*) FROM blocks WHERE link_role = 'travel' AND status IN ('planned', 'nudging', 'started')
+                        AND start_at <= ? AND end_at > ?""")
+                .param(AssistantDb.ts(now)).param(AssistantDb.ts(now)).query(Integer.class).single() > 0;
     }
 
     public Optional<Goal> goal(long id) {
@@ -255,7 +277,9 @@ public class Store {
                 rs.getObject("occurrence_date", java.time.LocalDate.class), rs.getString("memo"),
                 AssistantDb.nullableLong(rs, "linked_fixed_block_id"), rs.getString("interrupt_level"),
                 rs.getString("interrupt_set_by"), rs.getString("place_name"), nullableDouble(rs, "lat"),
-                nullableDouble(rs, "lng"), rs.getString("place_source"));
+                nullableDouble(rs, "lng"), rs.getString("place_source"), rs.getString("link_role"),
+                rs.getString("travel_direction"), AssistantDb.nullableInt(rs, "travel_tight_min"),
+                AssistantDb.nullableInt(rs, "travel_minutes_user"), rs.getBoolean("lead_includes_travel"));
     }
 
     public static Double nullableDouble(ResultSet rs, String column) throws SQLException {

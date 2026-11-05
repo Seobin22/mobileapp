@@ -133,8 +133,8 @@ public class Validator {
         Instant blockedStart = start.minus(Duration.ofMinutes(Math.max(0, leadMinutes)));
         Instant blockedEnd = end.plus(Duration.ofMinutes(Math.max(0, bufferAfterMin)));
         for (Store.Block k : store.activeBlocks()) {
-            if (excludeId != null && k.id() == excludeId) {
-                continue;
+            if (excludeId != null && k.id() == excludeId || k.travel()) {
+                continue; // v3.4: 이동 블록은 고정 일정이 바뀐 뒤 코드가 다시 맞춘다
             }
             if (!overlaps(blockedStart, blockedEnd, k.blockedStart(), k.blockedEnd())) {
                 continue;

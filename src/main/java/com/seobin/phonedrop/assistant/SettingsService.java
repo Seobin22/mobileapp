@@ -68,6 +68,8 @@ public class SettingsService {
         d.put("travel.home_lng", "null");
         d.put("travel.mode", "\"transit\"");
         d.put("travel.daily_api_limit", "300");
+        // v3.4: 집 주소가 없어 첫 이동 블록을 못 만들 때 한 번만 안내한 시각
+        d.put("travel.home_hint_at", "null");
         // 문서 읽기·요약 모델. 비면 llm.model(이미지는 이미지 입력을 받는 모델이어야 한다)
         d.put("documents.model", "\"\"");
 
@@ -143,6 +145,11 @@ public class SettingsService {
                 }
                 case "travel.home_address" -> {
                     if (!value.isString() || value.asString().length() > 300) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "travel.home_hint_at" -> {
+                    if (!value.isNull() && !value.isString()) {
                         throw new IllegalArgumentException();
                     }
                 }

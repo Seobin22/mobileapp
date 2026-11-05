@@ -201,10 +201,11 @@ public class FixedBlockService {
                             screen_text = ?, lead_minutes = ?, buffer_after_min = ?, location = ?, sensitive = ?,
                             prep_set_by = ?, status = CASE WHEN ? THEN 'planned' ELSE status END,
                             interrupt_level = ?, interrupt_set_by = ?,
+                            lead_includes_travel = CASE WHEN ? THEN FALSE ELSE lead_includes_travel END,
                             version = version + CASE WHEN ? THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?""",
                     title, taskId, goalId, start, end, screen, lead, bufferAfter, location, sensitive, prepSetBy,
-                    timeChanged, level[0], level[1], timeChanged, blockId);
+                    timeChanged, level[0], level[1], prepGiven && "user".equals(prepSetBy), timeChanged, blockId);
             record(turnId, blockId, before);
             if (!start.equals(existing.start()) || !end.equals(existing.end())) {
                 ObjectNode data = Json.object();
@@ -469,6 +470,7 @@ public class FixedBlockService {
         if (!linked.isEmpty()) {
             notifyFixedChanged(id, linked, "cancelled");
         }
+        travel.onDayChanged(id); // v3.4 §2.3: 이동 블록 취소·그날 다시 계산
         plan.bumpAndSync();
         if (turnId == null) {
             coverage.onBlockClosed(id);
@@ -486,7 +488,7 @@ public class FixedBlockService {
     public List<Long> linkedFuture(long fixedBlockId) {
         return db.jdbc().sql("""
                         SELECT id FROM blocks WHERE linked_fixed_block_id = ? AND status IN ('planned', 'nudging')
-                        AND end_at > ? ORDER BY start_at""")
+                        AND link_role IS NULL AND end_at > ? ORDER BY start_at""")
                 .param(fixedBlockId).param(AssistantDb.ts(clock.now())).query(Long.class).list();
     }
 

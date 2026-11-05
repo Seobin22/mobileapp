@@ -136,7 +136,15 @@ public class Tools {
         return definitions;
     }
 
+    /** v3.4 §4: 이동 블록은 코드만 관리한다. */
+    static final String TRAVEL_REJECT = "이동 블록은 시스템이 관리합니다. 만들거나 옮기거나 끝내지 마세요(고정 일정이 바뀌면 자동으로 맞춰집니다)";
+
     public ObjectNode dispatch(Context ctx, String name, JsonNode input) {
+        if (List.of("move_block", "extend_block", "end_block", "start_now", "attach_work_product").contains(name)
+                && input.hasNonNull("block_id")
+                && store.block(input.get("block_id").asLong()).map(Store.Block::travel).orElse(false)) {
+            return error(TRAVEL_REJECT);
+        }
         try {
             if (!ctx.bypassPermissions) {
                 Permissions.Decision d = permissions.decide(ctx.trigger, name, input);
@@ -720,7 +728,7 @@ public class Tools {
         // v3.1 §3.3: 계획 블록만 다룬다. 고정 블록은 교체 대상이 아니며 유지되는 블록으로 취급한다.
         List<Store.Block> active = store.activeBlocks();
         List<Store.Block> replaced = active.stream()
-                .filter(b -> !b.fixed() && "planned".equals(b.status()) && !b.start().isBefore(from)
+                .filter(b -> !b.fixed() && !b.travel() && "planned".equals(b.status()) && !b.start().isBefore(from)
                         && b.start().isBefore(to))
                 .toList();
         List<Store.Block> keep = active.stream().filter(b -> !replaced.contains(b)).toList();

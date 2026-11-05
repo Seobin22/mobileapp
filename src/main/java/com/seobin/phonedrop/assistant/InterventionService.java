@@ -85,10 +85,40 @@ public class InterventionService {
     /** 블록 생성·시각 변경 뒤에 부른다. 기존 블록 작업을 지우고 다시 예약한다. 개입 시각 = start − lead (v3.1 §3.2). */
     public void scheduleBlockJobs(Store.Block b) {
         cancelBlockJobs(b.id());
-        if (!b.interventionAt().isBefore(clock.now())) {
-            jobs.schedule(START, b.id(), b.interventionAt(), b.version());
+        Instant at = b.interventionAt();
+        boolean screen = true;
+        if (b.travel()) {
+            // v3.4 §5: 이동 블록은 시작 시각에 출발 화면(arrive). 앞쪽 준비 시간(lead)은 가벼운 알림이 맡는다. 귀가는 화면 없음.
+            at = b.start();
+            screen = "arrive".equals(b.travelDirection());
+        } else if (b.fixed() && store.activeArriveTravel(b.id()).isPresent()) {
+            // 이동 블록이 출발 화면을 넘겨받았다(두 번 뜨지 않게).
+            screen = false;
+        }
+        if (screen && !at.isBefore(clock.now())) {
+            jobs.schedule(START, b.id(), at, b.version());
         }
         jobs.schedule(BLOCK_END, b.id(), b.end(), null);
+    }
+
+    /** v3.4 §4: 이동 블록은 놓침 없이 끝 시각에(또는 도착한 일정이 시작되면) done 으로 끝낸다. */
+    public void finishTravel(Store.Block t, String why) {
+        if (!t.travel() || !java.util.List.of("planned", "nudging", "started").contains(t.status())) {
+            return;
+        }
+        store.runningForBlock(t.id()).ifPresent(i -> end(i, "expired", "travel_done", "expired"));
+        Instant now = clock.now();
+        db.update("""
+                        UPDATE blocks SET status = 'done', actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                now.isBefore(t.end()) ? now : t.end(), t.id());
+        cancelBlockJobs(t.id());
+        logs.add(t.id(), "ended", "system", why);
+        plan.bumpAndSync();
+    }
+
+    /** 고정 일정이 시작되면 그 일정으로 가는 이동 블록은 끝난 것이다. */
+    private void finishTravelFor(long fixedId) {
+        store.activeArriveTravel(fixedId).ifPresent(t -> finishTravel(t, "도착한 일정이 시작되어 자동 완료"));
     }
 
     /**
@@ -156,6 +186,11 @@ public class InterventionService {
         }
 
         for (Store.Intervention running : store.runningInterventions()) {
+            Store.Block rb = store.block(running.blockId()).orElse(null);
+            if (rb != null && rb.travel()) {
+                finishTravel(rb, "다음 화면이 떠서 자동 완료");
+                continue;
+            }
             end(running, "expired", "superseded", "superseded");
             if (store.block(running.blockId()).filter(x -> "nudging".equals(x.status())).isPresent()) {
                 logs.add(running.blockId(), "missed", "system", "다음 블록 개입이 시작되어 놓침");
@@ -165,6 +200,10 @@ public class InterventionService {
         }
         // v3 §3.5: 이전 블록이 아직 started 면 partial 로 끝낸다(할 일 remaining 은 그대로).
         for (Store.Block started : store.startedBlocks()) {
+            if (started.travel()) {
+                finishTravel(started, "다음 블록이 시작되어 자동 완료");
+                continue;
+            }
             if (started.id() != b.id()) {
                 db.update("""
                                 UPDATE blocks SET status = 'partial', actual_end = ?, updated_at = CURRENT_TIMESTAMP
@@ -210,6 +249,11 @@ public class InterventionService {
         if (i == null || !i.active()) {
             return false;
         }
+        Store.Block tb = store.block(i.blockId()).orElse(null);
+        if (tb != null && tb.travel()) {
+            finishTravel(tb, "자동 완료");
+            return true;
+        }
         end(i, "expired", "no_response", "expired");
         store.setBlockStatus(i.blockId(), "missed");
         logs.add(i.blockId(), "missed", "system", "무응답으로 놓침");
@@ -222,6 +266,11 @@ public class InterventionService {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
         if (i == null || !i.active() || !time.isQuiet(clock.now())) {
             return false;
+        }
+        Store.Block tb = store.block(i.blockId()).orElse(null);
+        if (tb != null && tb.travel()) {
+            end(i, "suspended", "quiet", "suspended");
+            return true;
         }
         end(i, "suspended", "quiet", "suspended");
         store.setBlockStatus(i.blockId(), "missed");
@@ -238,6 +287,18 @@ public class InterventionService {
         turns.enqueue("block_started", ref, TurnQueue.PRIORITY_DEFAULT);
     }
 
+    /** [시작] 뒤: 이동 블록이면 '출발함'(체크인 없음), 고정 일정이면 그리로 가는 이동 블록을 끝낸다. */
+    private void afterStart(long blockId) {
+        Store.Block b = store.block(blockId).orElse(null);
+        if (b != null && b.travel()) {
+            return;
+        }
+        if (b != null && b.fixed()) {
+            finishTravelFor(b.id());
+        }
+        enqueueStarted(blockId);
+    }
+
     /** v3 §3.6: 블록이 missed 가 되면 block_missed turn. */
     private void enqueueMissed(long blockId, String reason) {
         ObjectNode ref = Json.object();
@@ -250,6 +311,10 @@ public class InterventionService {
         Store.Block b = store.block(job.targetId()).orElse(null);
         if (b == null || !job.fireAt().equals(b.end())) {
             return false;
+        }
+        if (b.travel()) {
+            finishTravel(b, "자동 완료");
+            return true;
         }
         switch (b.status()) {
             case "planned" -> {
@@ -416,7 +481,9 @@ public class InterventionService {
         data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
         data.put("screen_text", b.screenText());
         // v3.2 §3.3: 고정 블록 메모를 화면에 그대로 보여주고, TTS 는 screen_text 다음에 메모 첫 문장까지 읽는다.
-        String memo = b.fixed() ? store.fullMemo(b) : "";
+        Store.Block memoOf = b.travel() && b.linkedFixedBlockId() != null
+                ? store.block(b.linkedFixedBlockId()).orElse(b) : b;
+        String memo = memoOf.fixed() ? store.fullMemo(memoOf) : "";
         data.put("memo", memo);
         data.put("tts_text", memo.isBlank() ? b.screenText() : b.screenText() + " " + firstSentence(memo));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
@@ -509,7 +576,7 @@ public class InterventionService {
         Optional<Store.Intervention> found = resolve(interventionId, blockId);
         if (found.isPresent() && found.get().active()) {
             ack(found.get());
-            enqueueStarted(found.get().blockId());
+            afterStart(found.get().blockId());
             return "ok";
         }
 
@@ -528,7 +595,7 @@ public class InterventionService {
             return "ok";
         }
         startBlockNow(b, t, now);
-        enqueueStarted(b.id());
+        afterStart(b.id());
         return "accepted_as_start_now";
     }
 

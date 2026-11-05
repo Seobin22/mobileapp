@@ -613,7 +613,7 @@ class V31FlowTest extends AssistantTestBase {
             assertThat(TimeUtil.parse(i.path("end").asString())).isEqualTo(at("2026-11-02T15:40"));
         });
         String context = tx.run(() -> new String(agentContext()));
-        assertThat(context).contains("[고정] 치과 블록#" + f + " (출발 15:40)").contains("[컴활 2급] 블록#" + p + " 기출 1회 (할일#" + t + ")");
+        assertThat(context).contains("[고정] 치과 블록#" + f + " · 준비 20분").contains("[컴활 2급] 블록#" + p + " 기출 1회 (할일#" + t + ")");
     }
 
     @Autowired

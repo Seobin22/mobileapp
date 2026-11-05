@@ -369,8 +369,8 @@ class V33FlowTest extends AssistantTestBase {
         mapApi.routeMinutes.put("37.4500>37.5000", 50);
         fixed("회의", "2026-11-02T13:00", 120, null, "회의실");
         fixed("치과", "2026-11-02T15:30", 60, null, "치과");
-        assertThat(context("user_message")).contains("이동 불가능: 회의 끝 15:00 + 이동 50분 > 치과 15:30");
-        assertThat(context("user_message")).doesNotContain("이동 불가능");
+        assertThat(context("user_message")).contains("이동 촉박: 회의(15:00 끝) → 치과(15:30) 이동 약 50분 · 20분 부족");
+        assertThat(context("user_message")).doesNotContain("이동 촉박");
     }
 
     @Test
