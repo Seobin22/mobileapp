@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 이동 블록·lead 정리 결과 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서 이동 블록 이상 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,10 +41,15 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'MIG' AS q, name, result FROM data_migrations WHERE name = 'travel_lead_v1';
-SELECT 'TRAVEL' AS q, travel_direction, status, COUNT(*) AS n, SUM(CASE WHEN travel_tight_min > 0 THEN 1 ELSE 0 END) AS tight FROM blocks WHERE link_role = 'travel' GROUP BY travel_direction, status;
-SELECT 'FIXEDCOORD' AS q, COUNT(*) AS next14, SUM(CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END) AS with_coords FROM blocks WHERE kind = 'fixed' AND status = 'planned' AND start_at > CURRENT_TIMESTAMP AND start_at < DATEADD('DAY', 14, CURRENT_TIMESTAMP);
-SELECT 'HOME' AS q, key, CASE WHEN value = 'null' OR value = '""' THEN 'empty' ELSE 'set' END AS v FROM settings WHERE key IN ('travel.home_lat', 'travel.home_address');
+SELECT 'STALE_ARRIVE' AS q, t.id, t.status, FORMATDATETIME(t.end_at,'MM-dd HH:mm','en','Asia/Seoul') AS t_end, f.id AS fid, f.status AS f_status, FORMATDATETIME(f.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS f_start FROM blocks t JOIN blocks f ON f.id = t.linked_fixed_block_id WHERE t.link_role='travel' AND t.travel_direction='arrive' AND t.status IN ('planned','nudging','started') AND (t.end_at <> f.start_at OR f.status IN ('cancelled','missed','done','partial'));
+SELECT 'STALE_HOME' AS q, t.id, t.status, FORMATDATETIME(t.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS t_start, f.id AS fid, f.status AS f_status, FORMATDATETIME(f.end_at,'MM-dd HH:mm','en','Asia/Seoul') AS f_end FROM blocks t JOIN blocks f ON f.id = t.linked_fixed_block_id WHERE t.link_role='travel' AND t.travel_direction='home' AND t.status IN ('planned','nudging','started') AND (t.start_at < f.end_at OR f.status IN ('cancelled','missed') OR EXISTS (SELECT 1 FROM blocks g WHERE g.kind='fixed' AND g.status IN ('planned','nudging','started') AND g.lat IS NOT NULL AND g.start_at >= f.end_at AND CAST(g.start_at AT TIME ZONE 'Asia/Seoul' AS DATE) = CAST(f.start_at AT TIME ZONE 'Asia/Seoul' AS DATE)));
+SELECT 'NOTICE_STALE' AS q, COUNT(*) AS n FROM jobs j JOIN blocks t ON t.id = j.target_id WHERE j.type='travel_notice' AND j.status='scheduled' AND (t.status NOT IN ('planned','nudging','started') OR j.expected_version <> t.version);
+SELECT 'NO_ALARM_FIXED' AS q, b.id, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS starts, b.lat IS NOT NULL AS has_coords FROM blocks b WHERE b.kind='fixed' AND b.status='planned' AND b.start_at > CURRENT_TIMESTAMP AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type='start_intervention' AND j.target_id=b.id AND j.status='scheduled') AND NOT EXISTS (SELECT 1 FROM blocks t WHERE t.linked_fixed_block_id=b.id AND t.link_role='travel' AND t.travel_direction='arrive' AND t.status IN ('planned','nudging'));
+SELECT 'TRAVEL_IV' AS q, i.status, i.end_reason, COUNT(*) AS n, MAX(FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul')) AS last FROM interventions i JOIN blocks t ON t.id=i.block_id WHERE t.link_role='travel' GROUP BY i.status, i.end_reason;
+SELECT 'TRAVEL_LOGS' AS q, type, actor, COUNT(*) AS n FROM block_logs l JOIN blocks t ON t.id=l.block_id WHERE t.link_role='travel' GROUP BY type, actor;
+SELECT 'TALK_ON_TRAVEL' AS q, COUNT(*) AS n FROM turns WHERE trigger='intervention_talk' AND trigger_ref LIKE '%block_id%' AND CAST(REGEXP_SUBSTR(trigger_ref, '"block_id":([0-9]+)', 1, 1, '', 1) AS BIGINT) IN (SELECT id FROM blocks WHERE link_role='travel');
+SELECT 'TURN_TOOLS' AS q, FORMATDATETIME(started_at,'MM-dd HH:mm','en','Asia/Seoul') AS kst, trigger, status, LEFT(tool_names,160) AS tools FROM turns WHERE started_at >= TIMESTAMP WITH TIME ZONE '2026-11-05 17:00:00+09:00' AND (tool_names LIKE '%move_block%' OR tool_names LIKE '%upsert_fixed%' OR tool_names LIKE '%extend_block%') ORDER BY id;
+SELECT 'FIXED_LEAD' AS q, prep_set_by, lead_includes_travel, COUNT(*) AS n, SUM(CASE WHEN lead_minutes > 0 THEN 1 ELSE 0 END) AS with_lead FROM blocks WHERE kind='fixed' AND status='planned' AND start_at > CURRENT_TIMESTAMP GROUP BY prep_set_by, lead_includes_travel;
 SQL
 
 while IFS= read -r q; do
