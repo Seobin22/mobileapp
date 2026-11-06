@@ -57,12 +57,19 @@ public class PlanService {
 
         ArrayNode upcoming = Json.array();
         for (Store.Block b : store.plannedBlocksStartingBefore(now, until)) {
+            // 2026-11-06: 휴대폰 백업 알람은 서버가 실제로 화면을 띄우는 블록만. 귀가 블록(화면 없음)과
+            // 이동 블록이 출발 화면을 맡은 고정 일정은 뺀다. 이동 블록은 출발 시각(시작)에 맞춘다.
+            if (b.travel() && !"arrive".equals(b.travelDirection())
+                    || b.fixed() && store.activeArriveTravel(b.id()).isPresent()) {
+                continue;
+            }
             ObjectNode o = upcoming.addObject();
             o.put("block_id", b.id());
             o.put("start", time.iso(b.start()));
             o.put("end", time.iso(b.end()));
             // v3.1: 앱 로컬 백업 알람은 alarm_at(= start − lead) 기준
-            o.put("alarm_at", time.iso(b.interventionAt()));
+            o.put("alarm_at", time.iso(b.travel() ? b.start() : b.interventionAt()));
+            o.put("version", b.version()); // 앱이 local_fired 에 함께 보낸다(옛 알람 걸러내기)
             o.put("kind", b.kind());
             o.put("task_title", store.blockTitle(b));
             o.put("screen_text", b.screenText());

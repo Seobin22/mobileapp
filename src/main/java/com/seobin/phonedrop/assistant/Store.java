@@ -31,7 +31,8 @@ public class Store {
                         String prepSetBy, Long seriesId, java.time.LocalDate occurrenceDate, String memo,
                         Long linkedFixedBlockId, String interruptLevel, String interruptSetBy, String placeName,
                         Double lat, Double lng, String placeSource, String linkRole, String travelDirection,
-                        Integer travelTightMin, Integer travelMinutesUser, boolean leadIncludesTravel) {
+                        Integer travelTightMin, Integer travelMinutesUser, boolean leadIncludesTravel,
+                        Instant departAt, Integer travelLateMin) {
 
         /** v3.4: 코드가 관리하는 이동 블록(연결 블록, link_role=travel). */
         public boolean travel() {
@@ -279,7 +280,8 @@ public class Store {
                 rs.getString("interrupt_set_by"), rs.getString("place_name"), nullableDouble(rs, "lat"),
                 nullableDouble(rs, "lng"), rs.getString("place_source"), rs.getString("link_role"),
                 rs.getString("travel_direction"), AssistantDb.nullableInt(rs, "travel_tight_min"),
-                AssistantDb.nullableInt(rs, "travel_minutes_user"), rs.getBoolean("lead_includes_travel"));
+                AssistantDb.nullableInt(rs, "travel_minutes_user"), rs.getBoolean("lead_includes_travel"),
+                AssistantDb.instant(rs, "depart_at"), AssistantDb.nullableInt(rs, "travel_late_min"));
     }
 
     public static Double nullableDouble(ResultSet rs, String column) throws SQLException {

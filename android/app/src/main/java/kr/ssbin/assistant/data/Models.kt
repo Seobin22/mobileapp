@@ -75,6 +75,8 @@ data class UpcomingItem(
     val kind: String = "planned",
     val goal_label: String = "",
     val goal_color: String = "",
+    /** 블록 version(2026-11-06). 백업 알람이 울릴 때 서버에 같이 보내 옛 알람을 걸러낸다. */
+    val version: Int? = null,
 )
 
 /** plan.sync 의 quiet_windows 항목. */
@@ -333,6 +335,7 @@ data class CalendarBlock(
     val travel_tight_min: Int? = null,
     val travel_info: TravelInfoDto? = null,
     val travel_blocks: List<TravelBlockRef> = emptyList(),
+    val travel_late_min: Int? = null,
 )
 
 @Serializable
@@ -448,6 +451,7 @@ data class BlockDetailDto(
     val travel_tight_min: Int? = null,
     val travel_info: TravelInfoDto? = null,
     val travel_blocks: List<TravelBlockRef> = emptyList(),
+    val travel_late_min: Int? = null,
 )
 
 @Serializable

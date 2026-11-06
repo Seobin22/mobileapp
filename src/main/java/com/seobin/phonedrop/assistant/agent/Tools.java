@@ -186,6 +186,7 @@ public class Tools {
                 case "get_block_history" -> getBlockHistory(input);
                 case "set_interrupt_level" -> setInterruptLevel(ctx, input);
                 case "read_document" -> readDocument(input);
+                case "adjust_travel" -> adjustTravel(ctx, input);
                 case "link_document" -> linkDocument(ctx, input);
                 default -> error("알 수 없는 도구입니다: " + name);
             };
@@ -999,6 +1000,9 @@ public class Tools {
         }
         List<Long> displaced = new ArrayList<>();
         for (Store.Block b : overlapping) {
+            if (b.travel()) {
+                continue; // 이동 블록은 시스템 관리(지우지 않는다)
+            }
             cancelBlock(ctx, b);
             displaced.add(b.id());
         }
@@ -1262,6 +1266,36 @@ public class Tools {
         out.put("rule", SeriesService.describe(s));
         out.set("created_blocks", Json.MAPPER.valueToTree(r.created()));
         return out;
+    }
+
+    /** 이동 블록 고치기(2026-11-06): 출발 미루기·이동 시간 수정·되돌리기. 약속 시각은 그대로. 사용자 말일 때만. */
+    private ObjectNode adjustTravel(Context ctx, JsonNode in) {
+        long id = in.path("block_id").asLong(-1);
+        Integer minutes = in.hasNonNull("minutes") ? Integer.valueOf(in.get("minutes").asInt()) : null;
+        Integer delay = in.hasNonNull("delay_minutes") ? Integer.valueOf(in.get("delay_minutes").asInt()) : null;
+        Instant departAt = in.hasNonNull("depart_at") ? TimeUtil.parse(in.get("depart_at").asString()) : null;
+        boolean reset = in.path("reset").asBoolean(false);
+        if (minutes == null && delay == null && departAt == null && !reset) {
+            return error("minutes, delay_minutes, depart_at, reset 중 하나가 필요합니다");
+        }
+        Store.Block t = travel.adjustTravel(id, minutes, delay, departAt, reset);
+        plan.bumpAndSync();
+        ObjectNode r = okWithId(t.id());
+        r.put("depart", time.iso(t.start()));
+        r.put("arrive", time.iso(t.end()));
+        if (t.travelLateMin() != null && t.travelLateMin() > 0) {
+            r.put("late_minutes", t.travelLateMin());
+            r.put("note", "이대로 출발하면 약 " + t.travelLateMin() + "분 늦어요. 사용자에게 알려 주세요(약속 시각은 바꾸지 않았습니다)");
+        }
+        ctx.savedLines.add("저장됨: 출발 " + time.hm(t.start()) + " · 도착 예정 "
+                + time.hm(t.start().plus(Duration.ofMinutes(travelMinutes(t))))
+                + (t.travelLateMin() != null && t.travelLateMin() > 0 ? " (지각 예상 " + t.travelLateMin() + "분)" : ""));
+        return r;
+    }
+
+    private int travelMinutes(Store.Block t) {
+        Object m = travel.travelInfo(t).get("minutes");
+        return m instanceof Number n ? n.intValue() : (int) Duration.between(t.start(), t.end()).toMinutes();
     }
 
     /** v3.3 §4.5: 자료에서 관련 부분만 읽는다. */

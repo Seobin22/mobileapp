@@ -453,6 +453,24 @@ public class InterventionService {
         return "ok";
     }
 
+    private String staleLocalAlarm(Store.Block b, Integer blockVersion) {
+        if (blockVersion != null && blockVersion != b.version()) {
+            return "블록이 바뀜";
+        }
+        if (b.travel() && !"arrive".equals(b.travelDirection())) {
+            return "귀가 블록";
+        }
+        if (b.fixed() && store.activeArriveTravel(b.id()).isPresent()) {
+            return "이동 블록이 출발 화면을 맡음";
+        }
+        Instant alarmAt = b.travel() ? b.start() : b.interventionAt();
+        Instant now = clock.now();
+        if (now.isBefore(alarmAt.minusSeconds(120)) || !now.isBefore(b.end())) {
+            return "알람 시각이 아님";
+        }
+        return null;
+    }
+
     private void markMissedIfNudging(long blockId) {
         store.block(blockId).filter(b -> "nudging".equals(b.status()))
                 .ifPresent(b -> store.setBlockStatus(b.id(), "missed"));
@@ -536,7 +554,7 @@ public class InterventionService {
             case "start" -> start(interventionId, blockId);
             case "dismiss" -> dismiss(interventionId, blockId);
             case "snooze_request" -> snoozeRequest(interventionId, blockId);
-            case "local_fired" -> localFired(blockId);
+            case "local_fired" -> localFired(blockId, req.hasNonNull("block_version") ? Integer.valueOf(req.get("block_version").asInt()) : null);
             default -> throw ApiException.badRequest("알 수 없는 액션입니다: " + type);
         };
 
@@ -652,13 +670,23 @@ public class InterventionService {
         return "ok";
     }
 
-    private String localFired(Long blockId) {
+    /**
+     * 휴대폰 백업 알람. 2026-11-06: 옛 알람(블록이 바뀐 뒤 남은 것)은 무시한다 — 블록 version 이 다르거나(앱 3.4.1+),
+     * 지금이 그 블록의 알람 시각 2분 전 ~ 끝 시각 밖이면. 이동 블록이 출발 화면을 맡은 고정 일정·귀가 블록도 무시.
+     */
+    private String localFired(Long blockId, Integer blockVersion) {
         if (blockId == null) {
             throw ApiException.badRequest("local_fired 에는 block_id 가 필요합니다");
         }
         Optional<Store.Intervention> i = store.runningForBlock(blockId);
         if (i.isEmpty()) {
             Store.Block b = store.block(blockId).orElse(null);
+            String stale = b == null ? null : staleLocalAlarm(b, blockVersion);
+            if (stale != null) {
+                logs.add(b.id(), "note", "system", "휴대폰 백업 알람 무시(" + stale + ")");
+                store.log(null, blockId, null, clock.now(), "local_fired_ignored");
+                return "ignored";
+            }
             if (b != null && "planned".equals(b.status())) {
                 // 앱 화면은 이미 떠 있다. 서버 개입을 바로 시작한다(앱은 id 만 교체).
                 i = begin(b);

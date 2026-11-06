@@ -84,16 +84,17 @@ public class TravelBlocks {
 
     /** 원하는 이동 블록 하나. */
     record Want(long fixedId, String direction, Instant start, Instant end, int lead, int tight, String title,
-                String screen, int minutes) {
+                String screen, int minutes, int late) {
     }
 
     // ---------------------------------------------------------------- 날짜 단위 재계산 (§2.2)
 
     /**
-     * 그날의 이동 블록을 맞춘다. located = 그날 좌표 있는 활성 고정 블록(시간순), home = 집 좌표(없으면 null).
-     * 이동 시간 M 은 이동 블록의 사용자 값 → block_travel(카카오·사용자·어림값) 순.
+     * 그날의 이동 블록을 맞춘다. located = 그날 좌표 있는 고정 블록(시간순), home = 집 좌표(없으면 null).
+     * 이동 시간 M 은 이동 블록의 사용자 값 → block_travel(카카오·사용자·어림값) 순. 출발을 미뤘으면(depart_at) 그 시각부터.
+     * 실제로 바뀐 것이 있으면 true(바뀐 것만 고치고 기록한다).
      */
-    void sync(LocalDate day, List<Store.Block> located, double[] home) {
+    boolean sync(LocalDate day, List<Store.Block> located, double[] home) {
         Instant now = clock.now();
         Instant dayStart = day.atStartOfDay(time.zone()).toInstant();
         Instant dayEnd = day.plusDays(1).atStartOfDay(time.zone()).toInstant();
@@ -106,6 +107,7 @@ public class TravelBlocks {
 
         List<Want> wants = new ArrayList<>();
         boolean needHome = false;
+        boolean changed = false;
         String mode = TravelService.modeText(settings.getString("travel.mode"));
         for (int i = 0; i < located.size(); i++) {
             Store.Block b = located.get(i);
@@ -137,15 +139,27 @@ public class TravelBlocks {
                     }
                 }
             }
+            // 사용자가 출발을 미뤘다: 그 시각부터 출발. 약속에 늦으면 '지각 예상'(약속 시각을 넘겨 미룰 수는 없다).
+            int late = 0;
+            if (old != null && old.departAt() != null) {
+                if (old.departAt().isBefore(b.start().minusSeconds(60))) {
+                    if (old.departAt().isAfter(start)) {
+                        start = old.departAt();
+                    }
+                    late = (int) Math.max(0, Duration.between(b.start(), start.plus(Duration.ofMinutes(minutes))).toMinutes());
+                } else {
+                    db.update("UPDATE blocks SET depart_at = NULL WHERE id = ?", old.id());
+                }
+            }
             if (Duration.between(start, b.start()).toMinutes() < 1) {
-                // 틈이 없다: 블록은 만들지 않고 경고만(촉박 기록은 앞 일정 쪽에 남지 않으므로 맥락 경고에서 계산)
-                continue;
+                continue; // 틈이 없다: 블록은 만들지 않는다
             }
             String from = a != null ? store.blockTitle(a) : TravelService.HOME;
             String to = store.blockTitle(b);
-            wants.add(new Want(b.id(), "arrive", start, b.start(), tight > 0 ? 0 : prep, tight,
+            wants.add(new Want(b.id(), "arrive", start, b.start(), tight > 0 || late > 0 ? 0 : prep, tight,
                     "이동: " + from + " → " + to + " (" + mode + " 약 " + minutes + "분)",
-                    "지금 출발하세요 · " + to + "까지 약 " + minutes + "분", minutes));
+                    "지금 출발하세요 · " + to + "까지 약 " + minutes + "분" + (late > 0 ? " · " + late + "분 늦을 수 있어요" : ""),
+                    minutes, late));
         }
         if (!located.isEmpty()) {
             Store.Block last = located.getLast();
@@ -159,13 +173,12 @@ public class TravelBlocks {
                     Instant start = last.end().plus(Duration.ofMinutes(last.bufferAfterMin()));
                     wants.add(new Want(last.id(), "home", start, start.plus(Duration.ofMinutes(minutes)), 0, 0,
                             "귀가: " + store.blockTitle(last) + " → " + TravelService.HOME + " (약 " + minutes + "분)",
-                            "집으로 가요 · 약 " + minutes + "분", minutes));
+                            "집으로 가요 · 약 " + minutes + "분", minutes, 0));
                 }
             }
         }
 
         List<Long> displaced = new ArrayList<>();
-        List<Long> keep = new ArrayList<>();
         for (Want w : wants) {
             Store.Block old = find(existing, w.fixedId(), w.direction());
             long id;
@@ -175,37 +188,46 @@ public class TravelBlocks {
                 }
                 id = db.insert("""
                                 INSERT INTO blocks(kind, title, start_at, end_at, status, screen_text, lead_minutes,
-                                linked_fixed_block_id, link_role, travel_direction, travel_tight_min, source)
-                                VALUES ('planned', ?, ?, ?, 'planned', ?, ?, ?, 'travel', ?, ?, 'system')""",
+                                linked_fixed_block_id, link_role, travel_direction, travel_tight_min, travel_late_min, source)
+                                VALUES ('planned', ?, ?, ?, 'planned', ?, ?, ?, 'travel', ?, ?, ?, 'system')""",
                         w.title(), w.start(), w.end(), w.screen(), w.lead(), w.fixedId(), w.direction(),
-                        w.tight() > 0 ? w.tight() : null);
+                        w.tight() > 0 ? w.tight() : null, w.late() > 0 ? w.late() : null);
                 logs.add(id, "created", "system", "이동 블록 생성: " + time.hm(w.start()) + "–" + time.hm(w.end()));
+                rescheduleFixed(w.fixedId());
             } else {
                 id = old.id();
-                keep.add(id);
-                boolean timeChanged = !old.start().equals(w.start()) || !old.end().equals(w.end())
-                        || old.leadMinutes() != w.lead();
-                boolean other = !old.title().equals(w.title()) || !Objects.equals(old.screenText(), w.screen())
-                        || !Objects.equals(nz(old.travelTightMin()), w.tight());
+                boolean timeChanged = !old.start().equals(w.start()) || !old.end().equals(w.end());
+                boolean other = old.leadMinutes() != w.lead() || !old.title().equals(w.title())
+                        || !Objects.equals(old.screenText(), w.screen())
+                        || !Objects.equals(nz(old.travelTightMin()), w.tight()) || !Objects.equals(nz(old.travelLateMin()), w.late());
                 if (!timeChanged && !other) {
                     continue;
                 }
-                if (timeChanged && !"planned".equals(old.status())) {
-                    // 이미 출발 화면이 떴거나 출발했다: 끝 시각만 맞춘다.
-                    db.update("UPDATE blocks SET end_at = ?, title = ?, travel_tight_min = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            w.end(), w.title(), w.tight() > 0 ? w.tight() : null, id);
+                if (timeChanged && "started".equals(old.status())) {
+                    // 이미 출발했다: 끝 시각만 맞춘다.
+                    db.update("""
+                                    UPDATE blocks SET end_at = ?, title = ?, travel_tight_min = ?, travel_late_min = ?,
+                                    version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                            w.end(), w.title(), w.tight() > 0 ? w.tight() : null, w.late() > 0 ? w.late() : null, id);
                 } else {
+                    if (timeChanged && "nudging".equals(old.status())) {
+                        // 출발 화면이 떠 있는데 시각이 바뀌었다: 그 화면은 닫고 새 시각에 다시 띄운다.
+                        interventions.cancelRunningForBlock(id);
+                        store.setBlockStatus(id, "planned");
+                    }
                     db.update("""
                                     UPDATE blocks SET start_at = ?, end_at = ?, title = ?, screen_text = ?, lead_minutes = ?,
-                                    travel_tight_min = ?, version = version + CASE WHEN ? THEN 1 ELSE 0 END,
+                                    travel_tight_min = ?, travel_late_min = ?, version = version + CASE WHEN ? THEN 1 ELSE 0 END,
                                     updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
                             w.start(), w.end(), w.title(), w.screen(), w.lead(), w.tight() > 0 ? w.tight() : null,
-                            timeChanged, id);
+                            w.late() > 0 ? w.late() : null, timeChanged, id);
                 }
                 if (timeChanged) {
-                    logs.add(id, "moved", "system", "이동 블록 재계산: " + time.hm(old.start()) + "→" + time.hm(w.start()));
+                    logs.add(id, "moved", "system", "이동 블록 재계산: " + time.hm(old.start()) + "–" + time.hm(old.end())
+                            + " → " + time.hm(w.start()) + "–" + time.hm(w.end()));
                 }
             }
+            changed = true;
             Store.Block tb = store.block(id).orElseThrow();
             // 이동 블록(+ 앞쪽 준비 시간)과 겹치는 일반 계획 블록은 밀어낸다(비서가 재배치).
             for (Store.Block other : store.activeBlocksOverlapping(tb.blockedStart(), tb.end())) {
@@ -224,12 +246,10 @@ public class TravelBlocks {
                     && w.direction().equals(old.travelDirection()));
             if (!wanted) {
                 cancelTravel(old, "필요 없어져 취소");
-            }
-        }
-        // 고정 블록의 시작 화면: 이동 블록이 있으면 이동 블록이 출발 화면을 맡는다(§5).
-        for (Store.Block b : located) {
-            if ("planned".equals(b.status())) {
-                interventions.scheduleBlockJobs(store.block(b.id()).orElseThrow());
+                if (old.linkedFixedBlockId() != null) {
+                    rescheduleFixed(old.linkedFixedBlockId()); // 이동 블록이 없어졌으니 고정 일정이 직접 알린다
+                }
+                changed = true;
             }
         }
         if (!displaced.isEmpty()) {
@@ -242,6 +262,33 @@ public class TravelBlocks {
         if (needHome) {
             homeHintOnce();
         }
+        return changed;
+    }
+
+    /** 고정 일정의 시작 화면 예약을 다시 맞춘다(이동 블록이 생기거나 없어졌을 때). */
+    private void rescheduleFixed(long fixedId) {
+        store.block(fixedId).filter(b -> "planned".equals(b.status())).ifPresent(interventions::scheduleBlockJobs);
+    }
+
+    /**
+     * 안전망: [from, to) 의 아직 시작 전 고정 일정 중 이동 블록도 없고 시작 화면 예약도 없는 것을 다시 예약한다.
+     * 다시 예약한 수.
+     */
+    public int repairAlarms(Instant from, Instant to) {
+        int n = 0;
+        for (Store.Block b : db.jdbc().sql("""
+                        SELECT * FROM blocks b WHERE kind = 'fixed' AND status = 'planned' AND start_at >= ? AND start_at < ?
+                        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type = 'start_intervention' AND j.target_id = b.id AND j.status = 'scheduled')
+                        AND NOT EXISTS (SELECT 1 FROM blocks t WHERE t.linked_fixed_block_id = b.id AND t.link_role = 'travel'
+                        AND t.travel_direction = 'arrive' AND t.status IN ('planned', 'nudging', 'started'))""")
+                .param(AssistantDb.ts(from)).param(AssistantDb.ts(to)).query(Store::block).list()) {
+            if (b.interventionAt().isAfter(clock.now())) {
+                interventions.scheduleBlockJobs(b);
+                logs.add(b.id(), "note", "system", "시작 화면 예약이 빠져 있어 다시 예약");
+                n++;
+            }
+        }
+        return n;
     }
 
     private static int nz(Integer v) {

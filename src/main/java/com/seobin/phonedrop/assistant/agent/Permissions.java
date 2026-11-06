@@ -52,6 +52,14 @@ public class Permissions {
                 && ("started".equals(b.status()) || !b.start().isAfter(clock.now()));
     }
 
+    /**
+     * 2026-11-06: 풀스크린 대화에서 이동 블록이 있는(장소 있는) 약속의 시각을 바꾸려 하면 확인 카드.
+     * 늦게 나가겠다는 말은 adjust_travel(출발 미루기)로 처리한다. 장소 없는 일정(공부 등)의 미루기는 그대로.
+     */
+    private boolean travelAppointment(String trigger, Store.Block b) {
+        return "intervention_talk".equals(trigger) && b != null && b.fixed() && store.activeArriveTravel(b.id()).isPresent();
+    }
+
     /** 방해 허용 정도만 바꾸는 호출(§1.3: 확인 카드 없이). */
     private static boolean onlyInterruptLevel(JsonNode args) {
         java.util.Set<String> keys = new java.util.HashSet<>();
@@ -80,6 +88,9 @@ public class Permissions {
                     }
                     // v3.1 §3.2.1: 준비 시간(lead·buffer)만 바꾸는 것은 확인 카드 없이(사용자가 정한 값은 도구가 거절한다).
                     boolean timeChange = args.hasNonNull("start") || args.hasNonNull("end");
+                    if (timeChange && travelAppointment(trigger, b)) {
+                        return Decision.confirm("fixed_change");
+                    }
                     if (timeChange && !fromUser) {
                         return Decision.confirm("fixed_change");
                     }
@@ -93,6 +104,9 @@ public class Permissions {
                 if (b != null && b.fixed()) {
                     if ("calendar".equals(b.source())) {
                         return Decision.reject(CALENDAR_REJECT);
+                    }
+                    if (travelAppointment(trigger, b)) {
+                        return Decision.confirm("fixed_change");
                     }
                     return fromUser ? Decision.execute() : Decision.confirm("fixed_change");
                 }
@@ -130,6 +144,10 @@ public class Permissions {
             case "append_fixed_memo" -> {
                 // v3.2 §3.1: 메모는 사용자 것. 채팅으로 직접 요청한 turn 에서만 덧붙일 수 있다.
                 return fromUser ? Decision.execute() : Decision.reject(MEMO_USER_ONLY);
+            }
+            case "adjust_travel" -> {
+                // 출발 미루기·이동 시간 고치기는 사용자가 직접 말했을 때만.
+                return fromUser ? Decision.execute() : Decision.reject("이동 블록은 사용자가 직접 말했을 때만 고칠 수 있다. 필요하면 ask_user 로 묻는다");
             }
             case "extend_block", "end_block" -> {
                 // v3.3 §2: 진행 중 고정 일정은 비서가 직접 늘리거나 끝내지 않는다(사용자 말이면 반영).

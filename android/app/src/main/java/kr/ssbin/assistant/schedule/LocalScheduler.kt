@@ -18,6 +18,7 @@ import java.time.OffsetDateTime
 object LocalScheduler {
 
     private const val EXTRA_BLOCK_ID = "block_id"
+    private const val EXTRA_VERSION = "block_version"
 
     fun rescheduleAll(context: Context) {
         val prefs = Prefs.get(context)
@@ -34,7 +35,7 @@ object LocalScheduler {
             val at = OffsetDateTime.parse(item.alarm_at ?: item.start).toInstant().toEpochMilli() + plan.graceSeconds * 1000L
             val end = OffsetDateTime.parse(item.end).toInstant().toEpochMilli()
             if (end <= now) continue
-            Alarms.setExact(context, maxOf(at, now + 1000), pending(context, item.block_id))
+            Alarms.setExact(context, maxOf(at, now + 1000), pending(context, item.block_id, item.version))
             scheduled += item.block_id.toString()
         }
         prefs.scheduledBlocks = scheduled
@@ -44,17 +45,21 @@ object LocalScheduler {
         context.getSystemService(AlarmManager::class.java).cancel(pending(context, blockId))
     }
 
-    private fun pending(context: Context, blockId: Long): PendingIntent =
+    private fun pending(context: Context, blockId: Long, version: Int? = null): PendingIntent =
         PendingIntent.getBroadcast(
             context,
             blockId.toInt(),
             Intent(context, LocalBackupReceiver::class.java)
                 .setAction("kr.ssbin.assistant.LOCAL_BACKUP.$blockId")
-                .putExtra(EXTRA_BLOCK_ID, blockId),
+                .putExtra(EXTRA_BLOCK_ID, blockId)
+                .putExtra(EXTRA_VERSION, version ?: -1),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
     internal fun blockId(intent: Intent): Long = intent.getLongExtra(EXTRA_BLOCK_ID, -1)
+
+    /** 알람을 맞출 때의 블록 version(없으면 null). */
+    internal fun version(intent: Intent): Int? = intent.getIntExtra(EXTRA_VERSION, -1).takeIf { it >= 0 }
 }
 
 class LocalBackupReceiver : BroadcastReceiver() {
@@ -64,7 +69,7 @@ class LocalBackupReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
-                InterventionController.onLocalBackup(context, blockId)
+                InterventionController.onLocalBackup(context, blockId, LocalScheduler.version(intent))
             } finally {
                 pending.finish()
             }

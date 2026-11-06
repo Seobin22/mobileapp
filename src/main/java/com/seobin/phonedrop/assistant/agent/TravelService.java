@@ -42,6 +42,8 @@ public class TravelService {
 
     private static final Logger log = LoggerFactory.getLogger(TravelService.class);
     public static final String JOB = "travel_daily";
+    /** 안전망: 1시간마다 오늘·내일 이동 블록·고정 일정 알람을 다시 맞춘다(바뀐 게 있을 때만 기록·전송). */
+    public static final String CHECK_JOB = "travel_check";
     static final LocalTime DAILY_AT = LocalTime.of(4, 20);
     static final Duration CACHE_TTL = Duration.ofDays(7);
     static final String HOME = "집";
@@ -67,10 +69,14 @@ public class TravelService {
     private final Jobs jobs;
     private final Tx tx;
     private final TravelBlocks travelBlocks;
+    private final com.seobin.phonedrop.assistant.PlanService plan;
+    private final com.seobin.phonedrop.assistant.InterventionService interventions;
     private final boolean enabled;
 
     public TravelService(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                          MapApi map, BlockLogs logs, Jobs jobs, Tx tx, TravelBlocks travelBlocks,
+                         com.seobin.phonedrop.assistant.PlanService plan,
+                         com.seobin.phonedrop.assistant.InterventionService interventions,
                          @Value("${assistant.worker.enabled:true}") boolean enabled) {
         this.db = db;
         this.clock = clock;
@@ -82,8 +88,11 @@ public class TravelService {
         this.jobs = jobs;
         this.tx = tx;
         this.travelBlocks = travelBlocks;
+        this.plan = plan;
+        this.interventions = interventions;
         this.enabled = enabled;
         jobs.register(JOB, this::onDaily);
+        jobs.register(CHECK_JOB, this::onCheck);
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -93,6 +102,9 @@ public class TravelService {
                 db.update("UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE status = 'scheduled' AND type = ?",
                         JOB);
                 jobs.schedule(JOB, 0, nextRun(clock.now()), null);
+                db.update("UPDATE jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE status = 'scheduled' AND type = ?",
+                        CHECK_JOB);
+                jobs.schedule(CHECK_JOB, 0, clock.now().plus(Duration.ofHours(1)), null);
                 // v3.4: 이동 블록을 앞으로 14일 만들고, 한 번만 lead 를 '준비 시간'으로 정리한 뒤 다시 맞춘다.
                 recomputeAhead(14);
                 if (travelBlocks.migrateLeads().isPresent()) {
@@ -111,8 +123,47 @@ public class TravelService {
     private boolean onDaily(Jobs.Job job) {
         jobs.schedule(JOB, 0, nextRun(clock.now().plusSeconds(60)), null);
         checkAhead(7);
-        recomputeAhead(7); // 이동 블록 점검(v3.4 §2.1)
+        if (recomputeAhead(7)) { // 이동 블록 점검(v3.4 §2.1)
+            plan.bumpAndSync(); // 휴대폰 백업 알람 목록도 맞춘다
+        }
         return true;
+    }
+
+    private boolean onCheck(Jobs.Job job) {
+        jobs.schedule(CHECK_JOB, 0, clock.now().plus(Duration.ofHours(1)), null);
+        return safetyCheck();
+    }
+
+    /** 오늘·내일 다시 맞추고, 빠진 고정 일정 알람을 다시 예약한다. 바뀐 게 있으면 plan.sync 를 보낸다. */
+    public boolean safetyCheck() {
+        LocalDate today = time.local(clock.now()).toLocalDate();
+        boolean changed = reconcile(today, today.plusDays(1));
+        int repaired = travelBlocks.repairAlarms(clock.now(), clock.now().plus(Duration.ofDays(2)));
+        if (changed || repaired > 0) {
+            log.info("travel safety check: changed={} repaired={}", changed, repaired);
+            plan.bumpAndSync();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 재계산 일원화(2026-11-06): 날짜마다 이동 시간·이동 블록·고정 일정 알람을 한 번에 맞춘다. 블록을 바꾸는 경로는 끝에서
+     * 이것을 부른다(다른 날로 옮겼으면 두 날짜 모두). 휴대폰 목록(plan.sync)은 부르는 쪽이 끝에서 한 번 보낸다.
+     */
+    public boolean reconcile(LocalDate... days) {
+        boolean changed = false;
+        java.util.Set<LocalDate> seen = new java.util.HashSet<>();
+        for (LocalDate d : days) {
+            if (d != null && seen.add(d)) {
+                changed |= computeDay(d);
+            }
+        }
+        return changed;
+    }
+
+    public LocalDate dayOf(Instant t) {
+        return time.local(t).toLocalDate();
     }
 
     /** 앞으로 days 일 동안 좌표가 있는데 이동 시간이 없는 고정 블록의 날만 다시 계산한다. */
@@ -149,6 +200,11 @@ public class TravelService {
     /** 같은 날 고정 블록 구성이 바뀌었을 때. */
     public void onDayChanged(long blockId) {
         store.block(blockId).ifPresent(b -> computeDay(time.local(b.start()).toLocalDate()));
+    }
+
+    /** 고정 일정이 옮겨졌을 때: 원래 날짜와 새 날짜 모두. */
+    public void onMoved(long blockId, Instant oldStart) {
+        store.block(blockId).ifPresent(b -> reconcile(dayOf(oldStart), dayOf(b.start())));
     }
 
     private void geocode(Store.Block b) {
@@ -242,7 +298,7 @@ public class TravelService {
     }
 
     /** 집 좌표·이동수단이 바뀌면 앞으로 days 일을 모두 다시 계산한다. */
-    public void recomputeAhead(int days) {
+    public boolean recomputeAhead(int days) {
         Instant now = clock.now();
         List<LocalDate> daysToCompute = new ArrayList<>();
         for (Store.Block b : fixedBetween(now, now.plus(Duration.ofDays(days)))) {
@@ -251,7 +307,7 @@ public class TravelService {
                 daysToCompute.add(d);
             }
         }
-        daysToCompute.forEach(this::computeDay);
+        return reconcile(daysToCompute.toArray(LocalDate[]::new));
     }
 
     Optional<Point> home() {
@@ -266,15 +322,13 @@ public class TravelService {
     // ---------------------------------------------------------------- 이동 시간 (§3.3)
 
     /** 그날 좌표 있는 활성 고정 블록의 arrive·depart 를 다시 계산한다. */
-    public void computeDay(LocalDate day) {
+    public boolean computeDay(LocalDate day) {
         Instant from = day.atStartOfDay(time.zone()).toInstant();
         Instant to = day.plusDays(1).atStartOfDay(time.zone()).toInstant();
         List<Store.Block> all = fixedBetween(from, to).stream()
                 .filter(b -> !b.start().isBefore(from)).toList();
-        for (Store.Block b : all) {
-            // 사용자가 직접 고친 이동 시간(source=user)은 다시 계산하지 않는다(장소를 다시 정하면 지운다).
-            db.update("DELETE FROM block_travel WHERE block_id = ? AND source <> 'user'", b.id());
-        }
+        // 다시 계산한 줄은 save 가 같으면 그대로 두고 다르면 바꾼다. 이번에 안 나온 줄(장소가 빠짐 등)은 지운다.
+        java.util.Set<String> kept = new java.util.HashSet<>();
         List<Store.Block> located = all.stream().filter(Store.Block::hasCoords).toList();
         Point home = home().orElse(null);
         String mode = settings.getString("travel.mode");
@@ -286,9 +340,18 @@ public class TravelService {
             if (prev != null) {
                 Instant departAt = i > 0 ? located.get(i - 1).end() : b.start().minus(Duration.ofHours(1));
                 save(b.id(), "arrive", prev, here, mode, departAt);
+                kept.add(b.id() + "/arrive");
             }
             if (next != null) {
                 save(b.id(), "depart", here, next, mode, b.end());
+                kept.add(b.id() + "/depart");
+            }
+        }
+        for (Store.Block b : all) {
+            for (String dir : List.of("arrive", "depart")) {
+                if (!kept.contains(b.id() + "/" + dir)) {
+                    db.update("DELETE FROM block_travel WHERE block_id = ? AND direction = ? AND source <> 'user'", b.id(), dir);
+                }
             }
         }
         // v3.4: 이동 블록. 이미 끝낸(done·partial) 고정 일정도 출발지·귀가 계산에 넣는다.
@@ -296,7 +359,7 @@ public class TravelService {
                         SELECT * FROM blocks WHERE kind = 'fixed' AND status IN ('planned', 'nudging', 'started', 'done', 'partial')
                         AND lat IS NOT NULL AND lng IS NOT NULL AND start_at >= ? AND start_at < ? ORDER BY start_at, id""")
                 .param(AssistantDb.ts(from)).param(AssistantDb.ts(to)).query(Store::block).list();
-        travelBlocks.sync(day, forTravel, home == null ? null : new double[]{home.lat(), home.lng()});
+        return travelBlocks.sync(day, forTravel, home == null ? null : new double[]{home.lat(), home.lng()});
     }
 
     private void save(long blockId, String direction, Point from, Point to, String mode, Instant at) {
@@ -305,6 +368,12 @@ public class TravelService {
             return;
         }
         Leg leg = route(from, to, mode, at);
+        Leg old = leg(blockId, direction).orElse(null);
+        if (old != null && old.minutes() == leg.minutes() && old.from().equals(from.label()) && old.to().equals(to.label())
+                && old.source().equals(leg.source()) && old.mode().equals(leg.mode())) {
+            return; // 같으면 쓰지 않는다(1시간 안전망이 DB 를 계속 쓰지 않게)
+        }
+        db.update("DELETE FROM block_travel WHERE block_id = ? AND direction = ? AND source <> 'user'", blockId, direction);
         db.insert("""
                         INSERT INTO block_travel(block_id, direction, from_label, to_label, mode, minutes, distance_m, source,
                         computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -533,6 +602,58 @@ public class TravelService {
 
     public Map<String, Object> travelInfo(Store.Block t) {
         return travelBlocks.info(t);
+    }
+
+    /**
+     * 비서 도구 adjust_travel(2026-11-06 사용자 요청): 사용자 말에 따라 이동 블록을 고친다. 약속 시각은 그대로 둔다.
+     * - minutes: 이동 시간 직접 고치기(사용자 값, 자동 계산보다 우선)
+     * - delay_minutes 또는 depart_at: 출발 미루기(약속 시작을 넘길 수 없다). 늦어지면 '지각 예상 N분'
+     * - reset: 사용자 값·미룬 출발을 지우고 자동으로 되돌리기
+     * 떠 있는 출발 화면은 '미룸'으로 닫고 새 출발 시각에 다시 띄운다.
+     */
+    public Store.Block adjustTravel(long blockId, Integer minutes, Integer delayMinutes, Instant departAt, boolean reset) {
+        Store.Block t = store.block(blockId).orElseThrow(() -> com.seobin.phonedrop.assistant.ApiException.notFound("블록#" + blockId + "이 없습니다"));
+        if (t.fixed()) {
+            long fixedId = t.id();
+            t = store.activeArriveTravel(fixedId).orElseThrow(() -> com.seobin.phonedrop.assistant.ApiException.unprocessable(
+                    "고정 블록#" + fixedId + "에는 이동 블록이 없습니다(장소·집 주소가 없거나 같은 장소)"));
+        }
+        if (!t.travel() || !List.of("planned", "nudging").contains(t.status())) {
+            throw com.seobin.phonedrop.assistant.ApiException.unprocessable("아직 출발 전인 이동 블록만 고칠 수 있습니다");
+        }
+        Store.Block target = store.block(t.linkedFixedBlockId()).orElseThrow();
+        if (reset) {
+            db.update("UPDATE blocks SET travel_minutes_user = NULL, depart_at = NULL WHERE id = ?", t.id());
+            logs.add(t.id(), "note", "user", "이동 시간·출발을 자동으로 되돌림");
+        }
+        if (minutes != null) {
+            if (minutes < 1 || minutes > 600) {
+                throw com.seobin.phonedrop.assistant.ApiException.badRequest("이동 시간은 1~600분입니다");
+            }
+            db.update("UPDATE blocks SET travel_minutes_user = ? WHERE id = ?", minutes, t.id());
+            logs.add(t.id(), "note", "user", "이동 시간을 " + minutes + "분으로 고침(대화)");
+        }
+        Instant depart = departAt != null ? departAt
+                : delayMinutes != null ? (t.start().isAfter(clock.now()) ? t.start() : clock.now()).plus(Duration.ofMinutes(delayMinutes))
+                : null;
+        if (depart != null) {
+            if (!depart.isBefore(target.start().minusSeconds(60))) {
+                throw com.seobin.phonedrop.assistant.ApiException.unprocessable("약속 시작(" + time.hm(target.start())
+                        + ") 전까지만 미룰 수 있어요. 약속 시각을 바꾸려면 사용자에게 먼저 물어보세요");
+            }
+            if (!depart.isAfter(clock.now().minusSeconds(60))) {
+                throw com.seobin.phonedrop.assistant.ApiException.unprocessable("이미 지난 시각으로는 미룰 수 없어요");
+            }
+            long moved = Duration.between(t.start(), depart).toMinutes();
+            if ("nudging".equals(t.status())) {
+                interventions.snoozeForMove(t.id(), Math.max(0, moved));
+                store.setBlockStatus(t.id(), "planned");
+            }
+            db.update("UPDATE blocks SET depart_at = ? WHERE id = ?", depart, t.id());
+            logs.add(t.id(), "snooze_reason", "user", "출발을 " + time.hm(depart) + "로 미룸");
+        }
+        computeDay(dayOf(target.start()));
+        return store.block(t.id()).orElseThrow();
     }
 
     /** 장소 탭: 앞으로 days 일의 활성 고정 일정과 장소·바로 앞 장소에서 오는 길. */

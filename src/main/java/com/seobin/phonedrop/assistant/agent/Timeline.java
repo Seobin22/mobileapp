@@ -117,6 +117,7 @@ public class Timeline {
                     item.put("link_role", "travel");
                     item.put("travel_direction", b.travelDirection());
                     item.put("travel_tight_min", b.travelTightMin());
+                    item.put("travel_late_min", b.travelLateMin());
                 }
                 items.add(item);
                 if (List.of("planned", "nudging", "started").contains(b.status())) {

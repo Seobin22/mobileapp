@@ -476,6 +476,8 @@ public class ContextBuilder {
                             sb.append("- ").append(range).append("home".equals(item.get("travel_direction")) ? " [귀가] " : " [이동] ")
                                     .append(String.valueOf(item.get("title")).replaceFirst("^(이동|귀가): ", ""))
                                     .append(item.get("travel_tight_min") == null ? "" : " · " + item.get("travel_tight_min") + "분 부족")
+                                    .append(item.get("travel_late_min") == null ? "" : " · 지각 예상 " + item.get("travel_late_min") + "분(출발 미룸)")
+                                    .append(" 블록#").append(item.get("id"))
                                     .append(" (시스템 관리)\n");
                             continue;
                         }

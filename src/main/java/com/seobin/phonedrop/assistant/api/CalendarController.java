@@ -196,6 +196,8 @@ public class CalendarController {
         if (b.travel()) {
             m.put("travel_direction", b.travelDirection());
             m.put("travel_tight_min", b.travelTightMin());
+            m.put("travel_late_min", b.travelLateMin());
+            m.put("depart_at", time.iso(b.departAt()));
             m.put("travel_info", travel.travelInfo(b));
         }
         if (b.linkedFixedBlockId() != null) {
@@ -270,6 +272,9 @@ public class CalendarController {
             logs.add(id, "note", "user", "사용자가 결과를 바꿈: " + RESULT_LABELS.getOrDefault(before, before) + " → "
                     + RESULT_LABELS.get(status));
             coverage.onBlockClosed(id);
+            if (b.fixed()) {
+                travel.reconcile(travel.dayOf(b.start())); // 출발지·귀가가 달라질 수 있다
+            }
             plan.bumpAndSync();
             return Map.<String, Object>of("ok", true, "id", id, "status", status, "turn_id", turnId);
         });

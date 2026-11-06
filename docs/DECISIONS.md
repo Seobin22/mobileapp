@@ -296,3 +296,13 @@
 - 비서 도구 move_block·extend_block·end_block·start_now·attach_work_product 가 이동 블록을 가리키면 거절. set_schedule 은 이동 블록을 교체하지 않고 유지 블록으로 본다. 검증기의 고정 블록 검사는 이동 블록을 건너뛴다(고정 일정이 바뀐 뒤 다시 맞춘다). 연결 블록 알림(fixed_changed)에서도 뺀다.
 - API: `PATCH /v1/travel_blocks/{id} {minutes|null}`, 달력 블록에 `link_role`·`travel_direction`·`travel_tight_min`·`travel_info`, 고정 블록에 `travel_blocks`(linked_prep 에서는 뺀다). 이동 블록 결과 바꾸기는 거절.
 - 앱 3.4.0: 달력 이동 블록 점선·🚌(귀가 🏠 연한 색, 촉박 주황 "N분 부족"), 이동 블록 상세(수단·시간·출처, 이동 시간 고치기·자동으로 되돌리기), 고정 일정 상세 '출발 전 준비(이동 시간 제외)'와 연결된 이동 블록 표시.
+
+## 이동 블록 보강 (2026-11-06, 앱 3.4.1)
+복귀: 태그 `1106_1_v3.4.1전`(221ea75). DB V11(`depart_at`, `travel_late_min`, NULL 허용), 직전 자동 백업 `pre-V11-*.zip`.
+- 원인(운영 기록): 휴대폰 백업 알람이 이동 블록이 있는 고정 일정·귀가 블록에도 맞춰져 있었고, 서버는 언제 온 local_fired 든 받아 화면을 시작했다. 출발 화면 대화에서 비서가 출발만 미룰 수단이 없어 약속(고정 일정) 시각을 옮겼다.
+- 백업 알람: plan.sync upcoming 에서 귀가 블록과 '이동 블록이 출발 화면을 맡은 고정 일정'을 뺀다. 이동 블록 alarm_at = 출발 시각(start). 항목에 블록 version. 서버 local_fired 는 version 이 다르거나(앱 3.4.1+), 알람 시각 2분 전~블록 끝 밖이거나, 위 두 종류면 `ignored` 를 돌려주고 기록만 한다. 앱은 `ignored` 를 받으면 띄운 화면을 닫고 일정 목록을 새로 받는다. 앱도 울릴 때 version·시각을 먼저 본다.
+- 재계산 일원화: `TravelService.reconcile(날짜...)`(이동 시간 → 이동 블록 → 고정 일정 알람). 고정 일정 생성·변경(다른 날로 옮기면 두 날 모두)·삭제·지금 끝내기·결과 바꾸기·반복 수정(지운 회차 날짜)·장소 지정·이동 조정이 끝에 부른다. plan.sync 는 부르는 쪽이 한 번 보낸다. 이동 블록 시각이 바뀌면 출발 화면이 떠 있어도 닫고 version 을 올려 새 시각에 다시 띄운다(출발한 뒤면 끝 시각만). 이동 블록이 없어지면 고정 일정이 직접 알리도록 다시 예약한다. 기록은 시각이 실제로 바뀐 때만, block_travel 은 값이 같으면 쓰지 않는다.
+- 안전망 `travel_check`: 1시간마다 오늘·내일 reconcile + 시작 화면 예약이 빠진 고정 일정 복구. 바뀐 게 있을 때만 기록·plan.sync. 매일 04:20 재계산도 바뀌면 plan.sync. 늦게 [시작]을 눌러 시각이 바뀌는 경우·undo_last 는 순환 의존 때문에 안전망이 맞춘다(최대 1시간).
+- 비서 도구 `adjust_travel {block_id(이동 또는 그 약속), delay_minutes | depart_at | minutes | reset}`: 사용자 말(user_message·풀스크린 대화)일 때만. 약속 시각은 그대로. 출발을 미루면 depart_at 에 저장해 재계산해도 유지, 약속 시작 1분 전까지만. 늦으면 travel_late_min(지각 예상). 출발 시각이 이미 지났으면 지금부터 N분. 약속 시각이 바뀌면 depart_at 을 지운다. 떠 있는 출발 화면은 '미룸'으로 닫는다.
+- 권한: 풀스크린 대화(intervention_talk)에서 이동 블록이 있는 약속의 시각을 move_block·upsert_fixed_block 으로 바꾸려 하면 확인 카드. 장소 없는 일정(공부 등)의 풀스크린 미루기는 그대로.
+- 지금 시작(start_now)은 겹치는 이동 블록을 지우지 않는다.

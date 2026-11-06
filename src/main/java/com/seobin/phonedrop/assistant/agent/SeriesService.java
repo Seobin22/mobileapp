@@ -352,6 +352,7 @@ public class SeriesService {
             Map<LocalDate, Store.Block> old = removeFuture(existing.id(), from);
             List<Long> created = generate(series(newId).orElseThrow());
             carryOver(old, newId);
+            travel.reconcile(old.keySet().toArray(LocalDate[]::new)); // 지운 회차의 이동 블록도 정리
             return new Result(newId, created, null, null);
         }
         // 전체: 시리즈를 고치고 미래 회차를 지우고 다시 만든다(과거·진행 중 제외).
@@ -360,6 +361,7 @@ public class SeriesService {
         Map<LocalDate, Store.Block> old = removeFuture(existing.id(), today);
         List<Long> created = generate(series(existing.id()).orElseThrow());
         carryOver(old, existing.id());
+        travel.reconcile(old.keySet().toArray(LocalDate[]::new)); // 지운 회차의 이동 블록도 정리
         return new Result(existing.id(), created, null, null);
     }
 

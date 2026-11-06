@@ -93,13 +93,17 @@ object InterventionController {
     }
 
     /** 로컬 백업 알람 발화(블록 시작 + grace). 서버 개입을 못 받았을 때만 화면을 띄운다. */
-    fun onLocalBackup(context: Context, blockId: Long) {
+    fun onLocalBackup(context: Context, blockId: Long, alarmVersion: Int? = null) {
         val dao = AppDatabase.dao(context)
         if (dao.serverInterventionForBlock(blockId) != null) return
         val plan = dao.plan() ?: return
         val item = upcoming(plan).firstOrNull { it.block_id == blockId } ?: return
         val now = Instant.now()
         if (!now.isBefore(OffsetDateTime.parse(item.end).toInstant())) return
+        // 2026-11-06: 옛 알람은 띄우지 않는다(블록이 바뀌었거나 알람 시각보다 2분 넘게 이르면).
+        if (alarmVersion != null && item.version != null && alarmVersion != item.version) return
+        val alarmAt = OffsetDateTime.parse(item.alarm_at ?: item.start).toInstant()
+        if (now.isBefore(alarmAt.minusSeconds(120))) return
         if (inQuiet(plan, now)) return
 
         val entity = InterventionEntity(
@@ -122,7 +126,17 @@ object InterventionController {
         dao.upsertIntervention(entity)
         Notifier.showFullScreen(context, entity)
         Reshow.schedule(context, entity.id, entity.reshowMinutes)
-        ActionQueue.enqueue(context, "local_fired", entity.id, blockId)
+        ActionQueue.enqueue(context, "local_fired", entity.id, blockId, item.version)
+    }
+
+    /** 서버가 옛 백업 알람이라며 무시했다: 띄운 화면을 닫고 일정 목록을 새로 받는다. */
+    fun onLocalIgnored(context: Context, blockId: Long) {
+        val dao = AppDatabase.dao(context)
+        dao.endIntervention(localId(blockId), localId(blockId), System.currentTimeMillis())
+        Notifier.cancel(context)
+        Reshow.cancel(context)
+        InterventionState.emit(InterventionState.Event.Close(blockId))
+        kr.ssbin.assistant.work.Sync.runSoon(context)
     }
 
     /** [시작] */

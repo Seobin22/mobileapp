@@ -546,6 +546,8 @@ private fun TravelCell(b: CalendarBlock, compact: Boolean, modifier: Modifier) {
             lineHeight = if (compact) 11.sp else 15.sp)
         if (tight) Text("${b.travel_tight_min}분 부족", fontSize = if (compact) 8.sp else 11.sp, color = color,
             fontWeight = FontWeight.Bold, maxLines = 1)
+        if ((b.travel_late_min ?: 0) > 0) Text("지각 예상 ${b.travel_late_min}분", fontSize = if (compact) 8.sp else 11.sp,
+            color = Color(0xFFE03131), fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -739,6 +741,9 @@ private fun TravelDetail(d: BlockDetailDto, onChanged: () -> Unit) {
         Text("수단 $mode · 약 ${info?.minutes ?: "?"}분 · 출처 $source")
         (d.travel_tight_min ?: 0).takeIf { it > 0 }?.let {
             Text("이동 촉박 · ${it}분 부족(앞 일정이 끝나면 바로 출발해야 해요)", color = Color(0xFFF76707))
+        }
+        (d.travel_late_min ?: 0).takeIf { it > 0 }?.let {
+            Text("출발을 미뤄서 약 ${it}분 늦을 것 같아요", color = Color(0xFFE03131))
         }
         Text("시스템이 관리하는 블록이에요. 이동 시간만 고칠 수 있어요.", style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(3) }, label = { Text("이동 시간(분)") })

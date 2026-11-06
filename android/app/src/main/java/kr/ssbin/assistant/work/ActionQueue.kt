@@ -34,7 +34,7 @@ object ActionQueue {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
 
-    fun enqueue(context: Context, type: String, interventionId: String?, blockId: Long?) {
+    fun enqueue(context: Context, type: String, interventionId: String?, blockId: Long?, blockVersion: Int? = null) {
         val app = context.applicationContext
         val key = UUID.randomUUID().toString()
         val fields = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
@@ -44,6 +44,7 @@ object ActionQueue {
         )
         if (interventionId != null) fields["intervention_id"] = JsonPrimitive(interventionId)
         if (blockId != null) fields["block_id"] = JsonPrimitive(blockId)
+        if (blockVersion != null) fields["block_version"] = JsonPrimitive(blockVersion)
         val json = JsonObject(fields).toString()
         scope.launch {
             AppDatabase.dao(app).insertAction(PendingAction(key, json, System.currentTimeMillis()))
@@ -56,8 +57,15 @@ object ActionQueue {
         val dao = AppDatabase.dao(context)
         for (action in dao.pendingActions()) {
             try {
-                ApiClient.get(context).action(AppJson.parseToJsonElement(action.json) as JsonObject)
+                val req = AppJson.parseToJsonElement(action.json) as JsonObject
+                val res = ApiClient.get(context).action(req)
                 dao.deleteAction(action.idempotencyKey)
+                // 옛 백업 알람이면 서버가 ignored 를 돌려준다 → 띄운 화면을 닫는다.
+                if ((res["status"] as? JsonPrimitive)?.content == "ignored") {
+                    (req["block_id"] as? JsonPrimitive)?.content?.toLongOrNull()?.let {
+                        kr.ssbin.assistant.intervention.InterventionController.onLocalIgnored(context, it)
+                    }
+                }
             } catch (e: retrofit2.HttpException) {
                 if (e.code() in 400..499 && e.code() != 401) {
                     // 서버가 받지 않는 액션은 다시 보내도 같다. 버린다.

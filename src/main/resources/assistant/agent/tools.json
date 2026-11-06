@@ -947,5 +947,35 @@
         "document_id"
       ]
     }
+  },
+  {
+    "name": "adjust_travel",
+    "description": "이동 블록(출발)을 사용자 말대로 고친다. 약속(고정 일정) 시각은 바꾸지 않는다. block_id 는 이동 블록 또는 그 약속의 고정 블록. delay_minutes(지금 예정 출발에서 N분 미루기) 또는 depart_at(새 출발 시각), minutes(이동 시간 직접 고치기), reset(자동으로 되돌리기) 중 하나 이상. 약속 시작을 넘겨 미룰 수 없다. 늦어지면 결과의 late_minutes 를 사용자에게 알린다. 출발 화면이 떠 있으면 닫고 새 출발 시각에 다시 띄운다. 사용자가 직접 말했을 때만 쓸 수 있다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "delay_minutes": {
+          "type": "integer",
+          "description": "예정 출발에서 미룰 분"
+        },
+        "depart_at": {
+          "type": "string",
+          "description": "새 출발 시각 ISO-8601"
+        },
+        "minutes": {
+          "type": "integer",
+          "description": "이동 시간(분) 직접 지정"
+        },
+        "reset": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "block_id"
+      ]
+    }
   }
 ]

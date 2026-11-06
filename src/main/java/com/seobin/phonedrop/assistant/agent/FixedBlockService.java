@@ -238,10 +238,18 @@ public class FixedBlockService {
         if (timeChanged) {
             interventions.scheduleBlockJobs(store.block(blockId).orElseThrow());
         }
+        if (existing != null && !start.equals(existing.start())) {
+            // 약속 시각이 바뀌면 미뤄 둔 출발은 의미가 없다(새 시각 기준으로 다시 계산).
+            db.update("UPDATE blocks SET depart_at = NULL, travel_late_min = NULL WHERE linked_fixed_block_id = ? AND link_role = 'travel'",
+                    blockId);
+        }
         if (existing == null || !java.util.Objects.equals(location, existing.location())) {
             travel.onLocationChanged(blockId);
+            if (existing != null) {
+                travel.reconcile(travel.dayOf(existing.start())); // 다른 날로 옮겼으면 원래 날도
+            }
         } else if (timeChanged) {
-            travel.onDayChanged(blockId);
+            travel.onMoved(blockId, existing.start());
         }
         if (existing != null && interrupts.hasHeld(blockId)) {
             interrupts.scheduleRelease(store.block(blockId).orElseThrow());
