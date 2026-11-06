@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 이동 블록 이상 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서 날짜별 대화 횟수 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,10 +41,9 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'LOCALFIRED' AS q, l.block_id, b.kind, b.link_role, b.travel_direction, FORMATDATETIME(l.at,'MM-dd HH:mm','en','Asia/Seoul') AS fired, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS starts, b.lead_minutes, (SELECT COUNT(*) FROM blocks t WHERE t.linked_fixed_block_id=b.id AND t.link_role='travel' AND t.travel_direction='arrive') AS has_travel FROM intervention_logs l JOIN blocks b ON b.id=l.block_id WHERE l.reaction='local_fired' AND l.at >= TIMESTAMP WITH TIME ZONE '2026-11-05 15:00:00+09:00' ORDER BY l.at;
-SELECT 'IV_FIXED_WITH_TRAVEL' AS q, i.block_id, FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS started, i.status, i.end_reason FROM interventions i JOIN blocks b ON b.id=i.block_id WHERE b.kind='fixed' AND i.started_at >= TIMESTAMP WITH TIME ZONE '2026-11-05 15:00:00+09:00' AND EXISTS (SELECT 1 FROM blocks t WHERE t.linked_fixed_block_id=b.id AND t.link_role='travel' AND t.travel_direction='arrive') ORDER BY i.started_at;
-SELECT 'FIXED_MOVED' AS q, l.block_id, FORMATDATETIME(l.at,'MM-dd HH:mm','en','Asia/Seoul') AS at, l.actor, l.content FROM block_logs l JOIN blocks b ON b.id=l.block_id WHERE b.kind='fixed' AND l.type='moved' AND l.at >= TIMESTAMP WITH TIME ZONE '2026-11-05 15:00:00+09:00' ORDER BY l.at;
-SELECT 'TRAVEL_MOVED' AS q, l.block_id, FORMATDATETIME(l.at,'MM-dd HH:mm','en','Asia/Seoul') AS at, l.content FROM block_logs l JOIN blocks b ON b.id=l.block_id WHERE b.link_role='travel' AND l.type IN ('moved','note') AND l.at >= TIMESTAMP WITH TIME ZONE '2026-11-05 15:00:00+09:00' ORDER BY l.at;
+SELECT 'USERMSG_DAY' AS q, FORMATDATETIME(created_at,'yyyy-MM-dd','en','Asia/Seoul') AS d, COUNT(*) AS n FROM messages WHERE role='user' GROUP BY d ORDER BY d;
+SELECT 'TURN_TRIGGER_DAY' AS q, FORMATDATETIME(started_at,'yyyy-MM-dd','en','Asia/Seoul') AS d, trigger, COUNT(*) AS n FROM turns GROUP BY d, trigger ORDER BY d, trigger;
+SELECT 'TURN_TRIGGER_TOTAL' AS q, trigger, COUNT(*) AS n, COUNT(DISTINCT FORMATDATETIME(started_at,'yyyy-MM-dd','en','Asia/Seoul')) AS days FROM turns GROUP BY trigger ORDER BY n DESC;
 SQL
 
 while IFS= read -r q; do
