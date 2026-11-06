@@ -109,6 +109,19 @@ fun VoiceScreen(modifier: Modifier = Modifier) {
             },
             fontSize = 20.sp, fontWeight = FontWeight.Bold,
         )
+        // 마이크 소리 크기: 말할 때 막대가 분홍 선(기준)을 넘어야 '말'로 알아듣는다
+        val meter by VoiceEngine.meter.collectAsState()
+        Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Box(Modifier.fillMaxWidth().height(10.dp).background(Color(0xFFE9ECEF), RoundedCornerShape(5.dp))) {
+                Box(Modifier.fillMaxWidth(meter.level).height(10.dp)
+                    .background(if (meter.level >= meter.threshold) Color(0xFF2F9E44) else Color(0xFFADB5BD), RoundedCornerShape(5.dp)))
+                Box(Modifier.fillMaxWidth(meter.threshold.coerceAtLeast(0.01f)).height(10.dp), contentAlignment = Alignment.CenterEnd) {
+                    Box(Modifier.size(width = 2.dp, height = 10.dp).background(Color(0xFFD6336C)))
+                }
+            }
+            Text(meter.mic + " · 보낸 말 " + meter.sent + "개 · 말할 때 막대가 분홍 선을 넘어야 알아들어요",
+                style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+        }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp), state = listState) {
             items(lines, key = { it.key }) { line ->
                 when (line.role) {

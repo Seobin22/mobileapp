@@ -89,6 +89,17 @@ object VoiceEngine {
     private val _lines = MutableStateFlow<List<Line>>(emptyList())
     val lines: StateFlow<List<Line>> = _lines
 
+    /** 화면 표시용: 마이크 소리 크기(0~1), 말로 보는 기준(0~1), 보낸 말 수, 마이크 상태 글. */
+    data class Meter(val level: Float = 0f, val threshold: Float = 0f, val sent: Int = 0, val mic: String = "")
+
+    private val _meter = MutableStateFlow(Meter())
+    val meter: StateFlow<Meter> = _meter
+    private var sentCount = 0
+
+    /** rms → 0~1 (로그 눈금, 30~8000). */
+    private fun scale(rms: Double): Float =
+        (Math.log10(rms.coerceAtLeast(30.0) / 30.0) / Math.log10(8000.0 / 30.0)).toFloat().coerceIn(0f, 1f)
+
     @Volatile
     var sessionId: Long? = null
         private set
@@ -140,6 +151,8 @@ object VoiceEngine {
         if (running) return
         app = context.applicationContext
         running = true
+        sentCount = 0
+        _meter.value = Meter()
         _lines.value = emptyList()
         _phase.value = Phase.Listening
         net.execute {
@@ -186,11 +199,22 @@ object VoiceEngine {
             main.post { stop(app, "no_mic_permission") }
             return
         }
-        val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, RATE, AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, max(min, FRAME * 2 * 20))
-        val aec = if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null
-        val ns = if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } else null
+        // 2026-11-07: 일부 기기는 VOICE_COMMUNICATION 입력이 비어 있거나(소리 0) 초기화에 실패한다 → MIC 로 바꿔 다시 연다.
+        var source = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        var opened = openRecorder(source)
+        if (opened == null) {
+            source = MediaRecorder.AudioSource.MIC
+            opened = openRecorder(source)
+        }
+        if (opened == null) {
+            add(Line("err-rec", "error", "마이크를 열지 못했어요(다른 앱이 마이크를 쓰는 중일 수 있어요)"))
+            main.post { stop(app, "mic_open_failed") }
+            return
+        }
+        _meter.value = _meter.value.copy(mic = if (source == MediaRecorder.AudioSource.MIC) "마이크(기본)" else "마이크(통화용)")
+        var rec: AudioRecord = opened
+        var aec = if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null
+        var ns = if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } else null
         val audio = app.getSystemService(AudioManager::class.java)
         val frame = ShortArray(FRAME)
         val preroll = ArrayDeque<ShortArray>()
@@ -202,10 +226,20 @@ object VoiceEngine {
         var utterMs = 0
         val utter = ByteArrayOutputStream()
         rec.startRecording()
+        var quietFrames = 0
+        var readErrors = 0
+        var switched = source == MediaRecorder.AudioSource.MIC
+        var meterAt = 0L
         try {
             while (running) {
                 val n = rec.read(frame, 0, FRAME)
-                if (n <= 0) continue
+                if (n <= 0) {
+                    readErrors++
+                    if (readErrors == 50) add(Line("err-read", "error", "마이크에서 소리를 읽지 못해요(코드 $n)"))
+                    Thread.sleep(20)
+                    continue
+                }
+                readErrors = 0
                 // 통화 중이면 멈췄다가 끝나면 이어서 듣는다(§4.3)
                 if (audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_RINGTONE) {
                     if (_phase.value != Phase.PausedForCall) {
@@ -222,9 +256,35 @@ object VoiceEngine {
                 var sum = 0.0
                 for (i in 0 until n) sum += frame[i].toDouble() * frame[i]
                 val rms = sqrt(sum / n)
+                // 소리가 거의 0 인 채로 4초가 지나면(입력이 비어 있는 기기) 기본 마이크로 바꿔 다시 연다
+                quietFrames = if (rms < 15) quietFrames + 1 else 0
+                if (quietFrames >= 200 && !switched) {
+                    switched = true
+                    quietFrames = 0
+                    runCatching { rec.stop() }
+                    rec.release()
+                    runCatching { aec?.release() }
+                    runCatching { ns?.release() }
+                    aec = null
+                    ns = null
+                    val alt = openRecorder(MediaRecorder.AudioSource.MIC)
+                    if (alt != null) {
+                        rec = alt
+                        rec.startRecording()
+                        _meter.value = _meter.value.copy(mic = "마이크(기본)")
+                        add(Line("info-mic", "error", "마이크 입력이 비어 있어 기본 마이크로 바꿨어요"))
+                    }
+                    continue
+                }
                 val outLoud = _phase.value == Phase.Speaking && !WindowGuard.headset(audio)
-                val threshold = max(floor * 3.0, 450.0) * (if (outLoud) 2.5 else 1.0)
+                // 기준을 낮췄다(통화용 입력은 소리가 작게 들어오는 기기가 있다): 소음 바닥의 2.5배, 최소 200
+                val threshold = max(floor * 2.5, 200.0) * (if (outLoud) 2.5 else 1.0)
                 val speech = rms > threshold
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - meterAt > 100) {
+                    meterAt = nowMs
+                    _meter.value = _meter.value.copy(level = scale(rms), threshold = scale(threshold))
+                }
                 if (!speech) floor = floor * 0.97 + rms * 0.03
                 val copy = frame.copyOf(n)
                 if (!inUtterance) {
@@ -262,10 +322,23 @@ object VoiceEngine {
             }
         } finally {
             runCatching { rec.stop() }
-            rec.release()
-            aec?.release()
-            ns?.release()
+            runCatching { rec.release() }
+            runCatching { aec?.release() }
+            runCatching { ns?.release() }
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openRecorder(source: Int): AudioRecord? {
+        val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val r = runCatching {
+            AudioRecord(source, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min, FRAME * 2 * 20))
+        }.getOrNull() ?: return null
+        if (r.state != AudioRecord.STATE_INITIALIZED) {
+            r.release()
+            return null
+        }
+        return r
     }
 
     private fun writePcm(out: ByteArrayOutputStream, s: ShortArray) {
@@ -285,7 +358,13 @@ object VoiceEngine {
     // ------------------------------------------------------------------ 보내기·받기
 
     private fun send(pcm: ByteArray) {
-        val id = sessionId ?: return
+        val id = sessionId
+        if (id == null) {
+            add(Line("err-nosession", "error", "아직 서버와 연결되지 않았어요. 잠시 뒤 다시 말해 주세요."))
+            return
+        }
+        sentCount++
+        _meter.value = _meter.value.copy(sent = sentCount)
         _phase.value = Phase.Thinking
         streamDone = false
         net.execute {

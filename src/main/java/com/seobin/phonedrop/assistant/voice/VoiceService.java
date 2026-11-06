@@ -119,6 +119,7 @@ public class VoiceService {
      */
     public void turn(long sessionId, byte[] wav, OutputStream out) throws IOException {
         requireOpen(sessionId);
+        log.info("voice turn received: session {} audio {} bytes", sessionId, wav.length); // 내용은 남기지 않는다
         AtomicBoolean interrupted = interrupts.computeIfAbsent(sessionId, k -> new AtomicBoolean(false));
         interrupted.set(false);
         if (tx.run(this::voiceTurnsToday) >= settings.getInt("voice.daily_turn_cap")) {
