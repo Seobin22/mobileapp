@@ -609,7 +609,7 @@ private fun HistoryTab() {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Pills(RESULT_TEXT.toList(), setOfNotNull(outcome)) { outcome = it }
                     Pills(FOCUS_TEXT.map { it.key.toString() to it.value }, setOfNotNull(focus?.toString())) { focus = it.toInt() }
-                    val options = (if (outcome == "done") chips["done"] else if (outcome == null) labels else chips["not_done"])
+                    val options = (if (outcome == "done") chips["done"] else if (outcome == null) (chips["done"] ?: emptyMap()) + (chips["not_done"] ?: emptyMap()) else chips["not_done"])
                         ?: emptyMap()
                     Pills(options.toList(), reasons) { reasons = if (it in reasons) reasons - it else reasons + it }
                     OutlinedTextField(note, { note = it }, label = { Text("추가 내용") })
