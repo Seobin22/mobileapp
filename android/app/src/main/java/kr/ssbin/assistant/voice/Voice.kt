@@ -201,7 +201,9 @@ object VoiceEngine {
             return
         }
         // 2026-11-07: 일부 기기는 VOICE_COMMUNICATION 입력이 비어 있거나(소리 0) 초기화에 실패한다 → MIC 로 바꿔 다시 연다.
-        var source = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        // 2026-11-07(2): 음성 인식용 입력(VOICE_RECOGNITION)을 먼저 쓴다. 통화용은 소리를 작게 줄여 크게 말해야만 잡혔다.
+        // 비서가 말하는 동안은 듣지 않으므로(자기 목소리로 끊기던 문제) 에코 제거에 기대지 않아도 된다.
+        var source = MediaRecorder.AudioSource.VOICE_RECOGNITION
         var opened = openRecorder(source)
         if (opened == null) {
             source = MediaRecorder.AudioSource.MIC
@@ -212,14 +214,14 @@ object VoiceEngine {
             main.post { stop(app, "mic_open_failed") }
             return
         }
-        _meter.value = _meter.value.copy(mic = if (source == MediaRecorder.AudioSource.MIC) "마이크(기본)" else "마이크(통화용)")
+        _meter.value = _meter.value.copy(mic = if (source == MediaRecorder.AudioSource.MIC) "마이크(기본)" else "마이크(음성 인식용)")
         var rec: AudioRecord = opened
         var aec = if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null
         var ns = if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } else null
         val audio = app.getSystemService(AudioManager::class.java)
         val frame = ShortArray(FRAME)
         val preroll = ArrayDeque<ShortArray>()
-        var floor = 300.0
+        var floor = 80.0
         var speechRun = 0
         var inUtterance = false
         var silenceMs = 0
@@ -277,17 +279,25 @@ object VoiceEngine {
                     }
                     continue
                 }
-                val outLoud = _phase.value == Phase.Speaking && !WindowGuard.headset(audio)
-                // 기준을 낮췄다(통화용 입력은 소리가 작게 들어오는 기기가 있다): 소음 바닥의 2.5배, 최소 200
-                val threshold = max(floor * 2.5, 200.0) * (if (outLoud) 2.5 else 1.0)
+                // 기준: 소음 바닥의 2배(최소 90)를 설정의 '마이크 민감도'로 나눈다(높게 = 작은 소리도 잡음)
+                val threshold = max(floor * 2.0, 90.0) / Prefs.get(app).voiceSensitivity.coerceIn(0.5f, 2.5f)
                 val speech = rms > threshold
                 val nowMs = System.currentTimeMillis()
                 if (nowMs - meterAt > 100) {
                     meterAt = nowMs
                     _meter.value = _meter.value.copy(level = scale(rms), threshold = scale(threshold))
                 }
-                if (!speech) floor = floor * 0.97 + rms * 0.03
+                // 소음 바닥: 내려갈 때는 빨리, 올라갈 때는 천천히 따라간다(말소리가 바닥을 끌어올리지 않게)
+                floor = if (rms < floor) floor * 0.8 + rms * 0.2 else if (!speech) floor * 0.99 + rms * 0.01 else floor
                 val copy = frame.copyOf(n)
+                // 비서가 생각하거나 말하는 동안(+끝난 뒤 0.4초)은 듣지 않는다. 끊으려면 화면의 [그만 말하기].
+                if (_phase.value == Phase.Thinking || _phase.value == Phase.Speaking || nowMs - speakEndedAt < 400) {
+                    inUtterance = false
+                    speechRun = 0
+                    preroll.clear()
+                    utter.reset()
+                    continue
+                }
                 if (!inUtterance) {
                     preroll.addLast(copy)
                     if (preroll.size > PREROLL_FRAMES) preroll.removeFirst()
@@ -300,8 +310,6 @@ object VoiceEngine {
                         utter.reset()
                         preroll.forEach { writePcm(utter, it) }
                         preroll.clear()
-                        // 비서가 말하거나 생각하는 중에 말소리가 나면 끊고 들어온다(§4.2)
-                        if (_phase.value == Phase.Speaking || _phase.value == Phase.Thinking) bargeIn()
                     }
                 } else {
                     writePcm(utter, copy)
@@ -316,7 +324,7 @@ object VoiceEngine {
                     if (silenceMs >= endSilence || utterMs >= MAX_UTTERANCE_MS) {
                         inUtterance = false
                         speechRun = 0
-                        if (voicedFrames >= 8) send(utter.toByteArray())
+                        if (voicedFrames >= 8) send(boost(utter.toByteArray()))
                         utter.reset()
                     }
                 }
@@ -340,6 +348,27 @@ object VoiceEngine {
             return null
         }
         return r
+    }
+
+    /** 작은 목소리는 키워서 보낸다(최대 8배, 가장 큰 소리가 90% 가 되게). 받아쓰기가 작은 소리를 놓치지 않게. */
+    private fun boost(pcm: ByteArray): ByteArray {
+        val b = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN)
+        var peak = 1
+        while (b.remaining() >= 2) peak = max(peak, kotlin.math.abs(b.short.toInt()))
+        val gain = (29000.0 / peak).coerceIn(1.0, 8.0)
+        if (gain <= 1.05) return pcm
+        val out = ByteBuffer.allocate(pcm.size).order(ByteOrder.LITTLE_ENDIAN)
+        b.rewind()
+        while (b.remaining() >= 2) out.putShort((b.short * gain).toInt().coerceIn(-32768, 32767).toShort())
+        return out.array()
+    }
+
+    @Volatile
+    private var speakEndedAt = 0L
+
+    /** 화면의 [그만 말하기]: 비서 말·받기를 멈추고, 그때까지 말한 부분만 남긴다(§3.3 끊고 들어오기를 버튼으로). */
+    fun stopSpeaking() {
+        if (_phase.value == Phase.Speaking || _phase.value == Phase.Thinking) bargeIn()
     }
 
     private fun writePcm(out: ByteArrayOutputStream, s: ShortArray) {
@@ -436,6 +465,7 @@ object VoiceEngine {
         if (clip == null) {
             player = null
             abandonFocus()
+            speakEndedAt = System.currentTimeMillis()
             if (running && streamDone && _phase.value == Phase.Speaking) _phase.value = Phase.Listening
             return
         }

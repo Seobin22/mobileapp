@@ -74,6 +74,11 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getInt("voice_end_silence_ms", 800)
         set(value) = prefs.edit().putInt("voice_end_silence_ms", value).apply()
 
+    /** 마이크 민감도(0.7 낮게 · 1.0 보통 · 1.6 높게). 이 기기에만 저장. */
+    var voiceSensitivity: Float
+        get() = prefs.getFloat("voice_sensitivity", 1.3f)
+        set(value) = prefs.edit().putFloat("voice_sensitivity", value).apply()
+
     /** §5 적극 개입 시간대에 개입 화면이 뜨면 음성 대화 자동 시작(사용자가 설정에서 켬). */
     var activeAutoVoice: Boolean
         get() = prefs.getBoolean("active_auto_voice", false)

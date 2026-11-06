@@ -103,7 +103,7 @@ fun VoiceScreen(modifier: Modifier = Modifier) {
             when (phase) {
                 VoiceEngine.Phase.Listening -> "🎤 듣는 중"
                 VoiceEngine.Phase.Thinking -> "··· 생각 중"
-                VoiceEngine.Phase.Speaking -> "🔊 말하는 중 (말하면 멈춰요)"
+                VoiceEngine.Phase.Speaking -> "🔊 말하는 중"
                 VoiceEngine.Phase.PausedForCall -> "📞 통화 중이라 잠깐 멈춤"
                 else -> ""
             },
@@ -177,6 +177,12 @@ fun VoiceScreen(modifier: Modifier = Modifier) {
         if (WindowGuard.active(context) != null) {
             TextButton(onClick = { ActiveAlarm.pause(context) }) { Text("10분만 조용히") }
         }
+        // 비서가 말하는 동안은 마이크로 끊지 않는다. 끊고 싶으면 이 버튼.
+        if (phase == VoiceEngine.Phase.Speaking || phase == VoiceEngine.Phase.Thinking) {
+            OutlinedButton(onClick = { VoiceEngine.stopSpeaking() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text(if (phase == VoiceEngine.Phase.Speaking) "그만 말하기" else "그만 생각하기", fontSize = 18.sp)
+            }
+        }
         Button(
             onClick = { VoiceEngine.stop(context, "user") },
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF495057)),
@@ -248,6 +254,17 @@ fun VoiceSettingsSection() {
         Text("말 속도 %.2f".format(speed))
         Slider(value = speed, onValueChange = { speed = (it * 20).toInt() / 20f }, valueRange = 0.7f..1.2f,
             onValueChangeFinished = { put("voice.speed", JsonPrimitive(speed.toDouble())) })
+        var sens by remember { mutableStateOf(Prefs.get(context).voiceSensitivity) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("마이크 민감도")
+            listOf(0.8f to "낮게", 1.3f to "보통", 2.0f to "높게").forEach { (v, label) ->
+                FilterChip(selected = kotlin.math.abs(sens - v) < 0.05f, onClick = {
+                    sens = v
+                    Prefs.get(context).voiceSensitivity = v
+                }, label = { Text(label) })
+            }
+        }
+        Text("작게 말해도 못 알아들으면 '높게', 주변 소리에 자꾸 반응하면 '낮게'.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         Text("말 끝 침묵 ${silence.toInt()}ms (짧으면 빨리 답하고, 길면 말 중간에 안 끊겨요)")
         Slider(value = silence, onValueChange = { silence = (it / 50).toInt() * 50f }, valueRange = 500f..2000f,
             onValueChangeFinished = { put("voice.end_silence_ms", JsonPrimitive(silence.toInt())) })
