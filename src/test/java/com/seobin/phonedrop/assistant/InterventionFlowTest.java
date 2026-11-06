@@ -47,6 +47,23 @@ class InterventionFlowTest extends AssistantTestBase {
     }
 
     @Test
+    void t2b_alreadyStartedUsesPlannedStart() {
+        long[] ids = createBlock("보고서 초안", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:06");
+        Map<String, Object> result = action("already_started", onlyIntervention().id(), ids[1], "k-already");
+
+        assertThat(result.get("status")).isEqualTo("ok");
+        assertThat(onlyIntervention().status()).isEqualTo("acked");
+        Store.Block b = block(ids[1]);
+        assertThat(b.status()).isEqualTo("started");
+        assertThat(b.actualStart()).isEqualTo(at("2026-11-02T10:00"));
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM turns WHERE trigger = 'block_started' AND trigger_ref LIKE '%\"already\":true%'")
+                .query(Integer.class).single()).isEqualTo(1);
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM block_logs WHERE block_id = ? AND content LIKE '이미 하고 있었음%'")
+                .param(ids[1]).query(Integer.class).single()).isEqualTo(1);
+    }
+
+    @Test
     void t3_reshowEveryThreeMinutesThenExpire() {
         long[] ids = createBlock("보고서 초안", "2026-11-02T10:00", 60);
         runUntil("2026-11-02T10:07");

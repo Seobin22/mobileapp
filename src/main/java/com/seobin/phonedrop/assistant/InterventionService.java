@@ -284,14 +284,21 @@ public class InterventionService {
     }
 
     /** [시작]으로 작업이 시작되면 비서가 체크인을 예약하도록 block_started turn (v3 §6 작업 중 동행, DECISIONS 참고). */
-    private void enqueueStarted(long blockId) {
+    private void enqueueStarted(long blockId, boolean already) {
         ObjectNode ref = Json.object();
         ref.put("block_id", blockId);
+        if (already) {
+            ref.put("already", true);
+        }
         turns.enqueue("block_started", ref, TurnQueue.PRIORITY_DEFAULT);
     }
 
     /** [시작] 뒤: 이동 블록이면 '출발함'(체크인 없음), 고정 일정이면 그리로 가는 이동 블록을 끝낸다. */
     private void afterStart(long blockId) {
+        afterStart(blockId, false);
+    }
+
+    private void afterStart(long blockId, boolean already) {
         Store.Block b = store.block(blockId).orElse(null);
         if (b != null && b.travel()) {
             return;
@@ -299,7 +306,7 @@ public class InterventionService {
         if (b != null && b.fixed()) {
             finishTravelFor(b.id());
         }
-        enqueueStarted(blockId);
+        enqueueStarted(blockId, already);
     }
 
     /** v3 §3.6: 블록이 missed 가 되면 block_missed turn. */
@@ -554,7 +561,8 @@ public class InterventionService {
         Long interventionId = numericId(req.path("intervention_id"));
         Long blockId = numericId(req.path("block_id"));
         String status = switch (type) {
-            case "start" -> start(interventionId, blockId);
+            case "start" -> start(interventionId, blockId, false);
+            case "already_started" -> start(interventionId, blockId, true);
             case "dismiss" -> dismiss(interventionId, blockId);
             case "snooze_request" -> snoozeRequest(interventionId, blockId);
             case "local_fired" -> localFired(blockId, req.hasNonNull("block_version") ? Integer.valueOf(req.get("block_version").asInt()) : null);
@@ -592,12 +600,16 @@ public class InterventionService {
         return byId;
     }
 
-    private String start(Long interventionId, Long blockId) {
+    /** already = [이미 하고 있음]: 알림 전에 시작했다. 실제 시작 = 예정 시작(지금보다 앞이면). */
+    private String start(Long interventionId, Long blockId, boolean already) {
         Instant now = clock.now();
         Optional<Store.Intervention> found = resolve(interventionId, blockId);
         if (found.isPresent() && found.get().active()) {
             ack(found.get());
-            afterStart(found.get().blockId());
+            if (already) {
+                markAlready(found.get().blockId());
+            }
+            afterStart(found.get().blockId(), already);
             return "ok";
         }
 
@@ -616,8 +628,19 @@ public class InterventionService {
             return "ok";
         }
         startBlockNow(b, t, now);
-        afterStart(b.id());
+        if (already) {
+            markAlready(b.id());
+        }
+        afterStart(b.id(), already);
         return "accepted_as_start_now";
+    }
+
+    /** [이미 하고 있음]: 실제 시작을 예정 시작으로 당기고(지금보다 앞일 때만) 기록을 남긴다. */
+    private void markAlready(long blockId) {
+        db.update("""
+                        UPDATE blocks SET actual_start = start_at, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND status = 'started' AND start_at < actual_start""", blockId);
+        logs.add(blockId, "note", "user", "이미 하고 있었음(알림 전에 시작)");
     }
 
     /** 진행 중 개입을 acked 로 끝내고 블록을 started 로. [시작] 액션과 start_now 도구가 쓴다. */

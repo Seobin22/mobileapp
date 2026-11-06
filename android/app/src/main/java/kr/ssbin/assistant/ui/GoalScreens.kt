@@ -138,8 +138,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("제목 (예: 치과, 컴활 공부)") })
                 OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
-                OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") })
-                OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
+                StartEndTimeField(time, duration, { time = it }, { duration = it })
                 OutlinedTextField(lead, { lead = it }, label = { Text("출발·준비 시간(분, 선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
                 OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
                 if (initial == null) {
@@ -172,7 +171,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                     LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim()))
                         .atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
                 }.getOrNull()
-                val minutes = duration.trim().toIntOrNull()
+                val minutes = duration.trim().toIntOrNull()?.takeIf { it > 0 }
                 val leadText = lead.trim()
                 val leadMinutes = if (leadText.isEmpty()) null else leadText.toIntOrNull()
                 if (title.isBlank() || start == null || minutes == null || (leadText.isNotEmpty() && leadMinutes == null)) {

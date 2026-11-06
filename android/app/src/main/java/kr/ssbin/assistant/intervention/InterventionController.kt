@@ -139,12 +139,12 @@ object InterventionController {
         kr.ssbin.assistant.work.Sync.runSoon(context)
     }
 
-    /** [시작] */
-    fun onUserStart(context: Context, entity: InterventionEntity) {
+    /** [시작] / [이미 하고 있음](already = 알림 전에 시작함) */
+    fun onUserStart(context: Context, entity: InterventionEntity, already: Boolean = false) {
         Notifier.cancel(context)
         Reshow.cancel(context)
         AppDatabase.dao(context).endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
-        ActionQueue.enqueue(context, "start", entity.id, entity.blockId)
+        ActionQueue.enqueue(context, if (already) "already_started" else "start", entity.id, entity.blockId)
     }
 
     /**

@@ -949,7 +949,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
 
     fun save(scopeChoice: String?) {
         val start = startIso()
-        val minutes = duration.trim().toIntOrNull()
+        val minutes = duration.trim().toIntOrNull()?.takeIf { it > 0 }
         val leadText = lead.trim()
         if (title.isBlank() || start == null || minutes == null || (leadText.isNotEmpty() && leadText.toIntOrNull() == null)) {
             error = "제목·날짜·시각·길이·출발 준비 형식을 확인하세요"
@@ -1004,10 +1004,9 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("제목 (예: 치과, 헬스)") })
                 OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") }, enabled = !inProgress)
-                OutlinedTextField(time, { time = it }, label = { Text("시작 (HH:MM)") }, enabled = !inProgress)
-                if (inProgress) Text("이미 시작된 일정이라 시작 시각은 바꿀 수 없어요. 길이로 끝 시각을 늘리거나 줄이세요.",
+                if (inProgress) Text("이미 시작된 일정이라 시작 시각은 바꿀 수 없어요. 끝 시각만 바꿀 수 있어요.",
                     style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
+                StartEndTimeField(time, duration, { time = it }, { duration = it }, startEnabled = !inProgress)
                 if (!inProgress) OutlinedTextField(lead, { lead = it }, label = { Text("출발 전 준비(분, 이동 시간 제외·선택)") }, placeholder = { Text("비워 두면 비서가 정해요") })
                 OutlinedTextField(location, { location = it }, label = { Text("장소(선택)") })
                 detail?.place_name?.let { Text("찾은 장소: $it (틀리면 장소를 다시 입력하세요)", style = MaterialTheme.typography.bodySmall) }

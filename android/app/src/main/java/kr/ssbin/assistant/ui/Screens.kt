@@ -139,8 +139,7 @@ internal fun TaskDialog(initial: TaskDto?, onDismiss: () -> Unit, onSaved: () ->
                 OutlinedTextField(title, { title = it }, label = { Text("제목") })
                 OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동") })
                 OutlinedTextField(date, { date = it }, label = { Text("날짜 (YYYY-MM-DD)") })
-                OutlinedTextField(time, { time = it }, label = { Text("시각 (HH:MM)") })
-                OutlinedTextField(duration, { duration = it }, label = { Text("길이(분)") })
+                StartEndTimeField(time, duration, { time = it }, { duration = it })
                 error?.let { Text(it, color = RED) }
             }
         },
@@ -150,7 +149,7 @@ internal fun TaskDialog(initial: TaskDto?, onDismiss: () -> Unit, onSaved: () ->
                     LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim()))
                         .atZone(ZoneId.systemDefault()).toOffsetDateTime().toString()
                 }.getOrNull()
-                val minutes = duration.trim().toIntOrNull()
+                val minutes = duration.trim().toIntOrNull()?.takeIf { it > 0 }
                 if (start == null || minutes == null) {
                     error = "날짜·시각·길이 형식을 확인하세요"
                     return@TextButton

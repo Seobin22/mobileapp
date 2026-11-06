@@ -200,13 +200,23 @@ class InterventionActivity : ComponentActivity() {
                 )
             }
             Spacer(Modifier.height(if (imeVisible) 8.dp else if (lines.isEmpty()) 40.dp else 16.dp))
-            Button(
-                onClick = { onStartPressed() },
-                enabled = current != null,
-                colors = ButtonDefaults.buttonColors(containerColor = PINK),
-                modifier = Modifier.fillMaxWidth().height(if (imeVisible) 48.dp else 72.dp),
-            ) {
-                Text("시작", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { onStartPressed(false) },
+                    enabled = current != null,
+                    colors = ButtonDefaults.buttonColors(containerColor = PINK),
+                    modifier = Modifier.weight(1f).height(if (imeVisible) 48.dp else 72.dp),
+                ) {
+                    Text("시작", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = { onStartPressed(true) },
+                    enabled = current != null,
+                    modifier = Modifier.weight(1f).height(if (imeVisible) 48.dp else 72.dp),
+                ) {
+                    Text("이미 하고 있음", fontSize = if (imeVisible) 15.sp else 18.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White, textAlign = TextAlign.Center)
+                }
             }
             Spacer(Modifier.height(12.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
@@ -407,11 +417,11 @@ class InterventionActivity : ComponentActivity() {
         engine.speak(current.ttsText, TextToSpeech.QUEUE_FLUSH, null, "intervention-${current.id}")
     }
 
-    private fun onStartPressed() {
+    private fun onStartPressed(already: Boolean) {
         val current = entity.value ?: return
         handled = true
         val app = applicationContext
-        Thread { InterventionController.onUserStart(app, current) }.start()
+        Thread { InterventionController.onUserStart(app, current, already) }.start()
         // 준비된 작업물이 있으면 바로 연다
         current.workProductId?.let { startActivity(WorkProductActivity.intent(this, it)) }
         finish()

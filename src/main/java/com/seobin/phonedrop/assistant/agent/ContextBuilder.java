@@ -347,7 +347,10 @@ public class ContextBuilder {
                         case "never_started" -> "never_started(시작되지 않고 끝 시각이 지남)";
                         default -> ref.path("reason").asString("");
                     };
-            case "block_started" -> "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
+            case "block_started" -> ref.path("already").asBoolean(false)
+                    ? "block_started: 사용자가 [이미 하고 있음]을 눌러 블록#" + ref.path("block_id").asLong()
+                    + " 작업을 알림 전에 이미 시작했다고 알림(시작하라고 다시 권하지 말고, 체크인 예약 등 동행)"
+                    : "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
                     + " 작업을 시작함(체크인 예약 등 동행)";
             case "block_ended" -> "fixed_block".equals(ref.path("reason").asString(""))
                     ? "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong()
