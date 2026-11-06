@@ -558,6 +558,7 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
     var error by remember { mutableStateOf<String?>(null) }
     var memo by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
+    var watchOpen by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
     var askPlanned by remember { mutableStateOf(false) }
 
@@ -701,8 +702,15 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
                 TextButton(onClick = onDismiss) { Text("닫기") }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+        dismissButton = {
+            Row {
+                // v4 §7: 블록 상세 → 집중 확인(감시)·허용 앱
+                if (detail != null && detail?.link_role != "travel") TextButton(onClick = { watchOpen = true }) { Text("집중 확인") }
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+        },
     )
+    if (watchOpen) BlockWatchDialog(blockId) { watchOpen = false }
     if (askPlanned) {
         detail?.let { d ->
             PlannedBlockDialog(TimelineItem(kind = "planned_block", start = d.start, end = d.end, id = d.id, title = d.title),

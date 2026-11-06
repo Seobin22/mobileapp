@@ -54,6 +54,10 @@ public class AgentRunner {
     private final LlmClient llm;
     /** v3.6 §3.5 음성 turn 에만 붙는 말투. */
     private final String voicePrompt;
+    /** v4 §5.6 딴짓 기록(distraction·미루기·block_missed turn). */
+    private final String distractionPrompt;
+    static final java.util.Set<String> DISTRACTION_PROMPT_TRIGGERS =
+            java.util.Set.of("distraction", "intervention_talk", "snooze_request", "block_missed");
     private final ProactiveService proactive;
     private final GoalCoverage coverage;
     private final Store store;
@@ -93,6 +97,11 @@ public class AgentRunner {
         this.store = store;
         this.goalPrompts = goalPrompts;
         this.documents = documents;
+        try (InputStream in = new ClassPathResource("assistant/prompts/distraction.md").getInputStream()) {
+            distractionPrompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("distraction.md 를 읽을 수 없습니다", e);
+        }
         try (InputStream in = new ClassPathResource("assistant/prompts/voice.md").getInputStream()) {
             voicePrompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         } catch (java.io.IOException e) {
@@ -194,7 +203,8 @@ public class AgentRunner {
         String system = systemTemplate.replace("{persona}", settings.getString("persona"))
                 .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")))
                 .replace("{profile}", tx.run(memoryContext::systemSection))
-                + ("voice".equals(trigger) ? voicePrompt : "");
+                + ("voice".equals(trigger) ? voicePrompt : "")
+                + (DISTRACTION_PROMPT_TRIGGERS.contains(trigger) ? distractionPrompt : "");
         String userContent = tx.run(() -> context.build(trigger, ref));
         // v3 §4.4: web.enabled=false 이거나 soft 상한을 넘으면 web_search 를 tools 에서 뺀다.
         boolean webSearch = settings.getBoolean("web.enabled") && !tx.run(proactive::overSoftLimit);

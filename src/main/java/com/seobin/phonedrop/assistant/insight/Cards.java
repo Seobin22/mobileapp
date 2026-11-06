@@ -274,6 +274,9 @@ public class Cards {
             o.set("focus", field(f.focus(), f.focusSrc()));
             o.set("reason_tags", field(f.reasonTags() == null ? null : Json.parse(f.reasonTags()), f.reasonSrc()));
             o.set("progress_done", field(f.progressDone(), f.progressSrc()));
+            db.jdbc().sql("SELECT distraction_minutes, distraction_top_app FROM block_facts WHERE block_id = ? AND distraction_minutes > 0")
+                    .param(b.id()).query((rs, n) -> "딴짓 " + rs.getInt(1) + "분" + (rs.getString(2) == null ? "" : "(" + rs.getString(2) + ")"))
+                    .optional().ifPresent(line -> o.put("distraction", line)); // v4 §6
         }
         ObjectNode reasons = p.putObject("reason_chips");
         reasons.set("done", chips(BlockFacts.DONE_REASONS));

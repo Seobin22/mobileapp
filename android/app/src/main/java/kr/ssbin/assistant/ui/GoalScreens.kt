@@ -207,7 +207,9 @@ fun PlannedBlockDialog(item: TimelineItem, onDismiss: () -> Unit, onSent: () -> 
     val scope = rememberCoroutineScope()
     var request by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var watchOpen by remember { mutableStateOf(false) }
     val title = item.title.orEmpty()
+    if (watchOpen) BlockWatchDialog(item.id) { watchOpen = false }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -215,6 +217,7 @@ fun PlannedBlockDialog(item: TimelineItem, onDismiss: () -> Unit, onSent: () -> 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("비서가 잡은 계획 블록이에요. 바꾸고 싶은 걸 말하면 비서가 다시 배치하고 알려줘요.")
                 OutlinedTextField(request, { request = it }, label = { Text("예: 저녁으로 옮겨줘 / 오늘은 빼줘") })
+                TextButton(onClick = { watchOpen = true }) { Text("집중 확인 설정(감시·허용 앱)") }
                 error?.let { Text(it, color = ERR) }
             }
         },

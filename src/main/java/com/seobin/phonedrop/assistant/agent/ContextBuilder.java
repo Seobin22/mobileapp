@@ -48,6 +48,18 @@ public class ContextBuilder {
 
     private final Replans replans;
     private TimeWindows timeWindows;
+    private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.distract.DistractionService> distractions;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setDistractions(org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.distract.DistractionService> distractions) {
+        this.distractions = distractions;
+    }
+
+    /** 딴짓 기록을 맥락에 넣는 turn. */
+    static final class AgentRunnerTriggers {
+        static final java.util.Set<String> DISTRACTION_CONTEXT =
+                java.util.Set.of("distraction", "intervention_talk", "snooze_request", "block_missed");
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     void setTimeWindows(TimeWindows timeWindows) {
@@ -107,6 +119,17 @@ public class ContextBuilder {
                 .append(deadlines.contextSection()).append('\n');
         sb.append("# 답을 기다리는 목표 질문(코드가 버튼으로 물음)\n").append(goalPrompts.contextSection(trigger)).append('\n');
         appendMemos(sb, trigger, ref, now);
+        // v4 §6: 미루기·block_missed·distraction turn 에는 이 블록의 오늘 딴짓(앱·분)을 넣는다(제목은 넣지 않는다).
+        if (AgentRunnerTriggers.DISTRACTION_CONTEXT.contains(trigger)) {
+            Long blockId = ref.hasNonNull("block_id") ? Long.valueOf(ref.get("block_id").asLong())
+                    : ref.hasNonNull("intervention_id")
+                    ? store.intervention(ref.get("intervention_id").asLong()).map(Store.Intervention::blockId).orElse(null) : null;
+            com.seobin.phonedrop.assistant.distract.DistractionService ds = distractions == null ? null : distractions.getIfAvailable();
+            String summary = blockId == null || ds == null ? "" : ds.blockSummary(blockId);
+            if (!summary.isEmpty()) {
+                sb.append("# 이 블록 딴짓 기록(사실, 블록#").append(blockId).append(")\n").append(summary).append('\n');
+            }
+        }
         // v3.3 §4.5: 자료는 요약·제목만(전문은 read_document)
         sb.append("# 사용자 자료\n")
                 .append(documents.contextSection(trigger, goalOf(trigger, ref),
@@ -388,6 +411,9 @@ public class ContextBuilder {
                     + ref.path("displaced") + "이 취소됐다. 그 할 일을 다시 배치하고 짧게 알린다"
                     : "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 넣어 계획 블록 " + ref.path("displaced") + "이 취소됐다. 재배치하고 알린다";
+            case "distraction" -> "distraction: 블록#" + ref.path("block_id").asLong() + " 시간에 " + ref.path("app").asString("")
+                    + " " + ref.path("minutes").asInt() + "분째 딴짓 중(코드가 감지, 개입 단계는 코드가 정함). 이 블록으로 돌아가라고 짧고 단호하게 한마디."
+                    + " 비난·꼬리표 없이. send_message kind=proactive 1개";
             case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
                     + switch (ref.path("reason").asString("")) {
                         case "no_response" -> "no_response(화면에 무응답)";

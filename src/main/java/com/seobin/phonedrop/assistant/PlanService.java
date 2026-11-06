@@ -25,6 +25,13 @@ public class PlanService {
     private final com.seobin.phonedrop.assistant.insight.BlockFacts facts;
     private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows;
 
+    private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.distract.DistractionService> distractions;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setDistractions(org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.distract.DistractionService> distractions) {
+        this.distractions = distractions;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     void setWindows(org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows) {
         this.windows = windows;
@@ -114,6 +121,13 @@ public class PlanService {
         data.put("time_windows", Json.write(windowList));
         data.put("active_paused_until", pausedUntil);
         data.put("active_auto_voice", String.valueOf(settings.getBoolean("active.auto_voice")));
+        // v4 §5.1: 감시 창(앞으로 24시간)·딴짓 앱 규칙. 앱이 로컬 시간대·고정 일정과 함께 혼자 판단한다.
+        com.seobin.phonedrop.assistant.distract.DistractionService ds = distractions == null ? null : distractions.getIfAvailable();
+        if (ds != null) {
+            data.put("monitor", Json.write(ds.monitorWindows(now, until)));
+            data.put("app_rules", Json.write(ds.rulesForSync()));
+            data.put("distract_trigger_min", String.valueOf(settings.getInt("distract.trigger_min")));
+        }
         data.put("voice_end_silence_ms", String.valueOf(settings.getInt("voice.end_silence_ms")));
         data.put("plan_version", String.valueOf(version()));
         data.put("quiet_windows", Json.write(quiet));

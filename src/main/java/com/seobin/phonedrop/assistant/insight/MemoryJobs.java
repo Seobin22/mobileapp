@@ -177,7 +177,7 @@ public class MemoryJobs {
     }
 
     /** 저렴한 모델로 한 번 묻는다. 그 모델이 안 되면 기본 모델로 한 번 더. */
-    LlmClient.LlmResponse ask(String system, String text) {
+    public LlmClient.LlmResponse ask(String system, String text) {
         if (llm instanceof ConfiguredLlm configured) {
             try {
                 return configured.once(system, text, List.of(), model());
@@ -190,7 +190,7 @@ public class MemoryJobs {
     }
 
     /** 응답에서 JSON 객체를 꺼낸다(앞뒤 글·코드 블록 무시). 없으면 빈 객체. */
-    static JsonNode json(String text) {
+    public static JsonNode json(String text) {
         if (text == null) {
             return Json.object();
         }

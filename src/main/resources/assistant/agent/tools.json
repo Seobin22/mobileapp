@@ -494,9 +494,14 @@
         "action": {
           "type": "string",
           "enum": [
-            "open_settings"
+            "open_settings",
+            "open_block_settings"
           ],
-          "description": "방해 금지·적극 개입 시간대를 바꾸자고 제안할 때 [설정 열기] 버튼을 붙인다(시간대는 사용자만 바꾼다)."
+          "description": "방해 금지·적극 개입 시간대를 바꾸자고 제안할 때 open_settings([설정 열기]), 블록의 감시·허용 앱을 바꾸자고 제안할 때 open_block_settings([블록 설정 열기], block_id 필요). 시간대·감시 설정은 사용자만 바꾼다."
+        },
+        "block_id": {
+          "type": "integer",
+          "description": "open_block_settings 의 블록"
         }
       },
       "required": [

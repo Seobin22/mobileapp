@@ -100,6 +100,9 @@ object InterventionController {
         WindowGuard.save(context, data["time_windows"], data["active_paused_until"])
         data["active_auto_voice"]?.let { Prefs.get(context).activeAutoVoice = it == "true" }
         data["voice_end_silence_ms"]?.toIntOrNull()?.let { Prefs.get(context).voiceEndSilenceMs = it }
+        data["monitor"]?.let { Prefs.get(context).monitorWindows = it }
+        data["app_rules"]?.let { Prefs.get(context).appRules = it }
+        data["distract_trigger_min"]?.toIntOrNull()?.let { Prefs.get(context).distractTriggerMin = it }
         LocalScheduler.rescheduleAll(context)
     }
 

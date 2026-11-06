@@ -79,6 +79,24 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean("active_auto_voice", false)
         set(value) = prefs.edit().putBoolean("active_auto_voice", value).apply()
 
+    // v4 §5 딴짓 감지(plan.sync 로 받는다)
+    var monitorWindows: String
+        get() = prefs.getString("monitor_windows", "[]") ?: "[]"
+        set(value) = prefs.edit().putString("monitor_windows", value).apply()
+
+    var appRules: String
+        get() = prefs.getString("app_rules", "[]") ?: "[]"
+        set(value) = prefs.edit().putString("app_rules", value).apply()
+
+    var distractTriggerMin: Int
+        get() = prefs.getInt("distract_trigger_min", 3)
+        set(value) = prefs.edit().putInt("distract_trigger_min", value).apply()
+
+    /** 서버에 못 보낸 딴짓 기록(JSON 한 줄씩). */
+    var pendingDistractions: List<String>
+        get() = (prefs.getString("pending_distractions", "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("pending_distractions", value.joinToString("\n")).apply()
+
     // v4 §3.2 L4 잠금 상태
     var lockActive: Boolean
         get() = prefs.getBoolean("lock_active", false)

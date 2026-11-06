@@ -163,6 +163,7 @@ fun OutcomeCardView(card: CardDto) {
             val e = entries.getValue(b.block_id)
             HorizontalDivider()
             Text(b.title + (if (b.fixed) " (고정)" else "") + "  " + hmOf(b.start) + "–" + hmOf(b.end), fontWeight = FontWeight.Bold)
+            b.distraction?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFC92A2A)) }
             val outcomeOptions = if (b.fixed) listOf("done" to "갔음", "partial" to "일부만", "missed" to "못 감")
             else listOf("done" to "다 함", "partial" to "일부", "missed" to "못 함")
             Text("결과·진행", style = MaterialTheme.typography.labelMedium)
@@ -594,6 +595,7 @@ private fun HistoryTab() {
                 listOfNotNull(f.outcome_note, f.focus_note, f.reason_note, f.extra_note).forEach {
                     Text("“$it”", style = MaterialTheme.typography.bodySmall, color = Color(0xFF495057))
                 }
+                if (f.distractions.isNotEmpty()) DistractionRows(f.distractions) // v4 §7
             }
         }
     }

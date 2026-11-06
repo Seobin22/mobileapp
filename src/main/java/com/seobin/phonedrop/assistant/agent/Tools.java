@@ -1079,11 +1079,16 @@ public class Tools {
             r.put("note", "방해 금지 일정 중이라 일정이 끝나면 묶어서 보냅니다");
             return r;
         }
-        boolean silent = d.silent() || silentFor(kind, importance);
+        boolean silent = d.silent() || !"distraction".equals(ctx.trigger) && silentFor(kind, importance);
         // 풀스크린 대화의 답은 그 개입에 붙인다(앱이 화면에 표시하고 TTS 로 읽는다).
         Long interventionId = "reply".equals(kind) ? ctx.interventionId : null;
         // v3.6 §1.2: 시간대는 사용자만 바꾼다. 비서는 [설정 열기] 버튼만 붙일 수 있다.
-        String action = "open_settings".equals(in.path("action").asString("")) ? "open_settings" : null;
+        String action = switch (in.path("action").asString("")) {
+            case "open_settings" -> "open_settings";
+            // v4 §4: 비서는 블록 감시·허용 앱을 바꾸지 못하고 [블록 설정 열기] 버튼만 붙인다
+            case "open_block_settings" -> in.hasNonNull("block_id") ? "open_block_settings:" + in.get("block_id").asLong() : null;
+            default -> null;
+        };
         if (ctx.voiceSessionId != null) {
             silent = true; // 음성 탭이 소리로 말한다. 알림은 띄우지 않는다.
         }

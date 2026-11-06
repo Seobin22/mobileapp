@@ -433,6 +433,13 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
             if (!mine && m.action == "open_settings") {
                 OutlinedButton(onClick = { MainActivity.openSettings.tryEmit(Unit) }) { Text("설정 열기") }
             }
+            // v4 §4: 비서가 붙인 [블록 설정 열기] — 감시·허용 앱은 사용자가 직접 바꾼다
+            val watchBlock = m.action?.takeIf { it.startsWith("open_block_settings:") }?.substringAfter(':')?.toLongOrNull()
+            if (!mine && watchBlock != null) {
+                var openWatch by remember(m.id) { mutableStateOf(false) }
+                OutlinedButton(onClick = { openWatch = true }) { Text("블록 설정 열기") }
+                if (openWatch) BlockWatchDialog(watchBlock) { openWatch = false }
+            }
             if (m.kind == "confirmation") {
                 if (m.confirmation_status == "pending") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

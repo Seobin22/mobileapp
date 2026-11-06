@@ -151,6 +151,35 @@ public class InterventionService {
         return list.stream().filter(l -> capable(l, caps)).reduce((a, c) -> c).orElse(LEVEL);
     }
 
+    /** 요청한 단계 이상에서 처음 되는 단계(없으면 되는 것 중 가장 높은 단계). */
+    int capableAtLeast(int wanted) {
+        tools.jackson.databind.JsonNode caps = capabilities();
+        List<Integer> list = levels();
+        for (int l : list) {
+            if (l >= wanted && capable(l, caps)) {
+                return l;
+            }
+        }
+        return list.stream().filter(l -> capable(l, caps)).reduce((a, c) -> c).orElse(LEVEL);
+    }
+
+    /** v4 §5.5: 사용자가 딴짓을 끝냈다 → 딴짓 개입을 끝내고(acked, returned) 모든 효과를 푼다. */
+    public boolean endDistraction(long blockId) {
+        Optional<Store.Intervention> i = store.runningForBlock(blockId);
+        if (i.isEmpty() || !"distraction".equals(interventionReason(i.get().id()))) {
+            return false;
+        }
+        end(i.get(), "acked", "returned", "acked");
+        store.log(i.get().id(), blockId, i.get().level(), clock.now(), "returned");
+        logs.add(blockId, "note", "system", "딴짓에서 돌아옴(개입 자동 종료)");
+        return true;
+    }
+
+    public String interventionReason(long interventionId) {
+        return db.jdbc().sql("SELECT reason FROM interventions WHERE id = ?").param(interventionId)
+                .query(String.class).optional().orElse(null);
+    }
+
     /** 다음 단계(되는 것만). 없으면 null(지금 단계에서 멈춤). */
     Integer nextLevel(int current) {
         tools.jackson.databind.JsonNode caps = capabilities();
@@ -337,8 +366,20 @@ public class InterventionService {
         return begin(b).isPresent();
     }
 
-    /** 블록 개입을 시작한다. 조용한 시간이거나 블록이 끝났으면 시작하지 않는다. */
+    /**
+     * v4 §5.5 딴짓으로 시작하는 개입(reason=distraction). level 이 null 이면 보통 시작 단계. 이미 시작한(started) 블록이면
+     * 블록 상태는 그대로 둔다. L1 메시지는 DistractionService 가 보낸다(비서 turn 또는 코드 문장).
+     */
+    public Optional<Store.Intervention> beginForDistraction(Store.Block b, Integer level) {
+        return begin(b, level, "distraction");
+    }
+
     private Optional<Store.Intervention> begin(Store.Block b) {
+        return begin(b, null, null);
+    }
+
+    /** 블록 개입을 시작한다. 조용한 시간이거나 블록이 끝났으면 시작하지 않는다. */
+    private Optional<Store.Intervention> begin(Store.Block b, Integer forcedLevel, String reason) {
         Instant now = clock.now();
         if (time.isQuiet(now) || !now.isBefore(b.end())) {
             return Optional.empty();
@@ -383,13 +424,15 @@ public class InterventionService {
             }
         }
 
-        int level = startLevel(b);
+        int level = forcedLevel != null ? capableAtLeast(forcedLevel) : startLevel(b);
         long id = db.insert("""
-                        INSERT INTO interventions(block_id, status, level, block_version, started_at)
-                        VALUES (?, 'running', ?, ?, ?)""",
-                b.id(), level, b.version(), now);
-        // 상태만 바뀔 때는 블록 version 을 올리지 않는다.
-        store.setBlockStatus(b.id(), "nudging");
+                        INSERT INTO interventions(block_id, status, level, block_version, started_at, reason)
+                        VALUES (?, 'running', ?, ?, ?, ?)""",
+                b.id(), level, b.version(), now, reason);
+        // 상태만 바뀔 때는 블록 version 을 올리지 않는다. 진행 중 블록의 딴짓 개입은 상태를 그대로 둔다.
+        if (!"started".equals(b.status())) {
+            store.setBlockStatus(b.id(), "nudging");
+        }
         Store.Intervention intervention = store.intervention(id).orElseThrow();
 
         sendLevel(intervention);
@@ -397,7 +440,7 @@ public class InterventionService {
 
         if (level >= LEVEL) {
             jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(reshowMinutes())), null);
-        } else {
+        } else if (reason == null) {
             postL1Message(b);
         }
         scheduleEscalate(intervention);
@@ -686,7 +729,15 @@ public class InterventionService {
         data.put("goal_label", goal == null ? "" : goal.label());
         data.put("goal_color", goal == null ? "" : goal.color());
         data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
-        data.put("screen_text", b.screenText());
+        String screen = b.screenText();
+        if ("distraction".equals(interventionReason(i.id()))) {
+            screen = db.jdbc().sql("""
+                            SELECT content FROM messages WHERE role = 'assistant' AND kind IN ('proactive', 'intervention')
+                            AND created_at >= ? ORDER BY id DESC LIMIT 1""")
+                    .param(AssistantDb.ts(i.startedAt())).query(String.class).optional().orElse(screen);
+        }
+        data.put("screen_text", screen);
+        data.put("reason", "distraction".equals(interventionReason(i.id())) ? "distraction" : "");
         // v3.2 §3.3: 고정 블록 메모를 화면에 그대로 보여주고, TTS 는 screen_text 다음에 메모 첫 문장까지 읽는다.
         Store.Block memoOf = b.travel() && b.linkedFixedBlockId() != null
                 ? store.block(b.linkedFixedBlockId()).orElse(b) : b;
@@ -790,6 +841,13 @@ public class InterventionService {
     private String start(Long interventionId, Long blockId, boolean already) {
         Instant now = clock.now();
         Optional<Store.Intervention> found = resolve(interventionId, blockId);
+        if (found.isPresent() && found.get().active() && "distraction".equals(interventionReason(found.get().id()))
+                && store.block(found.get().blockId()).filter(x -> "started".equals(x.status())).isPresent()) {
+            // v4: 진행 중 블록의 딴짓 개입에서 [시작] = 돌아감(블록은 이미 시작됨)
+            end(found.get(), "acked", "returned", "acked");
+            store.log(found.get().id(), found.get().blockId(), found.get().level(), now, "acked");
+            return "ok";
+        }
         if (found.isPresent() && found.get().active()) {
             ack(found.get());
             if (already) {
@@ -837,7 +895,7 @@ public class InterventionService {
         logs.add(i.blockId(), "started", "user", "시작(반응 " + Math.max(0, java.time.Duration.between(i.startedAt(), now).toSeconds()) + "초)");
         db.update("""
                         UPDATE blocks SET status = 'started', actual_start = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?""",
+                        WHERE id = ? AND status <> 'started'""",
                 now, i.blockId());
     }
 

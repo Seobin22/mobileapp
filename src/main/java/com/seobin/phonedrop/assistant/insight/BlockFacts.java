@@ -238,6 +238,7 @@ public class BlockFacts {
                 actualMinutes, delay, drift, moves, snoozes,
                 band(local.getHour()), day.getDayOfWeek().getValue(), tactics, statusFinal, outcome, outcomeSrc, now,
                 blockId);
+        com.seobin.phonedrop.assistant.distract.DistractionService.inferFocus(db, blockId);
     }
 
     /** 다시 계획으로 이어 받은 블록(moved 기록의 carried_moves): 원래 블록이 옮겨진 횟수. */

@@ -391,3 +391,17 @@
 - 끝내기: 화면 [종료]·알림 [종료]·이어폰 버튼(MediaSession)·볼륨 버튼 1초 이상(MediaSession 원격 볼륨, 키 반복으로 판단; 짧게는 미디어 볼륨 조절). 볼륨 길게는 기종에 따라 화면이 꺼진 상태에서 안 될 수 있다. 통화(MODE_IN_CALL)면 멈췄다가 끝나면 이어서 듣는다. 앱을 최근 앱에서 지우면 세션이 끝난다(app_closed). 끝나지 않은 세션은 다음 세션을 열 때 app_restarted 로 닫는다.
 - §5: 적극 개입 시간대에 비서가 먼저 거는 말은 앱이 §2.4 조건 확인 뒤 `GET /v1/voice/messages/{id}/audio`(ElevenLabs 목소리)로 읽고, 안 되면 기기 음성. `active.auto_voice` 가 켜져 있으면 적극 개입 시간대에 개입 화면이 뜰 때 음성 대화를 자동 시작한다.
 - 관리 화면 '음성 연결': 키 저장(data/assistant/elevenlabs_api_key, 600)·오늘 세션·음성 turn·받아쓰기 초·목소리 글자·LLM 토큰·대략 비용(Scribe $0.40/시간, Flash $0.05/1000자 기준 — 요금제마다 다름).
+
+## v4 ④~⑦ 딴짓 앱·딴짓 감지·기록 (2026-11-07)
+- DB 는 V14 에 이미 만든 칸·테이블(app_rules, blocks/fixed_series.watch·allowed_apps, distraction_logs, distraction_judgments, block_facts 딴짓 칸, interventions.reason)만 쓴다. 새 마이그레이션 없음.
+- 딴짓 앱 목록·감시 분류·블록 감시·허용 앱은 사용자 전용: `GET/PUT /v1/settings/app-rules`, `GET/PATCH /v1/blocks/{id}/watch`, `PATCH /v1/fixed_series/{id}/watch`(앞으로의 회차에도 반영, 새 회차는 생성 때 복사). 비서는 `send_message action=open_block_settings`(+block_id)로 [블록 설정 열기] 버튼만 붙인다.
+- 기본 추천(인스타·틱톡·X·페이스북·스레드·넷플릭스·웹툰·게임 = 딴짓, 유튜브·크롬 = 애매)은 앱이 처음에 표시만 하고, 저장해야 켜진다. 저장 전에는 감지가 꺼져 있다(L4 잠금만 기본 목록으로 동작).
+- **감시 창은 서버가 정해 plan.sync `monitor`(앞으로 24시간)로 보내고, 시각에 따른 켜짐·꺼짐은 앱이 로컬 시간대·[10분만 조용히]·고정 일정 진행 중과 함께 혼자 판단한다**(블록 시각마다 푸시하지 않으려고). 창 = 감시 대상 블록의 [시작, 끝]. 협상으로 미룬 블록은 [미룬 때, 새 시작] 이 record_only 창.
+- 서버도 이벤트를 받을 때 다시 확인한다(블록 상태·감시 대상·방해 금지·멈춤·다른 고정 일정·이동 중). 아니면 무시한다.
+- 앱 판단: 딴짓 앱·'unrelated' 판정 화면에 있는 시간을 센다. 30초 미만 다른 앱은 이어서 세고, 1분 넘으면(또는 화면 꺼짐) 구간을 닫는다. 연속 `distract.trigger_min` 분이면 시작 보고, 닫히면 끝 보고(같은 client_key). 못 보낸 기록은 모아 두었다가 `late` 로 보내고, 서버는 late 기록에는 단계를 올리지 않는다.
+- 제목 읽기: 유튜브는 영상 제목 칸(view id 몇 개를 차례로), 크롬은 주소창의 도메인만(입력 중이면 읽지 않음). 크롬 시크릿은 'incognito' 표시가 보이면 읽지 않는다 — 기종·버전에 따라 감지가 안 될 수 있어 실기기 확인이 필요하다. **삼성 인터넷은 비밀 모드를 알 방법이 없어 제목을 읽지 않는다**(애매로 골라도 '판정 없음' = 세지 않음). 같은 화면에 60초 넘게 있으면 판단을 요청한다.
+- 판단 캐시 키 = (할 일 또는 목표 또는 분류) + 도메인 + 제목 SHA-256 앞 24자, 7일. 시간당 판단 수는 캐시 행이 만들어진 수로 센다.
+- §5.5: 진행 중 블록의 딴짓 개입은 블록 상태를 started 그대로 두고(reason=distraction), 첫 딴짓 L1·두 번째부터 L3. 돌아오면(끝 보고) acked·end_reason=returned. 그 개입에서 [시작]을 누르면 돌아간 것으로 끝낸다(실제 시작 시각은 바꾸지 않는다). L1 메시지는 `distraction` turn(메시지 예산 대신 블록당 `distract.llm_max_per_block`), 넘으면 코드 문장. L3·L4 화면 글은 그 개입 뒤 마지막 비서 메시지.
+- 맥락: distraction·intervention_talk·snooze_request·block_missed turn 에 '이 블록 딴짓 기록'(앱·분, 미룬 동안 따로, 제목 없음)과 §5.6 프롬프트를 붙인다. 계획 turn 의 distraction_rate 상·하위는 따로 넣지 않고 기존 패턴 하이라이트(notable)에 맡긴다.
+- 통계: distraction_rate(band·category·sleep·condition), distraction_app_share(app), return_rate(전체만 — 설득 방식별은 아직). 정리 카드: 딴짓 ≥ 실제 시간 30% 면 집중 '안 됨'(inferred), 카드에 "딴짓 n분(앱)".
+- 매일 04:30 정리 작업: 7일 지난 제목·도메인 NULL, 판단 캐시 삭제.

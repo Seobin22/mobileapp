@@ -111,6 +111,15 @@ object Lock {
     /** 잠금 대상: 딴짓 앱 − 항상 허용. */
     fun isTarget(context: Context, pkg: String): Boolean {
         if (alwaysAllowed(context, pkg)) return false
+        val allowed = runCatching {
+            kr.ssbin.assistant.data.AppJson.decodeFromString<List<MonitorWindow>>(Prefs.get(context).monitorWindows)
+                .firstOrNull { it.block_id == Prefs.get(context).lockBlockId }?.allowed_apps
+        }.getOrNull().orEmpty()
+        if (pkg in allowed) return false // 그 블록의 작업 앱
+        val rules = runCatching {
+            kr.ssbin.assistant.data.AppJson.decodeFromString<List<AppRule>>(Prefs.get(context).appRules)
+        }.getOrDefault(emptyList())
+        if (rules.isNotEmpty()) return rules.any { it.`package` == pkg && it.kind == "distract" } // §4 사용자 목록
         if (pkg in DEFAULT_DISTRACT) return true
         val info = runCatching { context.packageManager.getApplicationInfo(pkg, 0) }.getOrNull() ?: return false
         return info.category == ApplicationInfo.CATEGORY_GAME
@@ -128,13 +137,33 @@ object Lock {
 /** 지금 앞에 온 앱을 보고 잠금 대상이면 BlockActivity 를 띄운다(§3). 화면 내용은 읽지 않는다(제목 읽기는 §5). */
 class LockAccessibilityService : AccessibilityService() {
 
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val ticker = object : Runnable {
+        override fun run() {
+            runCatching { DistractionTracker.tick(this@LockAccessibilityService) }
+            handler.postDelayed(this, 15_000)
+        }
+    }
+
     override fun onServiceConnected() {
         Lock.init(this)
+        handler.postDelayed(ticker, 15_000)
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(ticker)
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val pkg = event.packageName?.toString() ?: return
+        val pkg = event?.packageName?.toString() ?: return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            // v4 §5.3: 애매한 앱(유튜브·크롬)일 때만 정해진 칸을 읽는다
+            runCatching { DistractionTracker.onContent(this, pkg) }
+            return
+        }
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        if (pkg != "com.android.systemui") runCatching { DistractionTracker.onForeground(this, pkg) }
         if (!Prefs.get(this).lockActive) return
         if (Lock.shouldRelease(this)) {
             Lock.off(this)

@@ -33,7 +33,7 @@ public class PatternStats {
     public static final int PERIOD_DAYS = 28;
     /** 비율 metric(차이 기준 0.15p). 그 밖은 상대 차이 20%. */
     static final Set<String> RATE_METRICS = Set.of("completion_rate", "start_rate", "reason_share", "success_reason_share",
-            "attendance_rate", "snooze_rate", "tactic_success_rate");
+            "attendance_rate", "snooze_rate", "tactic_success_rate", "distraction_rate", "distraction_app_share", "return_rate");
     /** notable 후보에서 빼는 metric(목표 점검은 밤 정리가 따로 본다). */
     static final Set<String> NOT_HIGHLIGHTED = Set.of("pace_ratio", "stall_steps");
 
@@ -134,6 +134,13 @@ public class PatternStats {
                 f -> interventionCount.getOrDefault(f.blockId(), 0) == 0 ? List.of()
                         : List.of(new Obs("", f.snoozeCount() > 0 ? 1 : 0)),
                 Agg.RATE, k);
+        // v4 §6: 딴짓 비율(딴짓 분 ÷ 실제 블록 분), 앱별 비율, L1 뒤 5분 안에 돌아온 비율
+        Map<Long, Integer> dmin = distractionMinutes(from);
+        group(out, "distraction_rate", List.of("band", "category", "sleep", "condition"), planned, dayMap,
+                f -> f.actualMinutes() == null || f.actualMinutes() <= 0 ? List.of()
+                        : List.of(new Obs("", Math.min(1.0, dmin.getOrDefault(f.blockId(), 0) / (double) f.actualMinutes()))),
+                Agg.MEAN, k);
+        distractionShares(out, from);
         tacticStats(out, plannedFixed, k);
         latencyStats(out, from, k);
         travelStats(out, travel, k);
@@ -252,6 +259,37 @@ public class PatternStats {
             }
             default -> null;
         };
+    }
+
+    private Map<Long, Integer> distractionMinutes(LocalDate from) {
+        Map<Long, Integer> m = new HashMap<>();
+        db.jdbc().sql("""
+                        SELECT block_id, SUM(minutes) FROM distraction_logs WHERE logical_day >= ? AND judged = 'distract'
+                        AND record_only = FALSE GROUP BY block_id""")
+                .param(from).query((rs, n) -> m.put(rs.getLong(1), rs.getInt(2))).list();
+        return m;
+    }
+
+    private void distractionShares(List<Stat> out, LocalDate from) {
+        Map<String, Integer> byApp = new LinkedHashMap<>();
+        db.jdbc().sql("""
+                        SELECT app_label, SUM(minutes) FROM distraction_logs WHERE logical_day >= ? AND judged = 'distract'
+                        AND record_only = FALSE GROUP BY app_label""")
+                .param(from).query((rs, n) -> byApp.put(String.valueOf(rs.getString(1)), rs.getInt(2))).list();
+        int total = byApp.values().stream().mapToInt(Integer::intValue).sum();
+        if (total > 0) {
+            byApp.forEach((app, m) -> out.add(new Stat("distraction_app_share", "app", app, m / (double) total,
+                    m / (double) total, m, null, false, null)));
+        }
+        Instant since = from.atStartOfDay(time.zone()).toInstant();
+        int[] r = db.jdbc().sql("""
+                        SELECT COUNT(*), COALESCE(SUM(CASE WHEN end_reason = 'returned'
+                        AND DATEDIFF('SECOND', started_at, ended_at) <= 300 THEN 1 ELSE 0 END), 0)
+                        FROM interventions WHERE reason = 'distraction' AND started_at >= ? AND ended_at IS NOT NULL""")
+                .param(AssistantDb.ts(since)).query((rs, n) -> new int[]{rs.getInt(1), rs.getInt(2)}).single();
+        if (r[0] > 0) {
+            out.add(new Stat("return_rate", "all", "all", r[1] / (double) r[0], r[1] / (double) r[0], r[0], null, false, null));
+        }
     }
 
     private Map<Long, Integer> interventionCounts(LocalDate from) {

@@ -84,6 +84,25 @@ interface AssistantApi {
     @POST("v1/time-windows/pause")
     suspend fun pauseActiveWindow(): JsonObject
 
+    // v4 딴짓 앱·블록 감시(사용자 전용)
+    @GET("v1/settings/app-rules")
+    suspend fun appRules(): JsonObject
+
+    @PUT("v1/settings/app-rules")
+    suspend fun putAppRules(@Body body: JsonObject): JsonObject
+
+    @GET("v1/blocks/{id}/watch")
+    suspend fun blockWatch(@Path("id") id: Long): JsonObject
+
+    @PATCH("v1/blocks/{id}/watch")
+    suspend fun patchBlockWatch(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @PATCH("v1/fixed_series/{id}/watch")
+    suspend fun patchSeriesWatch(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @PATCH("v1/distraction/logs/{id}")
+    suspend fun markDistractionRelated(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
     // v3.6 음성 탭(주고받기 흐름은 VoiceEngine 이 OkHttp 로 직접)
     @GET("v1/voice/voices")
     suspend fun voices(): VoicesResponse

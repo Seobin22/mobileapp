@@ -258,9 +258,10 @@ public class SeriesService {
                     prepGiven ? s.prepSetBy() : null, s.id(), date);
             // v3.3: 시리즈의 방해 허용 정도·찾은 장소를 회차에 복사한다(회차별로 바꾸면 그 회차만 바뀐다).
             db.update("""
-                            UPDATE blocks SET (interrupt_level, interrupt_set_by, place_name, lat, lng, place_source) =
-                            (SELECT interrupt_level, interrupt_set_by, place_name, lat, lng, place_source FROM fixed_series
-                            WHERE id = ?) WHERE id = ?""", s.id(), id);
+                            UPDATE blocks SET (interrupt_level, interrupt_set_by, place_name, lat, lng, place_source,
+                            watch, allowed_apps) =
+                            (SELECT interrupt_level, interrupt_set_by, place_name, lat, lng, place_source, watch, allowed_apps
+                            FROM fixed_series WHERE id = ?) WHERE id = ?""", s.id(), id);
             logs.add(id, "created", "system", "반복 일정#" + s.id() + "(" + describe(s) + ")에서 생성");
             List<Long> displaced = new ArrayList<>();
             for (Store.Block b : check.displaced()) {

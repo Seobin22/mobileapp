@@ -558,6 +558,8 @@ data class CardBlockDto(
     val focus: CardFieldDto = CardFieldDto(),
     val reason_tags: CardFieldDto = CardFieldDto(),
     val progress_done: CardFieldDto = CardFieldDto(),
+    /** v4 §6: "딴짓 12분(인스타)" */
+    val distraction: String? = null,
 )
 
 @Serializable
@@ -660,6 +662,20 @@ data class FactDto(
     val reason_note: String? = null,
     val extra_note: String? = null,
     val progress_done: Int? = null,
+    /** v4 §7: 블록의 딴짓 구간(7일 안이면 제목) */
+    val distractions: List<DistractionDto> = emptyList()
+)
+
+@Serializable
+data class DistractionDto(
+    val id: Long,
+    val app: String? = null,
+    val kind: String = "app",
+    val domain: String? = null,
+    val title: String? = null,
+    val judged: String = "distract",
+    val record_only: Boolean = false,
+    val minutes: Int = 0,
 )
 
 @Serializable

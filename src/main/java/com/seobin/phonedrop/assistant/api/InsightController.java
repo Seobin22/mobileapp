@@ -38,6 +38,10 @@ import tools.jackson.databind.JsonNode;
 @RequestMapping("/api/assistant/v1")
 public class InsightController {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.distract.DistractionService> distractions;
+
+
     private final Tx tx;
     private final AssistantDb db;
     private final AssistantClock clock;
@@ -223,7 +227,14 @@ public class InsightController {
             facts.refreshDay(d);
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("day", d.toString());
-            r.put("blocks", facts.ofDay(d).stream().filter(f -> !"travel".equals(f.kind())).map(facts::toMap).toList());
+            r.put("blocks", facts.ofDay(d).stream().filter(f -> !"travel".equals(f.kind())).map(f -> {
+                Map<String, Object> m = new LinkedHashMap<>(facts.toMap(f));
+                List<Map<String, Object>> logs = distractions.getObject().logsForBlock(f.blockId());
+                if (!logs.isEmpty()) {
+                    m.put("distractions", logs); // v4 §7 지난 기록: 딴짓 시간·앱(7일 안이면 제목)
+                }
+                return m;
+            }).toList());
             r.put("day_facts", days.get(d).map(DayFacts::toMap).orElse(null));
             r.put("reason_chips", Map.of("done", BlockFacts.DONE_REASONS, "not_done", BlockFacts.NOT_DONE_REASONS));
             return r;
