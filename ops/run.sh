@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 실행 비서 날짜별 대화 횟수 조회(읽기 전용): DB 파일 복사본에서 turn·메시지 시각과 토큰만 읽는다.
+# 실행 비서가 취소한 블록 조회(읽기 전용): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,9 +41,10 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'USERMSG_DAY' AS q, FORMATDATETIME(created_at,'yyyy-MM-dd','en','Asia/Seoul') AS d, COUNT(*) AS n FROM messages WHERE role='user' GROUP BY d ORDER BY d;
-SELECT 'TURN_TRIGGER_DAY' AS q, FORMATDATETIME(started_at,'yyyy-MM-dd','en','Asia/Seoul') AS d, trigger, COUNT(*) AS n FROM turns GROUP BY d, trigger ORDER BY d, trigger;
-SELECT 'TURN_TRIGGER_TOTAL' AS q, trigger, COUNT(*) AS n, COUNT(DISTINCT FORMATDATETIME(started_at,'yyyy-MM-dd','en','Asia/Seoul')) AS days FROM turns GROUP BY trigger ORDER BY n DESC;
+SELECT 'A_CANCEL_SUMMARY' AS q, b.kind, t.trigger, c.undone, COUNT(*) AS n FROM changes c JOIN turns t ON t.id=c.turn_id JOIN blocks b ON b.id=c.entity_id WHERE c.entity='block' AND c.after_value LIKE '%"status":"cancelled"%' AND c.before_value IS NOT NULL AND c.before_value NOT LIKE '%"status":"cancelled"%' GROUP BY b.kind, t.trigger, c.undone ORDER BY n DESC;
+SELECT 'B_DROPPED' AS q, b.id AS block_id, b.kind, b.task_id, b.goal_id, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS planned_at, (DATEDIFF('MINUTE', b.start_at, b.end_at)) AS mins, FORMATDATETIME(c.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS cancelled_at, c.turn_id, t.trigger, c.undone, b.status AS now_status, tk.status AS task_status, (SELECT COUNT(*) FROM changes c2 JOIN blocks b2 ON b2.id=c2.entity_id WHERE c2.turn_id=c.turn_id AND c2.entity='block' AND c2.before_value IS NULL AND b2.task_id=b.task_id) AS same_turn_new, (SELECT COUNT(*) FROM blocks b3 WHERE b3.task_id=b.task_id AND b3.id<>b.id AND b3.status<>'cancelled' AND b3.created_at>=c.created_at) AS later_blocks, (SELECT COUNT(*) FROM blocks b4 WHERE b4.task_id=b.task_id AND b4.id<>b.id AND b4.status IN ('done','partial') AND b4.created_at>=c.created_at) AS later_done FROM changes c JOIN turns t ON t.id=c.turn_id JOIN blocks b ON b.id=c.entity_id LEFT JOIN tasks tk ON tk.id=b.task_id WHERE c.entity='block' AND c.after_value LIKE '%"status":"cancelled"%' AND c.before_value IS NOT NULL AND c.before_value NOT LIKE '%"status":"cancelled"%' AND (b.kind='fixed' OR b.task_id IS NULL OR NOT EXISTS (SELECT 1 FROM changes c2 JOIN blocks b2 ON b2.id=c2.entity_id WHERE c2.turn_id=c.turn_id AND c2.entity='block' AND c2.before_value IS NULL AND b2.task_id=b.task_id)) ORDER BY c.created_at;
+SELECT 'C_OTHER_CANCELLED' AS q, b.kind, COUNT(*) AS n FROM blocks b WHERE b.status='cancelled' AND NOT EXISTS (SELECT 1 FROM changes c WHERE c.entity='block' AND c.entity_id=b.id AND c.after_value LIKE '%"status":"cancelled"%') AND (b.link_role IS NULL OR b.link_role<>'travel') GROUP BY b.kind;
+SELECT 'D_TOTAL_BLOCKS' AS q, kind, status, COUNT(*) AS n FROM blocks WHERE (link_role IS NULL OR link_role<>'travel') GROUP BY kind, status ORDER BY kind, status;
 SQL
 
 while IFS= read -r q; do
