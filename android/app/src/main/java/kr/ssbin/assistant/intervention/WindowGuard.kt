@@ -128,7 +128,8 @@ object Speaker {
                         val p = android.media.MediaPlayer()
                         runCatching {
                             p.setAudioAttributes(android.media.AudioAttributes.Builder()
-                                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).build())
+                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
                             p.setDataSource(f.path)
                             p.setOnCompletionListener { it.release(); f.delete() }
                             p.prepare()

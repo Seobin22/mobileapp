@@ -152,6 +152,7 @@ object VoiceEngine {
         app = context.applicationContext
         running = true
         sentCount = 0
+        mutedHintShown = false
         _meter.value = Meter()
         _lines.value = emptyList()
         _phase.value = Phase.Listening
@@ -434,6 +435,7 @@ object VoiceEngine {
         val clip = queue.pollFirst()
         if (clip == null) {
             player = null
+            abandonFocus()
             if (running && streamDone && _phase.value == Phase.Speaking) _phase.value = Phase.Listening
             return
         }
@@ -442,11 +444,19 @@ object VoiceEngine {
             spoken.setLength(0)
         }
         _phase.value = Phase.Speaking
+        // 2026-11-07: '어시스턴트' 음량(USAGE_ASSISTANT)은 기기에 따라 0 이거나 수화기로 나가 안 들렸다 → 미디어 음량으로 재생.
+        val audio = app.getSystemService(AudioManager::class.java)
+        if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0 && !mutedHintShown) {
+            mutedHintShown = true
+            add(Line("info-vol", "error", "미디어 음량이 0이라 목소리가 안 들려요. 볼륨 버튼으로 올려 주세요."))
+        }
+        requestFocus(audio)
         val p = MediaPlayer()
         player = p
         runCatching {
-            p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT)
+            p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            p.setVolume(1f, 1f)
             p.setDataSource(clip.file.path)
             p.setOnCompletionListener {
                 spoken.append(clip.text).append(' ')
@@ -456,11 +466,33 @@ object VoiceEngine {
             }
             p.prepare()
             p.start()
-        }.onFailure {
+        }.onFailure { e ->
             p.release()
             clip.file.delete()
+            add(Line("err-play-${System.nanoTime()}", "error", "목소리를 재생하지 못했어요(" + (e.message ?: e.javaClass.simpleName) + ")"))
             playNext()
         }
+    }
+
+    @Volatile
+    private var mutedHintShown = false
+    private var focus: android.media.AudioFocusRequest? = null
+
+    /** 다른 앱 소리를 잠깐 줄이고 비서 목소리를 낸다. */
+    private fun requestFocus(audio: AudioManager) {
+        if (focus != null) return
+        val req = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .build()
+        runCatching { audio.requestAudioFocus(req) }
+        focus = req
+    }
+
+    private fun abandonFocus() {
+        val f = focus ?: return
+        focus = null
+        runCatching { app.getSystemService(AudioManager::class.java).abandonAudioFocusRequest(f) }
     }
 
     private fun stopPlayback() {
