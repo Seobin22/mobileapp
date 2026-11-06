@@ -44,7 +44,8 @@ object Notifier {
             .setOngoing(true)
             .setAutoCancel(false)
             .setContentIntent(pending)
-            .setFullScreenIntent(pending, true)
+        // v4 §1: L1 은 높은 중요도 알림(탭하면 개입 화면), L3·L4 는 풀스크린. 로컬 백업은 L3 로 온다.
+        if (entity.level >= 3) builder.setFullScreenIntent(pending, true)
         // 만료 시각이 지나면 intervention.end 를 못 받아도 알림이 스스로 사라진다.
         entity.expireAt?.let {
             val left = java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() - System.currentTimeMillis()

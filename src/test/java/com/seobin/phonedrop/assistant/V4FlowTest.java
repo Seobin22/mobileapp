@@ -1,0 +1,170 @@
+package com.seobin.phonedrop.assistant;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.seobin.phonedrop.assistant.api.TimeWindowController;
+
+/** 빌드문서 v4 §9.1 E1~E8 (단계 올리기 L1·L3·L4). 시작 2026-11-02(월) 09:00. */
+class V4FlowTest extends AssistantTestBase {
+
+    @Autowired
+    TimeWindowController windowApi;
+
+    @BeforeEach
+    void v4Levels() {
+        settings.put("intervention.levels", Json.parse("[1,3,4]"));
+        caps(true, true, true);
+    }
+
+    void caps(boolean notifications, boolean fullscreen, boolean accessibility) {
+        db.update("UPDATE devices SET capabilities = ?", "{\"notifications\":" + notifications
+                + ",\"fullscreen_intent\":" + fullscreen + ",\"accessibility\":" + accessibility + "}");
+    }
+
+    List<String> levelsPushed() {
+        return push.ofType("intervention.level").stream().map(d -> d.get("level")).toList();
+    }
+
+    String lastLevel() {
+        List<String> l = levelsPushed();
+        return l.isEmpty() ? null : l.getLast();
+    }
+
+    @Test
+    void e1_noResponseEscalatesL1L3L4ThenStops() {
+        long blockId = createBlock("보고서", "2026-11-02T10:00", 60)[1];
+        runUntil("2026-11-02T10:00");
+        assertThat(lastLevel()).isEqualTo("1");
+        assertThat(onlyIntervention().level()).isEqualTo(1);
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM messages WHERE kind = 'intervention'").query(Integer.class).single())
+                .isEqualTo(1);
+        runUntil("2026-11-02T10:04");
+        assertThat(lastLevel()).isEqualTo("1");
+        runUntil("2026-11-02T10:05");
+        assertThat(lastLevel()).isEqualTo("3");
+        runUntil("2026-11-02T10:14");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        runUntil("2026-11-02T10:15");
+        assertThat(onlyIntervention().level()).isEqualTo(4);
+        Map<String, String> l4 = push.ofType("intervention.level").getLast();
+        assertThat(l4.get("level")).isEqualTo("4");
+        assertThat(l4.get("lock_apps")).isEqualTo("true");
+        runUntil("2026-11-02T10:50");
+        assertThat(onlyIntervention().level()).isEqualTo(4);
+        assertThat(levelsPushed()).doesNotContain("2").containsOnly("1", "3", "4");
+        assertThat(block(blockId).status()).isEqualTo("nudging");
+    }
+
+    @Test
+    void e2_startAtL3StopsEscalation() {
+        long blockId = createBlock("보고서", "2026-11-02T10:00", 60)[1];
+        runUntil("2026-11-02T10:06");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        action("start", onlyIntervention().id(), blockId, "s1");
+        assertThat(onlyIntervention().status()).isEqualTo("acked");
+        runUntil("2026-11-02T10:40");
+        assertThat(levelsPushed()).doesNotContain("4");
+        assertThat(db.jdbc().sql("SELECT status FROM jobs WHERE type = 'escalate' ORDER BY id DESC LIMIT 1")
+                .query(String.class).single()).isIn("cancelled", "skipped");
+    }
+
+    @Test
+    void e3_negotiationTimeoutResendsSameLevelThenEscalatesLater() {
+        createBlock("보고서", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:06");
+        long id = onlyIntervention().id();
+        tx.run(() -> interventions.userTalk(id, "잠깐만", "fullscreen", null));
+        int before = levelsPushed().size();
+        runUntil("2026-11-02T10:10");
+        assertThat(levelsPushed()).hasSize(before); // 협상 중에는 escalate skipped
+        runUntil("2026-11-02T10:11"); // 대화 5분 무응답
+        assertThat(onlyIntervention().status()).isEqualTo("running");
+        assertThat(lastLevel()).isEqualTo("3");
+        runUntil("2026-11-02T10:20");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        runUntil("2026-11-02T10:21");
+        assertThat(onlyIntervention().level()).isEqualTo(4);
+    }
+
+    @Test
+    void e4_noFullscreenGoesL1ToL4() {
+        caps(true, false, true);
+        createBlock("보고서", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:05");
+        assertThat(levelsPushed()).containsExactly("1", "4");
+    }
+
+    @Test
+    void e5_noAccessibilityStopsAtL3() {
+        caps(true, true, false);
+        createBlock("보고서", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:40");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        assertThat(levelsPushed()).doesNotContain("4");
+    }
+
+    @Test
+    void e6_dndWindowStartSuspendsRunningL4() {
+        long blockId = createBlock("보고서", "2026-11-02T10:00", 60)[1];
+        runUntil("2026-11-02T10:16");
+        assertThat(onlyIntervention().level()).isEqualTo(4);
+        windowApi.put(Json.parse("{\"windows\":[{\"kind\":\"dnd\",\"name\":\"수업\",\"days\":[1],\"start_time\":\"10:20\","
+                + "\"end_type\":\"time\",\"end_time\":\"11:30\"}]}"));
+        push.clear();
+        runUntil("2026-11-02T10:21");
+        assertThat(onlyIntervention().status()).isEqualTo("suspended");
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+        assertThat(block(blockId).status()).isEqualTo("missed");
+    }
+
+    @Test
+    void e7_emergencyUnlock() {
+        long blockId = createBlock("보고서", "2026-11-02T10:00", 60)[1];
+        runUntil("2026-11-02T10:16");
+        push.clear();
+        action("emergency_unlock", onlyIntervention().id(), blockId, "e1");
+        Store.Intervention i = onlyIntervention();
+        assertThat(i.status()).isEqualTo("suspended");
+        assertThat(i.endReason()).isEqualTo("emergency");
+        assertThat(block(blockId).status()).isEqualTo("missed");
+        assertThat(push.ofType("intervention.end")).singleElement()
+                .satisfies(d -> assertThat(d.get("reason")).isEqualTo("emergency"));
+        assertThat(db.jdbc().sql("SELECT trigger_ref FROM turns WHERE trigger = 'block_missed'").query(String.class).single())
+                .contains("\"reason\":\"emergency\"");
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM intervention_logs WHERE reaction = 'emergency_unlock'")
+                .query(Integer.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void e8_activeWindowWaitsAreShorter() {
+        windowApi.put(Json.parse("{\"windows\":[{\"kind\":\"active\",\"name\":\"아침\",\"days\":[1],\"start_time\":\"09:30\","
+                + "\"end_type\":\"time\",\"end_time\":\"12:00\"}]}"));
+        createBlock("보고서", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:02");
+        assertThat(onlyIntervention().level()).isEqualTo(1);
+        runUntil("2026-11-02T10:03");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        runUntil("2026-11-02T10:07");
+        assertThat(onlyIntervention().level()).isEqualTo(3);
+        runUntil("2026-11-02T10:08");
+        assertThat(onlyIntervention().level()).isEqualTo(4);
+    }
+
+    @Test
+    void unreachableDeviceIsNotIgnoring() {
+        deviceAlive = false;
+        long blockId = createBlock("보고서", "2026-11-02T10:00", 30)[1];
+        runUntil("2026-11-02T10:50");
+        assertThat(block(blockId).status()).isEqualTo("missed");
+        assertThat(onlyIntervention().endReason()).isEqualTo("unreachable");
+        assertThat(db.jdbc().sql("SELECT trigger_ref FROM turns WHERE trigger = 'block_missed'").query(String.class).single())
+                .contains("\"reason\":\"unreachable\"");
+    }
+}

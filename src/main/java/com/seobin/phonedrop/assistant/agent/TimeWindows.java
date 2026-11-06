@@ -331,10 +331,16 @@ public class TimeWindows {
 
     /** active 시간대 안이지만, 진행 중인 고정 일정이 있으면 그 일정의 방해 허용 정도를 따른다(§2.3). */
     public boolean activeEffective(Instant t, Store store) {
+        return activeEffective(t, store, null);
+    }
+
+    /** exceptBlockId: 그 블록 자신(개입 중인 고정 일정)은 '다른 고정 일정 진행 중'으로 보지 않는다. */
+    public boolean activeEffective(Instant t, Store store, Long exceptBlockId) {
         if (activeAt(t).isEmpty()) {
             return false;
         }
-        return store.fixedInProgress(t).stream().noneMatch(b -> !b.travel() && !"started".equals(b.status()));
+        return store.fixedInProgress(t).stream().noneMatch(b -> !b.travel() && !"started".equals(b.status())
+                && (exceptBlockId == null || b.id() != exceptBlockId));
     }
 
     /** 오늘(달력 날짜) 열리는 시간대 미리보기(설정 화면 막대). */

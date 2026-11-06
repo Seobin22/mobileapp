@@ -99,6 +99,15 @@ public class SettingsService {
         d.put("voice.speed", "1.0");
         d.put("voice.end_silence_ms", "800");
         d.put("voice.daily_turn_cap", "200");
+        // v4 단계 올리기·딴짓 감지(distract.watch_categories 는 사용자 전용)
+        d.put("intervention.levels", "[1,3,4]");
+        d.put("intervention.start_level", "1");
+        d.put("intervention.wait_minutes", "[5,10]");
+        d.put("active.wait_minutes", "[3,5]");
+        d.put("distract.watch_categories", "[\"study\",\"work\"]");
+        d.put("distract.trigger_min", "3");
+        d.put("distract.judge_max_per_hour", "20");
+        d.put("distract.llm_max_per_block", "3");
 
         DEFAULTS = Map.copyOf(d);
     }
@@ -173,6 +182,36 @@ public class SettingsService {
                 case "travel.home_address" -> {
                     if (!value.isString() || value.asString().length() > 300) {
                         throw new IllegalArgumentException();
+                    }
+                }
+                case "intervention.levels" -> {
+                    if (!value.isArray() || value.isEmpty()) {
+                        throw new IllegalArgumentException();
+                    }
+                    for (JsonNode v : value) {
+                        if (!List.of(1, 3, 4).contains(v.asInt())) {
+                            throw new IllegalArgumentException();
+                        }
+                    }
+                }
+                case "intervention.wait_minutes", "active.wait_minutes" -> {
+                    if (!value.isArray() || value.isEmpty()) {
+                        throw new IllegalArgumentException();
+                    }
+                    for (JsonNode v : value) {
+                        if (!v.isNumber() || v.asInt() < 1) {
+                            throw new IllegalArgumentException();
+                        }
+                    }
+                }
+                case "distract.watch_categories" -> {
+                    if (!value.isArray()) {
+                        throw new IllegalArgumentException();
+                    }
+                    for (JsonNode v : value) {
+                        if (!v.isString()) {
+                            throw new IllegalArgumentException();
+                        }
                     }
                 }
                 case "active.paused_until" -> {

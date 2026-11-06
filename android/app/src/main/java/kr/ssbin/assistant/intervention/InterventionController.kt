@@ -51,6 +51,12 @@ object InterventionController {
         )
         dao.upsertIntervention(entity)
         dao.deleteIntervention(localId(blockId))
+        // v4 §1·§3: L4 면 딴짓 앱 잠금을 켠다(잠금은 서버 신호로만 켠다). 그 아래 단계면 끈다.
+        if (data["lock_apps"] == "true" && WindowGuard.dnd(context) == null) {
+            kr.ssbin.assistant.lock.Lock.on(context, id, blockId, entity.taskTitle, entity.screenText)
+        } else {
+            kr.ssbin.assistant.lock.Lock.off(context)
+        }
         // 풀스크린 대화 무응답 뒤 다시 온 경우(v3.1 §3.6-6)에도 평소처럼 풀스크린. 떠 있는 화면은 대화를 유지한다.
         Prefs.get(context).negotiationUntil = 0
         LocalScheduler.cancelBlock(context, blockId)
@@ -70,6 +76,7 @@ object InterventionController {
         val dao = AppDatabase.dao(context)
         val blockId = data["block_id"]?.toLongOrNull() ?: dao.intervention(id)?.blockId
         dao.endIntervention(id, blockId?.let { localId(it) } ?: id, System.currentTimeMillis())
+        kr.ssbin.assistant.lock.Lock.off(context) // v4 §1: 종료 신호면 모든 효과 해제
         Prefs.get(context).negotiationUntil = 0
         Notifier.cancel(context)
         Reshow.cancel(context)
@@ -143,10 +150,23 @@ object InterventionController {
 
     /** [시작] / [이미 하고 있음](already = 알림 전에 시작함) */
     fun onUserStart(context: Context, entity: InterventionEntity, already: Boolean = false) {
+        kr.ssbin.assistant.lock.Lock.off(context)
         Notifier.cancel(context)
         Reshow.cancel(context)
         AppDatabase.dao(context).endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
         ActionQueue.enqueue(context, if (already) "already_started" else "start", entity.id, entity.blockId)
+    }
+
+    /** v4 §2.4 [비상 해제]: 확인 없이 바로 모든 효과를 풀고 서버에 알린다. */
+    fun onEmergency(context: Context, interventionId: String, blockId: Long) {
+        kr.ssbin.assistant.lock.Lock.off(context)
+        Notifier.cancel(context)
+        Reshow.cancel(context)
+        Thread {
+            AppDatabase.dao(context).endIntervention(interventionId, localId(blockId), System.currentTimeMillis())
+            ActionQueue.enqueue(context, "emergency_unlock", interventionId, blockId)
+        }.start()
+        InterventionState.emit(InterventionState.Event.Close(blockId))
     }
 
     /**

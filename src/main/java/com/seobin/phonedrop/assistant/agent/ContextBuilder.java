@@ -386,6 +386,8 @@ public class ContextBuilder {
                         case "no_response" -> "no_response(화면에 무응답)";
                         case "quiet" -> "quiet(방해 금지·수면으로 중단)";
                         case "never_started" -> "never_started(시작되지 않고 끝 시각이 지남)";
+                        case "unreachable" -> "unreachable(기기 연결 끊김 — 무시한 것이 아니다)";
+                        case "emergency" -> "emergency(사용자가 비상 해제를 눌렀다 — 급한 일이 있었을 수 있다. 다그치지 말고 다시 잡을지 묻는다)";
                         default -> ref.path("reason").asString("");
                     };
             case "block_started" -> ref.path("already").asBoolean(false)

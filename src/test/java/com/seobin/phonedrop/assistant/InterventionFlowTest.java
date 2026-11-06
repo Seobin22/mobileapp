@@ -234,17 +234,18 @@ class InterventionFlowTest extends AssistantTestBase {
         List<Store.Intervention> all = db.jdbc().sql("SELECT * FROM interventions ORDER BY id")
                 .query(Store::intervention).list();
         assertThat(all).hasSize(2);
-        assertThat(all.get(0).status()).isEqualTo("expired");
-        assertThat(all.get(0).endReason()).isEqualTo("superseded");
+        // v4 §2.2(E6): 고정 일정(둘째)이 시작되면 돌던 개입은 suspended(예전: expired·superseded)
+        assertThat(all.get(0).status()).isEqualTo("suspended");
+        assertThat(all.get(0).endReason()).isEqualTo("fixed_block");
         assertThat(all.get(1).status()).isEqualTo("running");
         assertThat(all.get(1).blockId()).isEqualTo(second[1]);
         assertThat(block(first[1]).status()).isEqualTo("missed");
         assertThat(push.ofType("intervention.end")).singleElement()
-                .satisfies(d -> assertThat(d.get("reason")).isEqualTo("superseded"));
+                .satisfies(d -> assertThat(d.get("reason")).isEqualTo("suspended"));
 
         runUntil("2026-11-02T11:20");
         assertThat(all.get(0).id()).isEqualTo(store.intervention(all.get(0).id()).orElseThrow().id());
-        assertThat(store.intervention(all.get(0).id()).orElseThrow().status()).isEqualTo("expired");
+        assertThat(store.intervention(all.get(0).id()).orElseThrow().status()).isEqualTo("suspended");
     }
 
     @Test

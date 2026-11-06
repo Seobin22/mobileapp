@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">실행 비서</string>
     <string name="widget_description">비서에게 바로 말하기</string>
+    <string name="lock_service_description">해야 할 블록을 계속 무시하면(L4) 인스타그램·게임 같은 딴짓 앱을 잠그고, 공부·일 블록 중 딴짓을 알려 줍니다. 앞에 있는 앱 이름만 봅니다. 전화·문자·지도·설정은 잠그지 않습니다.</string>
 </resources>

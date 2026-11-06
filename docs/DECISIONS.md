@@ -354,3 +354,22 @@
 - 소리로 말하기: 서버는 적극 개입 시간대에 비서가 먼저 보낸 말에 `speak=true` 를 붙이고, 앱이 직전에 다시 확인(로컬 시간대·멈춤·무음/진동이면 이어폰 연결 여부·통화 중)한 뒤 기기 TTS 로 읽는다. ElevenLabs 목소리는 음성 탭(③④)에서 붙인다.
 - 앱 이중 확인: plan.sync 의 `time_windows`·`active_paused_until` 을 저장해 두고, 풀스크린·채팅 알림·적극 개입 알람·TTS 직전에 확인한다. 막은 일은 종류·시각만 앱 설정 화면 "막은 알림 기록"에 남는다(관리 웹 화면이 아니라 앱 안).
 - 고정 일정이 방해 금지 시간대와 겹치면 저장 응답에 `dnd_warning` → 앱이 "방해 금지 시간이라 이 일정 알람이 안 울려요" 토스트. 반복 일정 저장은 아직 경고하지 않는다.
+
+## v4 ①~③ 단계 올리기(L1·L3·L4)·앱 잠금 (2026-11-06)
+- 단계 번호는 1·3·4. 개입은 `intervention.start_level`(기본 1)에서 시작하고, `escalate` 작업(expected_version = 개입 version)이 `intervention.wait_minutes`(기본 [5,10]) 뒤 다음 단계로 올린다. 적극 개입 시간대에는 `active.wait_minutes`([3,5]). 대기 칸은 '지금 단계의 순서'로 고른다(L1→다음 = 첫 칸).
+- 예전 코드에 L2(꺼지지 않는 알람) 단계는 없었다. 지금 단계에서만 다시 띄우기(reshow)를 하고, L1 에서는 하지 않는다. v3.6 적극 시간대 알람(`active.alarm`)은 그대로다.
+- 기기 능력: 가장 최근 하트비트 기기의 capabilities. 알림·풀스크린은 보고가 없으면 된다고 보고(옛 앱 호환), 접근성은 `accessibility=true` 일 때만 L4. 못 하는 단계는 건너뛰고, 다음이 없으면 그 단계에서 멈춘다.
+- 협상(talking) 중 escalate 는 skipped(version 이 바뀜). 대화 시간이 끝나 running 으로 돌아오면 같은 단계를 다시 보내고 escalate 를 새로 잡는다.
+- L1 은 kind=intervention 채팅 메시지(silent, 알림은 intervention.level(1) 이 맡음) + 앱의 높은 중요도 알림(풀스크린 아님). 로컬 백업은 L3.
+- 개입을 시작하지 않는 경우에 '진행 중인 고정 일정(방해 허용 정도와 상관없이)'을 더했다. 고정 일정의 개입이 시작되면 돌던 다른 개입은 suspended(end_reason=fixed_block)로 끝난다 — 예전 테스트 `t13` 의 기대값(expired·superseded)을 이 뜻으로 고쳤다.
+- 이동 블록은 단계를 올리지 않는다(L3 고정, 기존 v3.4 동작 유지). 문서의 '이동 블록이면 시작하지 않음'은 이렇게 해석했다.
+- 비상 해제(`emergency_unlock`)는 확인 없이 suspended(emergency)·블록 missed·block_missed(reason=emergency).
+- 하트비트가 30분 넘게 끊긴 채 개입이 만료되면 end_reason=unreachable, block_missed(reason=unreachable). 맥락에는 "기기 연결 끊김 — 무시한 것이 아니다".
+- 테스트: 예전(v1~v3.6) 테스트는 `intervention.levels=[3]` 으로 L3 경로를 그대로 검증하고, `V4FlowTest` 가 [1,3,4] 를 켠다. 테스트 기기는 시간이 흐르는 동안 하트비트를 보낸 것으로 친다(`deviceAlive`).
+- 앱 잠금 상태는 문서의 DataStore 대신 기존 Prefs(암호화 SharedPreferences)에 둔다. §4 사용자 딴짓 앱 목록이 생기기 전에는 기본 추천 목록(인스타·틱톡·X·페이스북·스레드·넷플릭스·웹툰·카카오페이지)과 설치된 게임만 잠근다. 유튜브·브라우저(애매)는 잠그지 않는다.
+- V14 마이그레이션에 ④~⑥용 테이블·칸(app_rules, blocks/fixed_series.watch·allowed_apps, distraction_logs, distraction_judgments, block_facts 딴짓 칸, interventions.reason)도 미리 넣었다. 모두 NULL 허용·기본값이라 v3.6 jar 로 되돌려도 돈다.
+
+### 되돌리기(v4 → v3.6)
+- 코드: `git revert <v4 커밋>` 후 push(자동 배포) 또는 서버에서 `.bak` jar 로 복구(CLAUDE.md 롤백). 복귀 태그 `1106_6_v4전`.
+- DB: 그대로 둬도 된다(마이그레이션 실행기는 모르는 높은 버전을 건너뛰고, 새 칸은 예전 코드가 쓰지 않는다). 완전히 되돌리려면 `/root/data/assistant/backups/pre-V14.zip`.
+- 앱: 낮은 versionCode 는 덮어 설치가 안 된다. 되돌릴 때는 예전 코드를 더 높은 versionCode 로 다시 빌드한다. 서버만 되돌리면 4.0 앱은 L4·잠금 신호를 받지 않고 L3 로만 동작한다.

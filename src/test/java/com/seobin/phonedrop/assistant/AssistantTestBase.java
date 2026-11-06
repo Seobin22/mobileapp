@@ -107,6 +107,9 @@ abstract class AssistantTestBase {
         mapApi.reset();
         db.update("UPDATE plan_state SET plan_version = 0");
         settings.seedDefaults();
+        // v4: 예전(v1~v3.6) 테스트는 L3 하나만 쓰는 개입 경로를 그대로 검증한다. 단계 올리기는 V4FlowTest 가 [1,3,4] 로 켠다.
+        settings.put("intervention.levels", Json.parse("[3]"));
+        deviceAlive = true;
         clock.set(START);
         ObjectNode device = Json.object();
         device.put("fcm_token", "tok-1");
@@ -115,10 +118,16 @@ abstract class AssistantTestBase {
         push.clear();
     }
 
-    /** FakeClock 을 1분씩 전진시키며 매번 run_due. */
+    /** false 면 하트비트를 보내지 않는 기기(v4 §2.5 연결 끊김 테스트). */
+    boolean deviceAlive = true;
+
+    /** FakeClock 을 1분씩 전진시키며 매번 run_due. 기기가 살아 있으면 하트비트 시각도 따라간다. */
     void advanceAndRun(int minutes) {
         for (int i = 0; i < minutes; i++) {
             clock.advance(1);
+            if (deviceAlive) {
+                db.update("UPDATE devices SET last_heartbeat = ?", clock.now());
+            }
             jobs.runDue();
         }
     }

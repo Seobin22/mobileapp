@@ -65,6 +65,28 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = (prefs.getString("guard_log", "") ?: "").split('\n').filter { it.isNotBlank() }
         set(value) = prefs.edit().putString("guard_log", value.joinToString("\n")).apply()
 
+    // v4 §3.2 L4 잠금 상태
+    var lockActive: Boolean
+        get() = prefs.getBoolean("lock_active", false)
+        set(value) = prefs.edit().putBoolean("lock_active", value).apply()
+
+    var lockInterventionId: String
+        get() = prefs.getString("lock_intervention_id", "") ?: ""
+        set(value) = prefs.edit().putString("lock_intervention_id", value).apply()
+
+    var lockBlockId: Long
+        get() = prefs.getLong("lock_block_id", -1)
+        set(value) = prefs.edit().putLong("lock_block_id", value).apply()
+
+    var lockTitle: String
+        get() = prefs.getString("lock_title", "") ?: ""
+        set(value) = prefs.edit().putString("lock_title", value).apply()
+
+    /** 잠금 화면의 비서 한 줄(마지막 개입 메시지). */
+    var lockLine: String
+        get() = prefs.getString("lock_line", "") ?: ""
+        set(value) = prefs.edit().putString("lock_line", value).apply()
+
     val configured: Boolean get() = apiToken.isNotBlank() && serverUrl.isNotBlank()
 
     companion object {

@@ -220,6 +220,14 @@ fun PermissionScreen(tick: Int, onBack: () -> Unit) {
             PermissionRow("배터리 최적화 예외", caps["battery_exempt"] == true) {
                 open(context, Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri(context)))
             }
+            // v4 §3.1: 접근성(선택). 꺼져 있으면 L4 잠금·딴짓 감지가 동작하지 않는다.
+            PermissionRow("앱 잠금·딴짓 감지(접근성)", caps["accessibility"] == true) {
+                open(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            if (caps["accessibility"] != true) {
+                Text("L4 잠금·딴짓 감지가 꺼져 있어요. 설정 → 접근성 → 설치된 앱 → 실행 비서를 켜 주세요.",
+                    style = MaterialTheme.typography.bodySmall, color = RED)
+            }
             OutlinedButton(onClick = { localTick++ }) { Text("다시 확인") }
         }
     }

@@ -228,6 +228,16 @@ class InterventionActivity : ComponentActivity() {
                     activeNow.value = false
                 }) { Text("10분만 조용히", color = Color(0xFFBFA8B0)) }
             }
+            // v4 §2.4: L4(앱 잠금) 중에는 [비상 해제] — 확인 없이 바로 모두 풀린다.
+            val locked = androidx.compose.runtime.remember(current?.id) {
+                kr.ssbin.assistant.data.Prefs.get(this@InterventionActivity).lockActive
+            }
+            if (locked && current != null && !imeVisible) {
+                androidx.compose.material3.TextButton(onClick = {
+                    InterventionController.onEmergency(applicationContext, current!!.id, current!!.blockId)
+                    finish()
+                }) { Text("비상 해제", color = Color(0xFFFF8787)) }
+            }
             Spacer(Modifier.height(12.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                 items(lines, key = { it.id }) { line -> Bubble(line.mine, line.text) }

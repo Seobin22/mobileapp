@@ -35,7 +35,12 @@ public class InterventionService {
     /** 사용자가 [미루기 요청](구 버튼)을 누르면 이 말로 풀스크린 대화를 시작한다(v3.1 §3.6-7). */
     public static final String LEGACY_SNOOZE_TEXT = "미루고 싶어요";
 
+    /** 로컬 백업·이동 블록의 단계(풀스크린). v4 에서도 L3 번호를 그대로 쓴다. */
     public static final int LEVEL = 3;
+    /** v4 §2.1: 단계 올리기 작업(expected_version = 개입 version). */
+    public static final String ESCALATE = "escalate";
+    /** v4 §2.5: 마지막 하트비트가 이보다 오래되면 무응답을 '기기 연결 끊김'으로 본다. */
+    static final Duration UNREACHABLE_AFTER = Duration.ofMinutes(30);
 
     private final AssistantDb db;
     private final AssistantClock clock;
@@ -54,8 +59,13 @@ public class InterventionService {
 
     /** v3.6 §2.2: 적극 개입 시간대(멈춤·진행 중 고정 일정 아님)인가. */
     private boolean activeNow() {
+        return activeNow(null);
+    }
+
+    /** blockId: 개입 중인 블록 자신(고정 일정이어도 적극 개입 시간대를 막지 않는다). */
+    private boolean activeNow(Long blockId) {
         com.seobin.phonedrop.assistant.agent.TimeWindows tw = windows.getIfAvailable();
-        return tw != null && tw.activeEffective(clock.now(), store);
+        return tw != null && tw.activeEffective(clock.now(), store, blockId);
     }
 
     /** 화면 다시 띄우기 간격. 적극 개입 시간대에는 active.alarm_repeat_min(반응할 때까지 반복). */
@@ -92,6 +102,138 @@ public class InterventionService {
         jobs.register(TALK_TIMEOUT, this::onTalkTimeout);
         jobs.register(LEGACY_NEGOTIATION_TIMEOUT, this::onTalkTimeout);
         jobs.register(BLOCK_CUTOFF, this::onBlockCutoff);
+        jobs.register(ESCALATE, this::onEscalate);
+    }
+
+    // ---------------------------------------------------------------- v4 단계(L1 알림 → L3 풀스크린 → L4 앱 잠금)
+
+    /** intervention.levels (오르는 순서). 2 는 쓰지 않는다. */
+    List<Integer> levels() {
+        List<Integer> r = new java.util.ArrayList<>();
+        for (tools.jackson.databind.JsonNode v : settings.get("intervention.levels")) {
+            int l = v.asInt();
+            if ((l == 1 || l == 3 || l == 4) && !r.contains(l)) {
+                r.add(l);
+            }
+        }
+        return r.isEmpty() ? List.of(LEVEL) : r;
+    }
+
+    /** v4 §2.3: 가장 최근 하트비트 기기의 능력. */
+    private tools.jackson.databind.JsonNode capabilities() {
+        return db.jdbc().sql("SELECT capabilities FROM devices ORDER BY last_heartbeat DESC NULLS LAST, id DESC LIMIT 1")
+                .query(String.class).optional().map(Json::parse).orElse(Json.object());
+    }
+
+    /** 옛 앱은 accessibility 를 보고하지 않는다 → L4 불가. 알림·풀스크린은 보고가 없으면 된다고 본다. */
+    static boolean capable(int level, tools.jackson.databind.JsonNode caps) {
+        return switch (level) {
+            case 1 -> caps.path("notifications").asBoolean(true);
+            case 3 -> caps.path("fullscreen_intent").asBoolean(true);
+            case 4 -> caps.path("accessibility").asBoolean(false);
+            default -> false;
+        };
+    }
+
+    /** 시작 단계: start_level 이상에서 처음 되는 단계. 없으면 되는 것 중 가장 높은 단계. 이동 블록은 L3 고정. */
+    int startLevel(Store.Block b) {
+        if (b.travel()) {
+            return LEVEL;
+        }
+        tools.jackson.databind.JsonNode caps = capabilities();
+        int start = settings.getInt("intervention.start_level");
+        List<Integer> list = levels();
+        for (int l : list) {
+            if (l >= start && capable(l, caps)) {
+                return l;
+            }
+        }
+        return list.stream().filter(l -> capable(l, caps)).reduce((a, c) -> c).orElse(LEVEL);
+    }
+
+    /** 다음 단계(되는 것만). 없으면 null(지금 단계에서 멈춤). */
+    Integer nextLevel(int current) {
+        tools.jackson.databind.JsonNode caps = capabilities();
+        List<Integer> list = levels();
+        for (int l : list) {
+            if (l > current && capable(l, caps)) {
+                return l;
+            }
+        }
+        return null;
+    }
+
+    /** 지금 단계에서 다음 단계까지 기다릴 분. 적극 개입 시간대는 active.wait_minutes(v3.6 "한 칸 빨리"). */
+    int waitMinutes(int current, Long blockId) {
+        tools.jackson.databind.JsonNode arr = settings.get(activeNow(blockId) ? "active.wait_minutes" : "intervention.wait_minutes");
+        int idx = Math.max(0, levels().indexOf(current));
+        int n = arr.size();
+        return n == 0 ? 5 : Math.max(1, arr.get(Math.min(idx, n - 1)).asInt());
+    }
+
+    /** v4 §1 L1: kind=intervention 채팅 메시지(알림은 intervention.level(1) 이 맡으므로 silent). */
+    private void postL1Message(Store.Block b) {
+        String text = b.screenText() == null || b.screenText().isBlank() ? "지금 " + store.blockTitle(b) + " 시간이에요"
+                : b.screenText();
+        long mid = db.insert("""
+                        INSERT INTO messages(role, content, kind, importance, silent, created_at)
+                        VALUES ('assistant', ?, 'intervention', 'high', TRUE, ?)""", text, clock.now());
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("type", "chat.message");
+        data.put("message_id", String.valueOf(mid));
+        data.put("silent", "true");
+        data.put("channel", "chat");
+        data.put("preview", text.length() > 60 ? text.substring(0, 60) : text);
+        push.pushAll(data);
+    }
+
+    private void scheduleEscalate(Store.Intervention i) {
+        jobs.cancelForTarget(ESCALATE, i.id());
+        Store.Block b = store.block(i.blockId()).orElse(null);
+        if (b == null || b.travel() || nextLevel(i.level()) == null) {
+            return;
+        }
+        jobs.schedule(ESCALATE, i.id(), clock.now().plus(Duration.ofMinutes(waitMinutes(i.level(), b.id()))), i.version());
+    }
+
+    private boolean onEscalate(Jobs.Job job) {
+        Store.Intervention i = store.intervention(job.targetId()).orElse(null);
+        // 협상(talking) 중·끝남·version 다름이면 skipped
+        if (i == null || !i.running() || job.expectedVersion() == null || i.version() != job.expectedVersion()) {
+            return false;
+        }
+        Integer next = nextLevel(i.level());
+        if (next == null) {
+            return false;
+        }
+        db.update("""
+                        UPDATE interventions SET level = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?""", next, i.id());
+        Store.Intervention up = store.intervention(i.id()).orElseThrow();
+        logs.add(up.blockId(), "note", "system", "L" + i.level() + " → L" + next + " (무응답)");
+        sendLevel(up);
+        if (next >= LEVEL) {
+            jobs.cancelForTarget(RESHOW, up.id());
+            jobs.schedule(RESHOW, up.id(), clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
+        }
+        scheduleEscalate(up);
+        return true;
+    }
+
+    /** 단계를 바로 올린다(딴짓 감지 §5.5: L1 이면 L3 로). 이미 그 이상이면 그대로. */
+    public boolean raiseTo(Store.Intervention i, int level) {
+        if (!i.running() || i.level() >= level) {
+            return false;
+        }
+        db.update("""
+                        UPDATE interventions SET level = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?""", level, i.id());
+        Store.Intervention up = store.intervention(i.id()).orElseThrow();
+        sendLevel(up);
+        jobs.cancelForTarget(RESHOW, up.id());
+        jobs.schedule(RESHOW, up.id(), clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
+        scheduleEscalate(up);
+        return true;
     }
 
     /** 고정 블록 화면 기본 문구(v3.1 §3.2). 비서가 screen_text 를 정하지 않았을 때. */
@@ -201,8 +343,9 @@ public class InterventionService {
         if (time.isQuiet(now) || !now.isBefore(b.end())) {
             return Optional.empty();
         }
-        // v3.3 §1.2: 방해 금지 고정 일정이 진행 중이면 다른 블록의 개입은 시작하지 않는다(quiet window 와 같다).
-        if (store.dndInProgress(now, b.id()).isPresent()) {
+        // v3.3 §1.2·v4 §2.2: 고정 일정이 진행 중이면(방해 허용 정도와 상관없이) 다른 블록의 개입은 시작하지 않는다.
+        if (store.dndInProgress(now, b.id()).isPresent() || store.fixedInProgress(now).stream()
+                .anyMatch(f -> f.id() != b.id() && !f.travel() && !"started".equals(f.status()) && !b.fixed())) {
             return Optional.empty();
         }
 
@@ -212,7 +355,11 @@ public class InterventionService {
                 finishTravel(rb, "다음 화면이 떠서 자동 완료");
                 continue;
             }
-            end(running, "expired", "superseded", "superseded");
+            if (b.fixed() && !b.travel()) {
+                end(running, "suspended", "fixed_block", "suspended"); // v4 §2.2: 고정 일정이 시작됨
+            } else {
+                end(running, "expired", "superseded", "superseded");
+            }
             if (store.block(running.blockId()).filter(x -> "nudging".equals(x.status())).isPresent()) {
                 logs.add(running.blockId(), "missed", "system", "다음 블록 개입이 시작되어 놓침");
             }
@@ -236,18 +383,24 @@ public class InterventionService {
             }
         }
 
+        int level = startLevel(b);
         long id = db.insert("""
                         INSERT INTO interventions(block_id, status, level, block_version, started_at)
                         VALUES (?, 'running', ?, ?, ?)""",
-                b.id(), LEVEL, b.version(), now);
+                b.id(), level, b.version(), now);
         // 상태만 바뀔 때는 블록 version 을 올리지 않는다.
         store.setBlockStatus(b.id(), "nudging");
         Store.Intervention intervention = store.intervention(id).orElseThrow();
 
         sendLevel(intervention);
-        logs.add(b.id(), "intervention_shown", "system", "L" + LEVEL + " 표시");
+        logs.add(b.id(), "intervention_shown", "system", "L" + level + " 표시");
 
-        jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(reshowMinutes())), null);
+        if (level >= LEVEL) {
+            jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(reshowMinutes())), null);
+        } else {
+            postL1Message(b);
+        }
+        scheduleEscalate(intervention);
         Instant expireAt = expireAt(b);
         jobs.schedule(EXPIRE, id, expireAt, null);
         time.firstQuietStart(now, expireAt).ifPresent(at -> jobs.schedule(SUSPEND, id, at, null));
@@ -275,10 +428,12 @@ public class InterventionService {
             finishTravel(tb, "자동 완료");
             return true;
         }
-        end(i, "expired", "no_response", "expired");
+        // v4 §2.5: 하트비트가 30분 넘게 끊겼으면 무시가 아니라 기기 연결 끊김
+        boolean unreachable = lastHeartbeat().map(h -> h.isBefore(clock.now().minus(UNREACHABLE_AFTER))).orElse(false);
+        end(i, "expired", unreachable ? "unreachable" : "no_response", "expired");
         store.setBlockStatus(i.blockId(), "missed");
-        logs.add(i.blockId(), "missed", "system", "무응답으로 놓침");
-        enqueueMissed(i.blockId(), "no_response");
+        logs.add(i.blockId(), "missed", "system", unreachable ? "기기 연결 끊김으로 놓침" : "무응답으로 놓침");
+        enqueueMissed(i.blockId(), unreachable ? "unreachable" : "no_response");
         coverage.onBlockClosed(i.blockId());
         return true;
     }
@@ -377,6 +532,7 @@ public class InterventionService {
         jobs.cancelForTarget(SUSPEND, i.id());
         jobs.cancelForTarget(TALK_TIMEOUT, i.id());
         jobs.cancelForTarget(LEGACY_NEGOTIATION_TIMEOUT, i.id());
+        jobs.cancelForTarget(ESCALATE, i.id());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "intervention.end");
         data.put("intervention_id", String.valueOf(i.id()));
@@ -413,9 +569,12 @@ public class InterventionService {
                         UPDATE interventions SET status = 'running', talk_until = NULL, version = version + 1,
                         updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
                 i.id());
-        sendLevel(store.intervention(i.id()).orElseThrow());
-        jobs.schedule(RESHOW, i.id(),
-                clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
+        Store.Intervention back = store.intervention(i.id()).orElseThrow();
+        sendLevel(back);
+        if (back.level() >= LEVEL) {
+            jobs.schedule(RESHOW, i.id(), clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
+        }
+        scheduleEscalate(back); // v4 §2.1: 협상에서 돌아오면 escalate 를 새로 예약
         return true;
     }
 
@@ -517,6 +676,8 @@ public class InterventionService {
         data.put("intervention_id", String.valueOf(i.id()));
         data.put("block_id", String.valueOf(b.id()));
         data.put("level", String.valueOf(i.level()));
+        // v4 §1: L4 = 풀스크린 + 딴짓 앱 잠금
+        data.put("lock_apps", String.valueOf(i.level() >= 4));
         data.put("task_title", title);
         data.put("kind", b.kind());
         data.put("block_start", time.iso(b.start()));
@@ -588,6 +749,7 @@ public class InterventionService {
             case "start" -> start(interventionId, blockId, false);
             case "already_started" -> start(interventionId, blockId, true);
             case "dismiss" -> dismiss(interventionId, blockId);
+            case "emergency_unlock" -> emergencyUnlock(interventionId, blockId);
             case "snooze_request" -> snoozeRequest(interventionId, blockId);
             case "local_fired" -> localFired(blockId, req.hasNonNull("block_version") ? Integer.valueOf(req.get("block_version").asInt()) : null);
             default -> throw ApiException.badRequest("알 수 없는 액션입니다: " + type);
@@ -719,6 +881,29 @@ public class InterventionService {
             scheduleBlockJobs(store.block(b.id()).orElseThrow());
         }
         plan.bumpAndSync();
+    }
+
+    /** v4 §2.4: 비상 해제. 확인 없이 바로: suspended(emergency), 블록 missed, block_missed(reason=emergency). */
+    private String emergencyUnlock(Long interventionId, Long blockId) {
+        Optional<Store.Intervention> found = resolve(interventionId, blockId);
+        if (found.isEmpty() || !found.get().active()) {
+            return "ok";
+        }
+        Store.Intervention i = found.get();
+        end(i, "suspended", "emergency", "emergency");
+        store.log(i.id(), i.blockId(), i.level(), clock.now(), "emergency_unlock");
+        store.setBlockStatus(i.blockId(), "missed");
+        logs.add(i.blockId(), "missed", "user", "비상 해제");
+        enqueueMissed(i.blockId(), "emergency");
+        coverage.onBlockClosed(i.blockId());
+        plan.bumpAndSync();
+        return "ok";
+    }
+
+    private java.util.Optional<Instant> lastHeartbeat() {
+        List<Instant> hb = db.jdbc().sql("SELECT MAX(last_heartbeat) AS hb FROM devices")
+                .query((rs, n) -> AssistantDb.instant(rs, "hb")).list();
+        return hb.isEmpty() ? java.util.Optional.empty() : java.util.Optional.ofNullable(hb.get(0));
     }
 
     private String dismiss(Long interventionId, Long blockId) {
