@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 음성 탭 상태 조회(읽기 전용): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
+# 놓친 목표 알람 조사(읽기 전용, 제목·내용 없음): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,20 +41,20 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'V_SESSIONS' AS q, id, FORMATDATETIME(started_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS started, FORMATDATETIME(ended_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS ended, end_reason, stt_seconds, tts_chars, llm_tokens FROM voice_sessions ORDER BY id DESC LIMIT 15;
-SELECT 'V_TURNS' AS q, status, COUNT(*) AS n FROM turns WHERE trigger='voice' GROUP BY status;
-SELECT 'V_MSGS' AS q, role, kind, COUNT(*) AS n FROM messages WHERE channel='voice' GROUP BY role, kind;
-SELECT 'V_SET' AS q, key, value FROM settings WHERE key IN ('voice.stt_model','voice.stt_mode','voice.model','voice.speed','voice.end_silence_ms','voice.daily_turn_cap') OR (key='voice.voice_id');
+SELECT 'B_TODAY' AS q, b.id, b.kind, b.status, b.category, b.goal_id, b.task_id, b.link_role, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(b.end_at,'HH:mm','en','Asia/Seoul') AS en, b.lead_minutes AS lead, b.interrupt_level AS lvl, FORMATDATETIME(b.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS created, FORMATDATETIME(b.updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd FROM blocks b WHERE b.start_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) AND b.start_at < DATEADD('HOUR', 14, CURRENT_TIMESTAMP) ORDER BY b.start_at;
+SELECT 'I_TODAY' AS q, i.id, i.block_id, i.status, i.level, i.reason, i.end_reason, FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(i.ended_at,'HH:mm','en','Asia/Seoul') AS en FROM interventions i WHERE i.started_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) ORDER BY i.id;
+SELECT 'T_TODAY' AS q, trigger, status, COUNT(*) AS n, FORMATDATETIME(MIN(started_at),'MM-dd HH:mm','en','Asia/Seoul') AS first, FORMATDATETIME(MAX(started_at),'MM-dd HH:mm','en','Asia/Seoul') AS last FROM turns WHERE started_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) GROUP BY trigger, status ORDER BY first;
+SELECT 'M_KIND' AS q, kind, silent, COUNT(*) AS n, FORMATDATETIME(MIN(created_at),'MM-dd HH:mm','en','Asia/Seoul') AS first, FORMATDATETIME(MAX(created_at),'MM-dd HH:mm','en','Asia/Seoul') AS last FROM messages WHERE role='assistant' AND created_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) GROUP BY kind, silent ORDER BY first;
+SELECT 'W_DEF' AS q, id, kind, days, start_time, end_type, end_time, end_fallback_time, enabled FROM time_windows;
+SELECT 'W_RUNS' AS q, window_id, kind, FORMATDATETIME(occ_start,'MM-dd HH:mm','en','Asia/Seoul') AS occ, alarm_count, FORMATDATETIME(acked_at,'HH:mm','en','Asia/Seoul') AS acked, llm_count, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS ended FROM time_window_runs ORDER BY id DESC LIMIT 8;
+SELECT 'G' AS q, id, status, category, FORMATDATETIME(deadline,'MM-dd HH:mm','en','Asia/Seoul') AS deadline FROM goals WHERE status <> 'cancelled';
+SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst, (SELECT value FROM settings WHERE key='life.wake') AS wake, (SELECT value FROM settings WHERE key='intervention.levels') AS levels FROM (VALUES 1);
 SQL
 
 while IFS= read -r q; do
   [ -n "$q" ] || continue
   "$JAVA" -cp "$H2" org.h2.tools.Shell -url "$URL" -user sa -password "" -sql "$q" >> "$WORK/out.txt" 2>&1 || echo "QUERY FAILED" >> "$WORK/out.txt"
 done < "$WORK/queries.sql"
-
-# 키 파일 유무(값은 출력하지 않음)와 ElevenLabs 응답 코드만
-{ [ -s "$DATA/elevenlabs_api_key" ] && echo "KEY present $(wc -c < "$DATA/elevenlabs_api_key") bytes" || echo "KEY missing"; } >> "$WORK/out.txt"
-journalctl -u phonedrop --since "-6h" --no-pager 2>/dev/null | grep -oE "ElevenLabs [0-9]{3}|STT model [a-z0-9_]+ rejected|voice turn [0-9]+ did not finish" | sort | uniq -c >> "$WORK/out.txt" || true
 
 # 3000자씩 ::notice 주석으로 내보낸다(공개 annotations API 로 읽을 수 있다).
 awk -v max=3000 '
