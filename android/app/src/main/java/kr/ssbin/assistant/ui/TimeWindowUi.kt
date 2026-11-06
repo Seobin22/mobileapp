@@ -3,6 +3,7 @@ package kr.ssbin.assistant.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -228,12 +229,20 @@ private fun TimeWindowDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it.take(40) }, label = { Text("이름") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                // 요일 7개가 대화 상자 폭에 모두 들어가게 같은 너비의 동그라미로(칩은 토·일이 잘렸다)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     DAY_NAMES.forEachIndexed { i, d ->
                         val day = i + 1
-                        FilterChip(selected = day in days, onClick = {
-                            days = if (day in days) days - day else days + day
-                        }, label = { Text(d) })
+                        val on = day in days
+                        Box(
+                            Modifier.weight(1f).aspectRatio(1f)
+                                .background(if (on) Color(0xFFD6336C) else MaterialTheme.colorScheme.surfaceVariant,
+                                    androidx.compose.foundation.shape.CircleShape)
+                                .clickable { days = if (on) days - day else days + day },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(d, color = if (on) Color.White else Color.Unspecified, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
                 WheelRow("시작", timeText(start), open == "start") { open = if (open == "start") "" else "start" }
