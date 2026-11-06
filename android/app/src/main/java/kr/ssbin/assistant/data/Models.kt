@@ -439,6 +439,8 @@ data class BlockDetailDto(
     val series: SeriesDto? = null,
     val occurrence_date: String? = null,
     val logs: List<BlockLogDto> = emptyList(),
+    val actual_start: String? = null,
+    val actual_end: String? = null,
     val interrupt_level: String? = null,
     val interrupt_set_by: String? = null,
     val place_name: String? = null,

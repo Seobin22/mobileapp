@@ -271,11 +271,8 @@ private fun MonthView(anchor: LocalDate, from: LocalDate, data: CalendarResponse
 private data class Placed(val block: CalendarBlock, val top: Long, val bottom: Long, var col: Int = 0, var cols: Int = 1)
 
 /** 끝난 블록은 실제로 끝난 시각까지만(일찍 끝난 '일부 완료'가 다음 블록과 겹쳐 보이지 않게). */
-private fun shownEnd(b: CalendarBlock): ZonedDateTime {
-    val planned = zoned(b.end)
-    val actual = b.actual_end?.let { runCatching { zoned(it) }.getOrNull() }
-    return if (actual != null && actual.isBefore(planned) && b.status in listOf("done", "partial")) actual else planned
-}
+/** 2026-11-06 사용자 요청: 일찍 끝낸 블록도 달력에는 예정 길이 그대로 그린다(실제 시각은 상세에서). */
+private fun shownEnd(b: CalendarBlock): ZonedDateTime = zoned(b.end)
 
 /**
  * 하루 칸 배치: 시간이 겹치는 칸끼리 묶어 그 묶음 안에서만 나란히 놓는다(겹치지 않는 칸은 전체 폭).
@@ -594,6 +591,11 @@ fun BlockDetailDialog(blockId: Long, onDismiss: () -> Unit, onChanged: () -> Uni
                 val fixed = d.kind == "fixed"
                 Text((if (fixed) "고정" else "계획") + (if (d.series != null) " · 🔁 " + d.series.rule_text else "") +
                     " · " + mdHm(d.start) + "–" + hm(d.end))
+                // 실제로 한 시간(시작·끝을 기록한 블록)
+                if (d.actual_start != null || d.actual_end != null) {
+                    Text("실제 " + (d.actual_start?.let { hm(it) } ?: "?") + "–" + (d.actual_end?.let { hm(it) } ?: "진행 중"),
+                        style = MaterialTheme.typography.bodySmall, color = Color(0xFF495057))
+                }
                 if (d.goal_label.isNotBlank()) GoalChip(d.goal_label, d.goal_color)
                 d.location?.let { Text("장소: $it" + (d.place_name?.takeIf { p -> p != it }?.let { p -> " → $p" } ?: "")) }
                 if (fixed && d.lead_minutes > 0) Text("출발 전 준비 ${d.lead_minutes}분(이동 시간 제외)")
