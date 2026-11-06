@@ -144,6 +144,32 @@ object Speaker {
         deviceSpeak(app, text)
     }
 
+    /** 깨우기 질문: 알람 음량(USAGE_ALARM)으로 기기 음성. 무음 모드에서도 들린다. */
+    fun speakAlarm(context: Context, text: String) {
+        val app = context.applicationContext
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            var engine: TextToSpeech? = null
+            engine = TextToSpeech(app) init@{ status ->
+                val e = engine ?: return@init
+                if (status == TextToSpeech.SUCCESS) {
+                    e.language = Locale.KOREAN
+                    e.setAudioAttributes(android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    e.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {}
+                        override fun onDone(utteranceId: String?) { e.shutdown() }
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(utteranceId: String?) { e.shutdown() }
+                    })
+                    e.speak(text, TextToSpeech.QUEUE_FLUSH, null, "wake-${System.currentTimeMillis()}")
+                } else {
+                    e.shutdown()
+                }
+            }
+        }, 4000) // 알람 소리가 먼저 울린 뒤
+    }
+
     private fun deviceSpeak(context: Context, text: String) {
         if (!WindowGuard.canSpeak(context)) return
         val engine = tts
@@ -168,16 +194,25 @@ object Speaker {
 /** 적극 개입 시간대 알람(서버 active.alarm 푸시가 반응할 때까지 반복해서 온다). */
 object ActiveAlarm {
 
-    const val CHANNEL = "active_alarm"
+    /** 2026-11-07: 알람 소리(무음 모드에서도 울림)가 나는 새 채널. 채널 소리는 만든 뒤 바꿀 수 없어 이름을 바꿨다. */
+    const val CHANNEL = "active_alarm_wake"
+    private const val WAKE_TEXT = "자고 있어요? 일어났으면 확인을 눌러 주세요."
     private const val NOTIFICATION_ID = 4001
     const val ACTION_ACK = "kr.ssbin.assistant.ACTIVE_ACK"
     const val ACTION_PAUSE = "kr.ssbin.assistant.ACTIVE_PAUSE"
 
     fun createChannel(context: Context) {
-        val channel = NotificationChannel(CHANNEL, "적극 개입 시간 알람", NotificationManager.IMPORTANCE_HIGH)
-        channel.description = "적극 개입 시간대에 반응할 때까지 반복해서 울립니다"
+        val nm = context.getSystemService(NotificationManager::class.java)
+        runCatching { nm.deleteNotificationChannel("active_alarm") } // 소리 없던 옛 채널
+        val channel = NotificationChannel(CHANNEL, "적극 개입 시간 알람(깨우기)", NotificationManager.IMPORTANCE_HIGH)
+        channel.description = "적극 개입 시간대에 확인을 누를 때까지 3분마다 울립니다(무음 모드에서도 알람 음량으로)"
         channel.enableVibration(true)
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        channel.setSound(
+            android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM),
+            android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build(),
+        )
+        nm.createNotificationChannel(channel)
     }
 
     fun show(context: Context, data: Map<String, String>) {
@@ -186,25 +221,34 @@ object ActiveAlarm {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
+        // 알림을 직접 누르면 반응(ack). 전체 화면은 화면이 꺼져 있으면 저절로 뜨므로 반응으로 치지 않는다
+        // (2026-11-07 버그: 저절로 뜬 화면이 곧바로 '일어남'으로 처리돼 반복 알람이 멈췄다).
         val open = PendingIntent.getActivity(
             context, 41,
             Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ACTIVE_ACK, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val wakeScreen = PendingIntent.getActivity(
+            context, 44,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(data["text"] ?: "적극 개입 시간이에요")
-            .setContentText("확인을 누르면 비서가 오늘 할 일을 알려줘요")
+            .setContentText(WAKE_TEXT)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setContentIntent(open)
-            .setFullScreenIntent(open, true)
+            .setFullScreenIntent(wakeScreen, true)
             .addAction(0, "확인", broadcast(context, ACTION_ACK, 42))
             .addAction(0, "10분만 조용히", broadcast(context, ACTION_PAUSE, 43))
             .build()
         NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+        // 깨우기: 알람 음량으로 소리 내 묻는다(무음 모드에서도 들리게, 방해 금지 시간대는 위에서 막았다)
+        Speaker.speakAlarm(context, WAKE_TEXT)
     }
 
     fun cancel(context: Context) {

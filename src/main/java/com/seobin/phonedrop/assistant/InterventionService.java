@@ -231,6 +231,9 @@ public class InterventionService {
         if (i == null || !i.running() || job.expectedVersion() == null || i.version() != job.expectedVersion()) {
             return false;
         }
+        if (suspendForCommitment(i)) {
+            return true;
+        }
         Integer next = nextLevel(i.level());
         if (next == null) {
             return false;
@@ -447,6 +450,7 @@ public class InterventionService {
         Instant expireAt = expireAt(b);
         jobs.schedule(EXPIRE, id, expireAt, null);
         time.firstQuietStart(now, expireAt).ifPresent(at -> jobs.schedule(SUSPEND, id, at, null));
+        scheduleCommitmentChecks(intervention, b, expireAt);
         return Optional.of(intervention);
     }
 
@@ -454,6 +458,9 @@ public class InterventionService {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
         if (i == null || !i.running()) {
             return false;
+        }
+        if (suspendForCommitment(i)) {
+            return true; // 그 사이 생긴 고정 일정·이동이 시작됐다
         }
         sendLevel(i);
         jobs.schedule(RESHOW, i.id(),
@@ -481,8 +488,59 @@ public class InterventionService {
         return true;
     }
 
+    /**
+     * v4 §2.2(2026-11-07 수정): 개입이 도는 중에 다른 고정 일정의 금지 구간(준비 시간 포함)이나 이동 블록이 시작되면 멈춘다.
+     * 예전에는 방해 금지·수면 시간에만 멈춰서, 알바 준비 시간에도 다른 블록의 알람·잠금이 계속됐다.
+     */
+    private boolean otherCommitmentNow(Store.Intervention i) {
+        Instant now = clock.now();
+        Store.Block own = store.block(i.blockId()).orElse(null);
+        if (own == null || own.travel()) {
+            return false;
+        }
+        boolean fixed = store.fixedInProgress(now).stream()
+                .anyMatch(f -> f.id() != own.id() && !f.travel() && (own.linkedFixedBlockId() == null || f.id() != own.linkedFixedBlockId()));
+        boolean travel = store.activeBlocksOverlapping(now, now.plusSeconds(1)).stream()
+                .anyMatch(t -> t.travel() && t.id() != own.id() && !now.isBefore(t.start()));
+        return fixed || travel;
+    }
+
+    /** 다른 일정 때문에 멈춘다: suspended(fixed_block), 블록 missed, 비서가 다시 배치. */
+    private boolean suspendForCommitment(Store.Intervention i) {
+        if (!i.active() || !otherCommitmentNow(i)) {
+            return false;
+        }
+        end(i, "suspended", "fixed_block", "suspended");
+        Store.Block b = store.block(i.blockId()).orElse(null);
+        if (b != null && !"started".equals(b.status())) {
+            store.setBlockStatus(i.blockId(), "missed");
+            logs.add(i.blockId(), "missed", "system", "다른 고정 일정(준비 포함)·이동이 시작되어 중단");
+            enqueueMissed(i.blockId(), "fixed_block");
+            coverage.onBlockClosed(i.blockId());
+        }
+        return true;
+    }
+
+    /** 개입이 끝나기 전에 시작하는 다른 고정 일정(금지 구간 시작)·이동 블록 시각에 멈춤 확인을 잡는다. */
+    private void scheduleCommitmentChecks(Store.Intervention i, Store.Block b, Instant until) {
+        Instant now = clock.now();
+        for (Store.Block f : store.activeFixedBlocksOverlapping(now, until)) {
+            if (f.id() != b.id() && !f.travel() && f.blockedStart().isAfter(now)) {
+                jobs.schedule(SUSPEND, i.id(), f.blockedStart(), null);
+            }
+        }
+        for (Store.Block t : store.activeBlocksOverlapping(now, until)) {
+            if (t.travel() && t.id() != b.id() && t.start().isAfter(now)) {
+                jobs.schedule(SUSPEND, i.id(), t.start(), null);
+            }
+        }
+    }
+
     private boolean onSuspendCheck(Jobs.Job job) {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
+        if (i != null && i.active() && !time.isQuiet(clock.now())) {
+            return suspendForCommitment(i);
+        }
         if (i == null || !i.active() || !time.isQuiet(clock.now())) {
             return false;
         }

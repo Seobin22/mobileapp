@@ -346,6 +346,17 @@ public class ContextBuilder {
         return sb.append('\n').toString();
     }
 
+    /** 다음(또는 진행 중) 고정 일정과 준비 시작 시각. 먼저 말 걸기가 맥락을 보게. */
+    private String nextCommitment() {
+        Instant now = clock.now();
+        return store.activeFixedBlocksOverlapping(now, now.plus(java.time.Duration.ofHours(12))).stream()
+                .filter(b -> !b.travel())
+                .findFirst()
+                .map(b -> "다음 고정 일정 '" + store.blockTitle(b) + "' " + time.hm(b.start()) + " 시작(준비 " + time.hm(b.blockedStart())
+                        + "부터" + (now.isBefore(b.blockedStart()) ? ", " + java.time.Duration.between(now, b.blockedStart()).toMinutes() + "분 남음" : ", 이미 준비 시간") + ")")
+                .orElse("오늘 남은 고정 일정 없음");
+    }
+
     private String hmOf(String iso) {
         try {
             return time.hm(TimeUtil.parse(iso));
@@ -419,6 +430,7 @@ public class ContextBuilder {
                         case "no_response" -> "no_response(화면에 무응답)";
                         case "quiet" -> "quiet(방해 금지·수면으로 중단)";
                         case "never_started" -> "never_started(시작되지 않고 끝 시각이 지남)";
+                        case "fixed_block" -> "fixed_block(다른 고정 일정의 준비·이동이 시작되어 개입을 멈춤 — 사용자 잘못이 아니다. 고정 일정 뒤 빈 시간에 다시 잡는다)";
                         case "unreachable" -> "unreachable(기기 연결 끊김 — 무시한 것이 아니다)";
                         case "emergency" -> "emergency(사용자가 비상 해제를 눌렀다 — 급한 일이 있었을 수 있다. 다그치지 말고 다시 잡을지 묻는다)";
                         default -> ref.path("reason").asString("");
@@ -444,14 +456,15 @@ public class ContextBuilder {
                         + " 작업물은 만들지 않는다";
             }
             case "pulse" -> "pulse: 정기 점검(먼저 말 걸 가치가 있을 때만 send_message)";
-            case "active_window" -> "ack".equals(ref.path("reason").asString(""))
+            case "active_window" -> ("ack".equals(ref.path("reason").asString(""))
                     ? "active_window: 사용자가 '" + ref.path("name").asString("") + "' 적극 개입 시간대 알람을 껐다(~"
-                    + hmOf(ref.path("until").asString("")) + "). 오늘 할 일을 첫 한두 개만 짧게 브리핑하고 첫 할 일을 지금 시작하라고 민다."
-                    + " send_message kind=proactive 1개, 소리로 읽힐 수 있으니 1~2문장"
+                    + hmOf(ref.path("until").asString("")) + "). 지금 상황에 맞는 것 한두 개만 짧게 브리핑한다."
                     : "active_window: '" + ref.path("name").asString("") + "' 적극 개입 시간대(~"
-                    + hmOf(ref.path("until").asString("")) + ", 이번 회차 " + ref.path("count").asInt() + "번째 먼저 말 걸기)."
-                    + " 아직 시작한 블록이 없다. 첫 할 일을 시작하라고 짧고 단호하게 민다(앞서 한 말을 반복하지 말고 방법을 바꾼다)."
-                    + " send_message kind=proactive 1개, 1~2문장";
+                    + hmOf(ref.path("until").asString("")) + ", 이번 회차 " + ref.path("count").asInt() + "번째 먼저 말 걸기). 아직 시작한 블록이 없다.")
+                    + " 지금 시각·" + nextCommitment() + "·놓친 블록을 보고 '지금 실제로 할 수 있는 것'을 정한다:"
+                    + " 곧(준비 포함) 고정 일정이 있으면 그 준비를 챙기고, 놓친 할 일은 그 앞 빈 시간이 충분할 때만 권하거나 그 뒤로 다시 잡는다."
+                    + " 이미 시각이 지난 일·지금 못 하는 일을 하라고 하지 않는다. 늦게 일어났으면 그걸 감안한다."
+                    + " 말할 가치가 없으면 send_message 없이 끝낸다. 말한다면 send_message kind=proactive 1개, 소리로 읽힐 수 있으니 1~2문장(앞서 한 말 반복 금지)";
             case "morning" -> "morning: 아침 브리핑(" + ref.path("logical_day").asString("") + ")";
             case "evening" -> "evening: 저녁 회고(" + ref.path("logical_day").asString("") + ")";
             default -> trigger + ": " + ref;

@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import com.seobin.phonedrop.assistant.api.TimeWindowController;
 
+import tools.jackson.databind.node.ObjectNode;
+
 /** 빌드문서 v4 §9.1 E1~E8 (단계 올리기 L1·L3·L4). 시작 2026-11-02(월) 09:00. */
 class V4FlowTest extends AssistantTestBase {
 
@@ -155,6 +157,40 @@ class V4FlowTest extends AssistantTestBase {
         assertThat(onlyIntervention().level()).isEqualTo(3);
         runUntil("2026-11-02T10:08");
         assertThat(onlyIntervention().level()).isEqualTo(4);
+    }
+
+    @Autowired
+    com.seobin.phonedrop.assistant.agent.Tools agentTools;
+
+    ObjectNode tool(String trigger, String name, String json) {
+        long turnId = db.insert("INSERT INTO turns(trigger, status, started_at) VALUES (?, 'running', ?)", trigger, clock.now());
+        return tx.run(() -> agentTools.dispatch(new com.seobin.phonedrop.assistant.agent.Tools.Context(turnId, trigger, false),
+                name, Json.parse(json)));
+    }
+
+    static String iso(String local) {
+        return at(local).atZone(KST).toOffsetDateTime().toString();
+    }
+
+    @Test
+    void otherFixedPrepStartSuspendsRunningIntervention() {
+        // 2026-11-07 운영 버그: 알바 준비 시간(고정 일정 lead)이 시작돼도 다른 블록의 L4 잠금이 계속됐다
+        ObjectNode fixed = tool("user_message", "upsert_fixed_block", "{\"title\":\"알바\",\"start\":\"" + iso("2026-11-02T11:00")
+                + "\",\"end\":\"" + iso("2026-11-02T15:00") + "\",\"lead_minutes\":20,\"prep_from_user\":true}");
+        assertThat(fixed.path("ok").asBoolean()).as(fixed.toString()).isTrue();
+        long task = tool("user_message", "upsert_task", "{\"title\":\"러닝\",\"first_action\":\"신발\",\"est_minutes\":40}").get("id").asLong();
+        ObjectNode r = tool("user_message", "set_schedule", "{\"from\":\"" + iso("2026-11-02T10:00") + "\",\"to\":\"" + iso("2026-11-02T10:40")
+                + "\",\"blocks\":[{\"task_id\":" + task + ",\"start\":\"" + iso("2026-11-02T10:00") + "\",\"end\":\"" + iso("2026-11-02T10:40") + "\"}]}");
+        long run = r.get("created").get(0).asLong();
+        runUntil("2026-11-02T10:39");
+        assertThat(store.runningForBlock(run).orElseThrow().level()).isEqualTo(4);
+        push.clear();
+        runUntil("2026-11-02T10:41"); // 알바 준비 시작 10:40
+        Store.Intervention i = db.jdbc().sql("SELECT * FROM interventions WHERE block_id = ?").param(run).query(Store::intervention).single();
+        assertThat(i.status()).isEqualTo("suspended");
+        assertThat(i.endReason()).isEqualTo("fixed_block");
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+        assertThat(block(run).status()).isEqualTo("missed");
     }
 
     @Test
