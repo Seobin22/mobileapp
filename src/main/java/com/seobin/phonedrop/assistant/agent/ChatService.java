@@ -332,7 +332,7 @@ public class ChatService {
     public int turnsToday() {
         Instant dayStart = time.activeWindow(time.logicalDay(clock.now())).start();
         return db.jdbc().sql("""
-                        SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND trigger NOT IN ('document_process', 'memory_job')
+                        SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND trigger NOT IN ('document_process', 'memory_job', 'voice')
                         AND started_at >= ?""")
                 .param(AssistantDb.ts(dayStart)).query(Integer.class).single();
     }

@@ -373,3 +373,21 @@
 - 코드: `git revert <v4 커밋>` 후 push(자동 배포) 또는 서버에서 `.bak` jar 로 복구(CLAUDE.md 롤백). 복귀 태그 `1106_6_v4전`.
 - DB: 그대로 둬도 된다(마이그레이션 실행기는 모르는 높은 버전을 건너뛰고, 새 칸은 예전 코드가 쓰지 않는다). 완전히 되돌리려면 `/root/data/assistant/backups/pre-V14.zip`.
 - 앱: 낮은 versionCode 는 덮어 설치가 안 된다. 되돌릴 때는 예전 코드를 더 높은 versionCode 로 다시 빌드한다. 서버만 되돌리면 4.0 앱은 L4·잠금 신호를 받지 않고 L3 로만 동작한다.
+
+## v3.6 ③④⑤ 음성 탭 (2026-11-07)
+- **WebSocket 대신 HTTP 스트리밍.** 문서 §3.1 은 WebSocket 인데, 지금 nginx 설정이 Upgrade 헤더를 넘기는지 모르고 nginx 변경은 승인 사항이라 피했다.
+  - `POST /v1/voice/sessions` → session_id
+  - `POST /v1/voice/sessions/{id}/turn` 본문 = 말 한 덩어리 WAV(16kHz mono), 응답 = NDJSON 흐름(`X-Accel-Buffering: no` 로 nginx 버퍼링 끔). 이벤트: user_text·assistant_text·audio(문장별 mp3 base64)·saved·card·error·done.
+  - `POST /v1/voice/sessions/{id}/interrupt {message_id, spoken}`, `POST /v1/voice/sessions/{id}/end {reason}`.
+  - 인증은 기존 Bearer 토큰 그대로.
+- **LLM 답은 토큰 스트리밍이 아니다.** voice turn 은 기존 turn 루프(같은 맥락·도구·검증기·답장 후 종료)를 그대로 돌리고, 끝난 답을 문장마다 TTS 로 바꿔 바로바로 흘려보낸다. 음성 답이 1~2문장이라 차이는 작다. 턴이 120초 안에 안 끝나면 응답을 닫는다.
+- 받아쓰기는 Scribe(`voice.stt_model`, 기본 scribe_v2, 서버가 거절하면 scribe_v1 로 한 번 더). `voice.stt_mode=realtime` 은 아직 batch 와 같게 동작한다. TTS 는 eleven_flash_v2_5, mp3 44.1k/64kbps. `voice.voice_id` 가 비면 계정의 첫 목소리.
+- 오디오는 메모리에서만 쓰고 받아쓴 뒤 0 으로 지운다. 앱은 재생할 mp3 를 캐시에 잠깐 썼다가 재생 끝나면 지운다.
+- voice turn 의 모델: `voice.model`, 비면 Anthropic 이면 Haiku 계열, FactChat 이면 지금 모델(게이트웨이에 Haiku 가 없을 수 있어서).
+- 음성 turn 은 `daily_turn_hard` 에서 빼고 `voice.daily_turn_cap` 으로 센다(VoiceService 가 받기 전에 막는다).
+- 음성 답·질문·카드 메시지는 channel=voice, silent(음성 탭이 소리로 말하므로 알림 없음). 채팅 탭에는 🎤 로 보인다.
+- 확인 카드 음성 승인(`card_decide`): 카드를 띄운 turn 이 끝날 때 그 세션의 대기 카드에 '읽은 비서 메시지'를 적는다. 검증은 문서 §3.6 네 조건. 승인되면 '저장됨' 줄 "음성으로 승인됨" 에 [되돌리기](`POST /v1/voice/undo/{card}` = 그 카드를 실행한 system turn 의 기존 되돌리기)를 붙인다.
+- 앱 말소리 감지는 라이브러리 대신 에너지 기반 VAD(소음 바닥을 따라가는 임계값, 3프레임 연속이면 말 시작, `voice.end_silence_ms` 침묵이면 말 끝, 비서가 스피커로 말하는 중엔 임계값 2.5배). 의존성을 늘리지 않으려고. 에코 제거·소음 억제(AcousticEchoCanceler·NoiseSuppressor)를 켠다.
+- 끝내기: 화면 [종료]·알림 [종료]·이어폰 버튼(MediaSession)·볼륨 버튼 1초 이상(MediaSession 원격 볼륨, 키 반복으로 판단; 짧게는 미디어 볼륨 조절). 볼륨 길게는 기종에 따라 화면이 꺼진 상태에서 안 될 수 있다. 통화(MODE_IN_CALL)면 멈췄다가 끝나면 이어서 듣는다. 앱을 최근 앱에서 지우면 세션이 끝난다(app_closed). 끝나지 않은 세션은 다음 세션을 열 때 app_restarted 로 닫는다.
+- §5: 적극 개입 시간대에 비서가 먼저 거는 말은 앱이 §2.4 조건 확인 뒤 `GET /v1/voice/messages/{id}/audio`(ElevenLabs 목소리)로 읽고, 안 되면 기기 음성. `active.auto_voice` 가 켜져 있으면 적극 개입 시간대에 개입 화면이 뜰 때 음성 대화를 자동 시작한다.
+- 관리 화면 '음성 연결': 키 저장(data/assistant/elevenlabs_api_key, 600)·오늘 세션·음성 turn·받아쓰기 초·목소리 글자·LLM 토큰·대략 비용(Scribe $0.40/시간, Flash $0.05/1000자 기준 — 요금제마다 다름).

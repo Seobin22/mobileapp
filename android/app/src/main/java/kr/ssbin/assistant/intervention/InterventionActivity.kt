@@ -449,6 +449,14 @@ class InterventionActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // v3.6 §5 자동 음성 대화: 적극 개입 시간대에 개입 화면이 떠 있는 동안(사용자가 설정에서 켰을 때만)
+        if (kr.ssbin.assistant.data.Prefs.get(this).activeAutoVoice && WindowGuard.active(this) != null &&
+            !kr.ssbin.assistant.voice.VoiceEngine.active &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            kr.ssbin.assistant.voice.VoiceEngine.launch(this)
+        }
         entity.value?.let {
             InterventionState.visibleId = it.id
             InterventionState.visibleBlockId = it.blockId

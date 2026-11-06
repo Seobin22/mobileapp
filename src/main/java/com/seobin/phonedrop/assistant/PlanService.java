@@ -113,6 +113,8 @@ public class PlanService {
         data.put("type", "plan.sync");
         data.put("time_windows", Json.write(windowList));
         data.put("active_paused_until", pausedUntil);
+        data.put("active_auto_voice", String.valueOf(settings.getBoolean("active.auto_voice")));
+        data.put("voice_end_silence_ms", String.valueOf(settings.getInt("voice.end_silence_ms")));
         data.put("plan_version", String.valueOf(version()));
         data.put("quiet_windows", Json.write(quiet));
         data.put("upcoming", Json.write(upcoming));

@@ -375,9 +375,26 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
     val mine = m.role == "user"
     // v3.2 P1.2: 코드가 덧붙인 '저장됨' 줄(kind=system)은 작은 회색 띠로 보여준다.
     if (m.kind == "system") {
-        Box(Modifier.fillMaxWidth().padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(m.content, style = MaterialTheme.typography.labelMedium, color = Color(0xFF495057),
                 modifier = Modifier.background(Color(0xFFE9ECEF), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+            // v3.6 §3.6: 음성으로 승인한 카드 [되돌리기]
+            val card = m.action?.removePrefix("undo_card:")?.toLongOrNull()
+            if (card != null) {
+                val context = LocalContext.current
+                val scope = androidx.compose.runtime.rememberCoroutineScope()
+                var done by remember(m.id) { mutableStateOf<String?>(null) }
+                if (done == null) {
+                    TextButton(onClick = {
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) { runCatching { ApiClient.get(context).undoVoiceCard(card) } }
+                            done = if (r.isSuccess) "되돌렸어요" else ApiClient.errorMessage(r.exceptionOrNull()!!)
+                        }
+                    }) { Text("되돌리기") }
+                } else {
+                    Text(done!!, style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
         return
     }

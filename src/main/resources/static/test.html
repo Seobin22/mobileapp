@@ -94,6 +94,18 @@
     </section>
 
     <section>
+        <h2>음성 연결 <span class="muted">(ElevenLabs API 키 · 앱 음성 탭)</span></h2>
+        <div id="voiceStatus" class="muted">-</div>
+        <div class="row">
+            <input id="elevenKey" type="password" placeholder="ElevenLabs API 키" autocomplete="off">
+            <button id="saveEleven">키 저장</button>
+        </div>
+        <div class="muted" style="font-size:13px">서버 /root/data/assistant/elevenlabs_api_key 에만 저장하고 다시 표시하지 않습니다.
+            키를 만들 때 Speech to Text·Text to Speech·Voices(읽기) 권한을 켜 주세요. 음성 파일은 저장하지 않습니다.</div>
+        <div class="error" id="voiceError"></div>
+    </section>
+
+    <section>
         <h2>채팅 <button class="ghost" id="reloadChat" style="float:right">새로고침</button></h2>
         <div id="chat" style="max-height:420px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fffafc">-</div>
         <div class="row" style="margin-top:8px">
@@ -445,7 +457,7 @@
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive(), loadKakao(), loadInsight()]);
+            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive(), loadKakao(), loadInsight(), loadVoice()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
@@ -457,6 +469,21 @@
             + (r.native_key_configured === undefined ? '' : ' · 앱 지도 키 ' + (r.native_key_configured ? '있음' : '없음'));
     }
     async function loadKakao() { showKakao(await api('GET', '/v1/admin/kakao_status')); }
+    const VOICE_STATUS = { ok: '정상', no_key: '키 없음', bad_key: '키 오류', quota: '사용량·요금제 한도', network: '연결 실패', unknown: '확인 전' };
+    function showVoice(r) {
+        $('voiceStatus').textContent = '상태: ' + (VOICE_STATUS[r.status] || r.status) + ' · 오늘 세션 ' + r.sessions
+            + ' · 음성 turn ' + r.voice_turns + '/' + r.turn_cap + ' · 받아쓰기 ' + r.stt_seconds + '초 · 목소리 '
+            + r.tts_chars + '자 · LLM 토큰 ' + r.llm_tokens + ' · 대략 $' + r.approx_usd + ' (LLM 제외, 요금제마다 다름)';
+    }
+    async function loadVoice() { showVoice(await api('GET', '/v1/admin/voice_status')); }
+    $('saveEleven').onclick = async () => {
+        $('voiceError').textContent = '';
+        try {
+            showVoice(await api('POST', '/v1/admin/elevenlabs_key', { key: $('elevenKey').value.trim() }));
+            $('elevenKey').value = '';
+            $('voiceError').textContent = '저장했습니다';
+        } catch (e) { $('voiceError').textContent = e.message; }
+    };
     async function loadInsight() {
         const r = await api('GET', '/v1/admin/insight');
         const t = r.background_tokens_7d || [];

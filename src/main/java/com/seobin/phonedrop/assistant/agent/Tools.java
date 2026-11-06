@@ -55,6 +55,11 @@ public class Tools {
         public final Set<Long> touchedGoals = new LinkedHashSet<>();
         /** v3.2 P1.2: turn 끝에 보낼 '저장됨' 줄(마감·고정 일정 변경). */
         public final List<String> savedLines = new ArrayList<>();
+        /** v3.6 음성 turn: 세션과 이번 사용자 말(card_decide 검사). */
+        public Long voiceSessionId;
+        public Long userMessageId;
+        /** 음성으로 승인한 카드(저장됨 줄에 [되돌리기]). */
+        public Long voiceUndoCard;
 
         public Context(long turnId, String trigger, boolean bypassPermissions) {
             this.turnId = turnId;
@@ -96,6 +101,12 @@ public class Tools {
     private final com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore;
     private final Replans replans;
     private final TimeWindows timeWindows;
+    private org.springframework.beans.factory.ObjectProvider<ConfirmationService> confirmations;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setConfirmations(org.springframework.beans.factory.ObjectProvider<ConfirmationService> confirmations) {
+        this.confirmations = confirmations;
+    }
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
@@ -204,6 +215,7 @@ public class Tools {
                 case "read_document" -> readDocument(input);
                 case "adjust_travel" -> adjustTravel(ctx, input);
                 case "link_document" -> linkDocument(ctx, input);
+                case "card_decide" -> cardDecide(ctx, input);
                 default -> com.seobin.phonedrop.assistant.insight.InsightTools.NAMES.contains(name)
                         ? insightTools.dispatch(name, input, Permissions.fromUser(ctx.trigger))
                         : error("알 수 없는 도구입니다: " + name);
@@ -266,8 +278,13 @@ public class Tools {
                         VALUES (?, ?, ?, ?, ?, ?)""",
                 kind, tool, Json.write(args), text, expiresAt, now);
         InterruptPolicy.Decision decision = interrupts.proactive(ctx.trigger);
-        interrupts.send(decision, text, "confirmation", "normal", null, id);
-        if (decision.mode() == InterruptPolicy.Mode.SEND) {
+        long cardMessage = interrupts.send(decision, text, "confirmation", "normal", null, id);
+        if (ctx.voiceSessionId != null) {
+            // v3.6 §3.6: 음성 대화에서 띄운 카드(화면에 뜨고, 비서가 한 문장으로 읽는다)
+            db.update("UPDATE confirmations SET voice_session_id = ? WHERE id = ?", ctx.voiceSessionId, id);
+            db.update("UPDATE messages SET channel = 'voice', silent = TRUE WHERE id = ?", cardMessage);
+        }
+        if (decision.mode() == InterruptPolicy.Mode.SEND && ctx.voiceSessionId == null) {
             Map<String, String> data = new LinkedHashMap<>();
             data.put("type", "confirmation");
             data.put("confirmation_id", String.valueOf(id));
@@ -782,6 +799,57 @@ public class Tools {
         return r;
     }
 
+    /**
+     * v3.6 §3.6 음성 승인. voice turn 에서만. 검증(모두): 카드 pending · 이 음성 세션에서 띄운 카드 · 카드를 읽은 바로 다음
+     * 사용자 말의 turn · quote 가 그 말 안에 그대로 있다. 통과하면 기존 확인 카드 처리(수락/거절)를 그대로 쓴다.
+     */
+    private ObjectNode cardDecide(Context ctx, JsonNode in) {
+        if (!"voice".equals(ctx.trigger) || ctx.voiceSessionId == null || ctx.userMessageId == null) {
+            return error("card_decide 는 음성 대화에서만 쓸 수 있습니다");
+        }
+        long cardId = in.path("card_id").asLong(0);
+        String decision = in.path("decision").asString("");
+        String quote = in.path("quote").asString("").trim();
+        if (!List.of("approve", "reject").contains(decision)) {
+            return error("decision 은 approve·reject 중 하나입니다");
+        }
+        record Card(String status, Long session, Long readBy, String text) {
+        }
+        Card card = db.jdbc().sql("SELECT status, voice_session_id, voice_read_message_id, text FROM confirmations WHERE id = ?")
+                .param(cardId)
+                .query((rs, n) -> new Card(rs.getString(1), AssistantDb.nullableLong(rs, "voice_session_id"),
+                        AssistantDb.nullableLong(rs, "voice_read_message_id"), rs.getString(4)))
+                .optional().orElse(null);
+        if (card == null || !"pending".equals(card.status())) {
+            return error("대기 중인 확인 카드가 아닙니다");
+        }
+        if (!ctx.voiceSessionId.equals(card.session())) {
+            return error("이 음성 대화에서 띄운 카드가 아닙니다(화면에서 눌러 주세요)");
+        }
+        if (card.readBy() == null) {
+            return error("아직 카드를 소리로 읽지 않았습니다");
+        }
+        Long firstAfter = db.jdbc().sql("SELECT MIN(id) FROM messages WHERE role = 'user' AND id > ?")
+                .param(card.readBy()).query(Long.class).optional().orElse(null);
+        if (!ctx.userMessageId.equals(firstAfter)) {
+            return error("카드를 읽은 바로 다음 말에서만 정할 수 있습니다");
+        }
+        String said = db.jdbc().sql("SELECT content FROM messages WHERE id = ?").param(ctx.userMessageId)
+                .query(String.class).optional().orElse("");
+        if (quote.isEmpty() || !said.contains(quote)) {
+            return error("quote 가 사용자 말에 그대로 없습니다");
+        }
+        db.update("UPDATE confirmations SET voice_quote = ? WHERE id = ?", quote.length() > 500 ? quote.substring(0, 500) : quote, cardId);
+        Map<String, Object> resolved = confirmations.getObject().resolve(cardId, "approve".equals(decision));
+        ObjectNode r = Json.object();
+        r.put("ok", true);
+        r.put("status", String.valueOf(resolved.get("status")));
+        r.put("quote", quote);
+        ctx.savedLines.add(("approve".equals(decision) ? "음성으로 승인됨: " : "음성으로 거절됨: ") + card.text());
+        ctx.voiceUndoCard = "approve".equals(decision) ? cardId : null;
+        return r;
+    }
+
     private ObjectNode undoLast(Context ctx) {
         Changes.UndoResult u = changes.undoLast(ctx.turnId);
         ObjectNode r = Json.object();
@@ -1016,7 +1084,13 @@ public class Tools {
         Long interventionId = "reply".equals(kind) ? ctx.interventionId : null;
         // v3.6 §1.2: 시간대는 사용자만 바꾼다. 비서는 [설정 열기] 버튼만 붙일 수 있다.
         String action = "open_settings".equals(in.path("action").asString("")) ? "open_settings" : null;
+        if (ctx.voiceSessionId != null) {
+            silent = true; // 음성 탭이 소리로 말한다. 알림은 띄우지 않는다.
+        }
         long id = chat.sendAssistant(text, kind, importance, null, null, silent, interventionId, action);
+        if (ctx.voiceSessionId != null) {
+            db.update("UPDATE messages SET channel = 'voice' WHERE id = ?", id);
+        }
         if ("reply".equals(kind)) {
             ctx.sentReply = true;
         }
@@ -1065,6 +1139,9 @@ public class Tools {
         long questionId = chat.askUser(text, options,
                 d.mode() == InterruptPolicy.Mode.HOLD ? d.heldBlockId() : null,
                 d.mode() == InterruptPolicy.Mode.HOLD ? d.heldWindowId() : null);
+        if (ctx.voiceSessionId != null) {
+            db.update("UPDATE messages SET channel = 'voice', silent = TRUE WHERE question_id = ?", questionId);
+        }
         ctx.sentReply = true; // 질문도 사용자에게 한 답이다(텍스트를 다시 reply 로 보내지 않는다)
         ObjectNode r = Json.object();
         r.put("ok", true);

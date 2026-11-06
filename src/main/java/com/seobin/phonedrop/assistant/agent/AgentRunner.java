@@ -52,6 +52,8 @@ public class AgentRunner {
     private final ChatService chat;
     private final Jobs jobs;
     private final LlmClient llm;
+    /** v3.6 §3.5 음성 turn 에만 붙는 말투. */
+    private final String voicePrompt;
     private final ProactiveService proactive;
     private final GoalCoverage coverage;
     private final Store store;
@@ -91,6 +93,11 @@ public class AgentRunner {
         this.store = store;
         this.goalPrompts = goalPrompts;
         this.documents = documents;
+        try (InputStream in = new ClassPathResource("assistant/prompts/voice.md").getInputStream()) {
+            voicePrompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("voice.md 를 읽을 수 없습니다", e);
+        }
         try (InputStream in = new ClassPathResource("assistant/prompts/system.md").getInputStream()) {
             this.systemTemplate = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -165,7 +172,8 @@ public class AgentRunner {
         // 풀스크린 대화도 사용자가 직접 한 말이다(답이 있어야 하고, 한도 초과 안내도 한다).
         boolean fromUser = Permissions.fromUser(trigger);
         int hardLimit = settings.getInt("agent.daily_turn_hard");
-        if (tx.run(chat::turnsToday) >= hardLimit) {
+        // v3.6 §3.7: 음성 turn 은 voice.daily_turn_cap 으로 따로 센다(VoiceService 가 받기 전에 막는다).
+        if (!"voice".equals(trigger) && tx.run(chat::turnsToday) >= hardLimit) {
             tx.exec(() -> {
                 if (fromUser) {
                     chat.sendAssistant(OVER_LIMIT, "reply", "normal", null, null);
@@ -185,13 +193,18 @@ public class AgentRunner {
 
         String system = systemTemplate.replace("{persona}", settings.getString("persona"))
                 .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")))
-                .replace("{profile}", tx.run(memoryContext::systemSection));
+                .replace("{profile}", tx.run(memoryContext::systemSection))
+                + ("voice".equals(trigger) ? voicePrompt : "");
         String userContent = tx.run(() -> context.build(trigger, ref));
         // v3 §4.4: web.enabled=false 이거나 soft 상한을 넘으면 web_search 를 tools 에서 뺀다.
         boolean webSearch = settings.getBoolean("web.enabled") && !tx.run(proactive::overSoftLimit);
         Tools.Context ctx = new Tools.Context(turnId, trigger, false);
         if ("intervention_talk".equals(trigger) && ref.hasNonNull("intervention_id")) {
             ctx.interventionId = ref.get("intervention_id").asLong();
+        }
+        if ("voice".equals(trigger)) {
+            ctx.voiceSessionId = ref.path("session_id").asLong();
+            ctx.userMessageId = ref.path("message_id").asLong();
         }
         int maxCalls = settings.getInt("agent.max_tool_calls");
         int coverageRetries = settings.getInt("goal.coverage_retry");
@@ -201,7 +214,9 @@ public class AgentRunner {
         String status = "partial";
 
         try {
-            LlmClient.Conversation conv = llm.start(system, tools.definitions(), userContent, webSearch);
+            LlmClient.Conversation conv = "voice".equals(trigger) && llm instanceof ConfiguredLlm configured
+                    ? configured.start(system, tools.definitions(), userContent, webSearch, voiceModel(configured))
+                    : llm.start(system, tools.definitions(), userContent, webSearch);
             for (int i = 0; i < maxCalls; i++) {
                 if (i > 0) {
                     setStage(turnId, "thinking", STAGE_THINKING);
@@ -293,8 +308,12 @@ public class AgentRunner {
         // 텍스트로만 답하고 send_message 를 안 했으면 그 텍스트를 reply 로 보낸다.
         // 풀스크린 대화(구 [미루기 요청] 포함)도 사용자가 말한 것이라 답이 있어야 한다.
         boolean replyExpected = fromUser || "snooze_request".equals(trigger);
+        boolean voice = ctx.voiceSessionId != null;
         if (replyExpected && !ctx.sentReply && !text.isBlank()) {
-            chat.sendAssistant(text.trim(), "reply", "normal", null, null, false, ctx.interventionId);
+            long id = chat.sendAssistant(text.trim(), "reply", "normal", null, null, voice, ctx.interventionId);
+            if (voice) {
+                db.update("UPDATE messages SET channel = 'voice' WHERE id = ?", id);
+            }
         }
         // 되돌려 보내기를 다 써도 누락이면 turn 은 끝내고 30분 뒤 goal_needs_blocks (§3.4-1).
         // 마감 지남·시간 없음·할 일 모두 끝남은 누락이 아니다: 코드가 한 번만 묻는다(GoalPrompts).
@@ -320,10 +339,23 @@ public class AgentRunner {
         }
         // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
         if (fromUser && !ctx.savedLines.isEmpty()) {
-            chat.sendAssistant(String.join("\n", ctx.savedLines), "system", "normal", null, null, true,
-                    ctx.interventionId);
+            long id = chat.sendAssistant(String.join("\n", ctx.savedLines), "system", "normal", null, null, true,
+                    ctx.interventionId, ctx.voiceUndoCard != null ? "undo_card:" + ctx.voiceUndoCard : null);
+            if (voice) {
+                db.update("UPDATE messages SET channel = 'voice' WHERE id = ?", id);
+            }
         }
         endTurn(turnId, status, stats, null);
+    }
+
+    /** voice.model, 비면 Anthropic 이면 Haiku 계열, 다른 제공자면 지금 모델(그 게이트웨이에 Haiku 가 없을 수 있다). */
+    private String voiceModel(ConfiguredLlm configured) {
+        String m = settings.getString("voice.model");
+        if (m != null && !m.isBlank()) {
+            return m.strip();
+        }
+        return ConfiguredLlm.ANTHROPIC.equals(configured.provider())
+                ? com.seobin.phonedrop.assistant.insight.MemoryJobs.DEFAULT_MODEL : null;
     }
 
     /** 이 turn 에서 손댄 목표 중 누락 목표가 있으면 LLM 에게 돌려보낼 문장, 없으면 null. */

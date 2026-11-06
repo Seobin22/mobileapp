@@ -70,7 +70,7 @@ public class Permissions {
 
     /** 사용자가 직접 한 말로 시작된 turn(§3.6-2: 풀스크린 대화도 user_message 와 같은 권한). */
     public static boolean fromUser(String trigger) {
-        return "user_message".equals(trigger) || "intervention_talk".equals(trigger);
+        return "user_message".equals(trigger) || "intervention_talk".equals(trigger) || "voice".equals(trigger);
     }
 
     public Decision decide(String trigger, String tool, JsonNode args) {

@@ -98,6 +98,8 @@ object InterventionController {
         AppDatabase.dao(context).savePlan(snapshot)
         // v3.6 §2.5: 시간대를 로컬에도 저장해 서버와 끊겨도 막는다.
         WindowGuard.save(context, data["time_windows"], data["active_paused_until"])
+        data["active_auto_voice"]?.let { Prefs.get(context).activeAutoVoice = it == "true" }
+        data["voice_end_silence_ms"]?.toIntOrNull()?.let { Prefs.get(context).voiceEndSilenceMs = it }
         LocalScheduler.rescheduleAll(context)
     }
 

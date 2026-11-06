@@ -98,12 +98,25 @@ public class Changes {
      */
     public UndoResult undoLast(long currentTurnId) {
         Long target = db.jdbc().sql("""
-                        SELECT id FROM turns WHERE trigger = 'user_message' AND id < ? AND status <> 'queued'
+                        SELECT id FROM turns WHERE trigger IN ('user_message', 'voice') AND id < ? AND status <> 'queued'
                         ORDER BY id DESC LIMIT 1""")
                 .param(currentTurnId).query(Long.class).optional().orElse(null);
         if (target == null) {
             return new UndoResult(0, 0, false);
         }
+        return undoTurn(target);
+    }
+
+    /** v3.6 §3.6: 음성으로 승인한 카드를 실행한 system turn 의 변경을 되돌린다. */
+    public UndoResult undoConfirmation(long confirmationId) {
+        Long target = db.jdbc().sql("""
+                        SELECT id FROM turns WHERE trigger = 'system' AND trigger_ref = ? ORDER BY id DESC LIMIT 1""")
+                .param(Json.write(java.util.Map.of("confirmation_id", confirmationId)))
+                .query(Long.class).optional().orElse(null);
+        return target == null ? new UndoResult(0, 0, false) : undoTurn(target);
+    }
+
+    private UndoResult undoTurn(long target) {
         record Change(long id, String entity, long entityId, String before, String after) {
         }
         List<Change> list = db.jdbc().sql("""

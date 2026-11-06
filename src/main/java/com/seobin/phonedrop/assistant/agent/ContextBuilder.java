@@ -282,13 +282,15 @@ public class ContextBuilder {
         int n = settings.getInt("agent.context_messages");
         sb.append("# 최근 대화 (최근 ").append(n).append("개)\n");
         List<String> recent = db.jdbc().sql("""
-                        SELECT * FROM (SELECT id, role, kind, content, created_at FROM messages WHERE held_block_id IS NULL AND held_window_id IS NULL
+                        SELECT * FROM (SELECT id, role, kind, content, created_at, channel, interrupted, confirmation_id FROM messages WHERE held_block_id IS NULL AND held_window_id IS NULL
                         ORDER BY id DESC LIMIT ?)
                         ORDER BY id""")
                 .param(n)
                 .query((rs, i) -> "[" + mdHm(AssistantDb.instant(rs, "created_at")) + " "
                         + ("user".equals(rs.getString("role")) ? "사용자" : "비서")
-                        + ("confirmation".equals(rs.getString("kind")) ? " 확인카드" : "")
+                        + ("confirmation".equals(rs.getString("kind")) ? " 확인카드#" + rs.getLong("confirmation_id") : "")
+                        + ("voice".equals(rs.getString("channel")) ? " 음성" : "")
+                        + (rs.getBoolean("interrupted") ? " 끊김" : "")
                         + ("question".equals(rs.getString("kind")) ? " 질문" : "")
                         + "] " + rs.getString("content")).list();
         sb.append(recent.isEmpty() ? "없음" : String.join("\n", recent)).append('\n');
@@ -335,6 +337,11 @@ public class ContextBuilder {
                 String text = db.jdbc().sql("SELECT content FROM messages WHERE id = ?")
                         .param(ref.path("message_id").asLong()).query(String.class).optional().orElse("");
                 yield "user_message: \"" + text + "\"";
+            }
+            case "voice" -> {
+                String text = db.jdbc().sql("SELECT content FROM messages WHERE id = ?")
+                        .param(ref.path("message_id").asLong()).query(String.class).optional().orElse("");
+                yield "voice: 음성 대화에서 사용자가 말함(받아쓴 글이라 오타가 있을 수 있다) \"" + text + "\"";
             }
             case "confirmation_resolved" -> {
                 long id = ref.path("confirmation_id").asLong();

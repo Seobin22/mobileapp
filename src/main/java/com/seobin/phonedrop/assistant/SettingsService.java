@@ -95,6 +95,7 @@ public class SettingsService {
         // v3.6 음성 탭. voice.model 이 비면 Haiku 계열
         d.put("voice.model", "\"\"");
         d.put("voice.stt_mode", "\"batch\"");
+        d.put("voice.stt_model", "\"scribe_v2\"");
         d.put("voice.voice_id", "\"\"");
         d.put("voice.speed", "1.0");
         d.put("voice.end_silence_ms", "800");
@@ -249,7 +250,7 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "llm.model", "documents.model", "memory.model", "voice.model" -> {
+                case "llm.model", "documents.model", "memory.model", "voice.model", "voice.stt_model" -> {
                     if (!value.isString() || !value.asString().matches("[A-Za-z0-9._:/@-]{0,100}")) {
                         throw new IllegalArgumentException();
                     }

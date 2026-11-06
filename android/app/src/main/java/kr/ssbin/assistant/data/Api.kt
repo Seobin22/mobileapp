@@ -84,6 +84,16 @@ interface AssistantApi {
     @POST("v1/time-windows/pause")
     suspend fun pauseActiveWindow(): JsonObject
 
+    // v3.6 음성 탭(주고받기 흐름은 VoiceEngine 이 OkHttp 로 직접)
+    @GET("v1/voice/voices")
+    suspend fun voices(): VoicesResponse
+
+    @POST("v1/voice/undo/{id}")
+    suspend fun undoVoiceCard(@Path("id") id: Long): JsonObject
+
+    @GET("v1/voice/messages/{id}/audio")
+    suspend fun messageAudio(@Path("id") id: Long): okhttp3.ResponseBody
+
     // v3.5 기록·기억
     @POST("v1/outcome-cards/{id}")
     suspend fun submitCard(@Path("id") id: Long, @Body body: JsonObject): JsonObject

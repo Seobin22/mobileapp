@@ -49,6 +49,9 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_CHAT = "open_chat"
         /** v3.6 적극 개입 알람을 눌러 열었다(반응). */
         const val EXTRA_ACTIVE_ACK = "active_ack"
+        /** 음성 대화 알림을 눌러 열었다 → 음성 탭. */
+        const val EXTRA_OPEN_VOICE = "open_voice"
+        val openVoice = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
 
         /** 채팅의 [설정 열기] 버튼(v3.6 §1.2) → 설정 화면. */
         val openSettings = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -65,6 +68,7 @@ class MainActivity : ComponentActivity() {
         val prefs = Prefs.get(this)
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
         if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
+        if (intent.getBooleanExtra(EXTRA_OPEN_VOICE, false)) openVoice.tryEmit(Unit)
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -102,6 +106,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
         if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
+        if (intent.getBooleanExtra(EXTRA_OPEN_VOICE, false)) openVoice.tryEmit(Unit)
     }
 
     override fun onResume() {
@@ -133,6 +138,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     var localTick by remember { mutableIntStateOf(0) }
     val allGranted = remember(tick) { Capabilities.allGranted(context) }
     LaunchedEffect(openChat) { if (openChat > 0) tab = 0 }
+    LaunchedEffect(Unit) { MainActivity.openVoice.collect { tab = 4; MainActivity.openVoice.resetReplayCache() } }
     // 앱 안 업데이트: 화면에 돌아올 때마다 서버의 최신 버전을 확인한다.
     var update by remember { mutableStateOf<kr.ssbin.assistant.data.AppLatestDto?>(null) }
     var updateStatus by remember { mutableStateOf<String?>(null) }
@@ -143,7 +149,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; 2 -> "목표"; else -> "장소" }) },
+                title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; 2 -> "목표"; 4 -> "음성"; else -> "장소" }) },
                 actions = {
                     TextButton(onClick = { navigate(Screen.AboutMe) }) { Text("나") }
                     TextButton(onClick = { navigate(Screen.Permissions) }) { Text("권한") }
@@ -156,6 +162,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("💬") }, label = { Text("채팅") })
                 NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("📅") }, label = { Text("달력") })
                 NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🎯") }, label = { Text("목표") })
+                NavigationBarItem(selected = tab == 4, onClick = { tab = 4 }, icon = { Text("🎤") }, label = { Text("음성") })
                 NavigationBarItem(selected = tab == 3, onClick = { tab = 3 }, icon = { Text("📍") }, label = { Text("장소") })
             }
         },
@@ -202,6 +209,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
                 0 -> ChatScreen(tick = tick + localTick)
                 1 -> CalendarScreen(tick = tick + localTick)
                 2 -> GoalsScreen(tick = tick + localTick)
+                4 -> VoiceScreen()
                 else -> PlacesScreen(tick = tick + localTick)
             }
         }

@@ -48,6 +48,12 @@ abstract class AssistantTestBase {
         FakeMapApi fakeMapApi() {
             return new FakeMapApi();
         }
+
+        @Bean
+        @Primary
+        FakeSpeech fakeSpeech() {
+            return new FakeSpeech();
+        }
     }
 
     @Autowired
@@ -80,6 +86,8 @@ abstract class AssistantTestBase {
 
     @Autowired
     FakeMapApi mapApi;
+    @Autowired
+    FakeSpeech speech;
 
     FakePush push;
 
@@ -105,6 +113,7 @@ abstract class AssistantTestBase {
         db.update("UPDATE memory_profile SET content = '', updated_by = NULL");
         llm.reset();
         mapApi.reset();
+        speech.reset();
         db.update("UPDATE plan_state SET plan_version = 0");
         settings.seedDefaults();
         // v4: 예전(v1~v3.6) 테스트는 L3 하나만 쓰는 개입 경로를 그대로 검증한다. 단계 올리기는 V4FlowTest 가 [1,3,4] 로 켠다.

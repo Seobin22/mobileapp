@@ -65,6 +65,20 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = (prefs.getString("guard_log", "") ?: "").split('\n').filter { it.isNotBlank() }
         set(value) = prefs.edit().putString("guard_log", value.joinToString("\n")).apply()
 
+    // v3.6 음성 탭
+    var voiceHeadsetHintShown: Boolean
+        get() = prefs.getBoolean("voice_headset_hint", false)
+        set(value) = prefs.edit().putBoolean("voice_headset_hint", value).apply()
+
+    var voiceEndSilenceMs: Int
+        get() = prefs.getInt("voice_end_silence_ms", 800)
+        set(value) = prefs.edit().putInt("voice_end_silence_ms", value).apply()
+
+    /** §5 적극 개입 시간대에 개입 화면이 뜨면 음성 대화 자동 시작(사용자가 설정에서 켬). */
+    var activeAutoVoice: Boolean
+        get() = prefs.getBoolean("active_auto_voice", false)
+        set(value) = prefs.edit().putBoolean("active_auto_voice", value).apply()
+
     // v4 §3.2 L4 잠금 상태
     var lockActive: Boolean
         get() = prefs.getBoolean("lock_active", false)

@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- v3.6 §4.2 음성 대화(마이크 포그라운드 서비스) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- v2 음성 입력 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 앱 안 업데이트: 서버에서 받은 새 APK 설치 화면 띄우기 -->
@@ -97,6 +99,12 @@
         <receiver
             android:name=".intervention.ActiveAlarmReceiver"
             android:exported="false" />
+
+        <!-- v3.6 §4 음성 대화 -->
+        <service
+            android:name=".voice.VoiceForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- v4 §3: L4 딴짓 앱 잠금 -->
         <service

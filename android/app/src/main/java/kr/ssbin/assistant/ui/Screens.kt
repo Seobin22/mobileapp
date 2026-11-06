@@ -311,6 +311,7 @@ fun SettingsScreen(onBack: () -> Unit, onReconfigure: () -> Unit) {
                 }
             }) { Text("저장") }
             TimeWindowsSection()
+            VoiceSettingsSection()
             TravelSection()
             AiModelSection()
             Spacer(Modifier.width(1.dp))

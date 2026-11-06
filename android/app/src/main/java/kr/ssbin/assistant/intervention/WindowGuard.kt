@@ -111,8 +111,40 @@ object Speaker {
     private var tts: TextToSpeech? = null
     private var pending: String? = null
 
-    fun speak(context: Context, text: String) {
-        if (text.isBlank() || !WindowGuard.canSpeak(context)) return
+    /**
+     * v3.6 §5: 비서 목소리(ElevenLabs, 서버를 거침)를 먼저 쓰고, 안 되면 기기 음성. 음성 대화 중이면 읽지 않는다(그쪽이 말한다).
+     */
+    fun speak(context: Context, text: String, messageId: Long? = null) {
+        if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active) return
+        val app = context.applicationContext
+        if (messageId != null) {
+            Thread {
+                val ok = runCatching {
+                    val bytes = kotlinx.coroutines.runBlocking { ApiClient.get(app).messageAudio(messageId).bytes() }
+                    val f = java.io.File.createTempFile("say", ".mp3", app.cacheDir)
+                    f.writeBytes(bytes)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        if (!WindowGuard.canSpeak(app)) { f.delete(); return@post }
+                        val p = android.media.MediaPlayer()
+                        runCatching {
+                            p.setAudioAttributes(android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT).build())
+                            p.setDataSource(f.path)
+                            p.setOnCompletionListener { it.release(); f.delete() }
+                            p.prepare()
+                            p.start()
+                        }.onFailure { p.release(); f.delete() }
+                    }
+                }.isSuccess
+                if (!ok) deviceSpeak(app, text)
+            }.start()
+            return
+        }
+        deviceSpeak(app, text)
+    }
+
+    private fun deviceSpeak(context: Context, text: String) {
+        if (!WindowGuard.canSpeak(context)) return
         val engine = tts
         if (engine != null) {
             engine.speak(text, TextToSpeech.QUEUE_ADD, null, "proactive-${System.currentTimeMillis()}")

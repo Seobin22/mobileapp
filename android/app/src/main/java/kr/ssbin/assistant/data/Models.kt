@@ -166,6 +166,12 @@ data class TimeWindowsResponse(
 @Serializable
 data class TimeWindowsRequest(val windows: List<TimeWindowDto>)
 
+@Serializable
+data class VoiceDto(val id: String, val name: String, val preview_url: String = "")
+
+@Serializable
+data class VoicesResponse(val voices: List<VoiceDto> = emptyList())
+
 // ------------------------------------------------------------------ v3 작업물
 
 @Serializable

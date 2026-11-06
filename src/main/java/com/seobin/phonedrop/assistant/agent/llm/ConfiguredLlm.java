@@ -190,4 +190,15 @@ public class ConfiguredLlm implements LlmClient {
     public Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch) {
         return client().start(system, toolDefinitions, userContent, webSearch);
     }
+
+    /** v3.6 §3.2 음성 turn: 같은 제공자·키로 다른 모델(voice.model). */
+    public Conversation start(String system, JsonNode toolDefinitions, String userContent, boolean webSearch,
+                              String modelOverride) {
+        if (modelOverride == null || modelOverride.isBlank()) {
+            return start(system, toolDefinitions, userContent, webSearch);
+        }
+        client(); // 설정·키 확인
+        return create(provider(), modelOverride.trim(), currentKey(provider()))
+                .start(system, toolDefinitions, userContent, webSearch);
+    }
 }
