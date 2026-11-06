@@ -156,7 +156,9 @@ public class ChatService {
         if (dnd) {
             silent = true;
         }
-        boolean speak = !silent && !dnd && interventionId == null && !"reply".equals(kind) && tw != null
+        // 2026-11-07(사용자 요청): 적극 개입 시간대에는 먼저 거는 말만이 아니라 알림·확인·답까지 사람처럼 소리로 말한다
+        // ('저장됨' 줄(system)·음성 탭·풀스크린 대화 답은 빼고). 무음·진동이면 앱이 말하지 않는다(§2.4 그대로).
+        boolean speak = !silent && !dnd && interventionId == null && !"system".equals(kind) && tw != null
                 && store.getIfAvailable() != null && tw.activeEffective(now, store.getObject());
         long id = db.insert("""
                         INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id,

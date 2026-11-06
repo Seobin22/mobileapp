@@ -338,7 +338,9 @@ public class ContextBuilder {
         if (timeWindows.dndAt(now).isPresent()) {
             sb.append("지금: 방해금지 시간대 — 먼저 보내는 말은 끝날 때 묶어서 간다. 계획 블록을 이 시간에 두지 않는다.\n");
         } else if (timeWindows.activeAt(now).isPresent()) {
-            sb.append("지금: 적극 개입 시간대 — 먼저 말 걸어도 된다(메시지 예산 없음, 말은 짧게, 소리로 읽힐 수 있음).\n");
+            sb.append("지금: 적극 개입 시간대 — 보내는 말은 모두 소리로 읽힌다. 사람 비서처럼 지금 필요한 것(곧 시작할 일정·준비·출발·마감·")
+                    .append("바뀐 계획 등)을 그때그때 짧게 말해도 된다(메시지 예산 없음). 단 지금 맥락에 맞는 말만: 이미 지난 일·지금 못 하는 일·")
+                    .append("방금 한 말은 말하지 않는다. 글 목록·기호 없이 말하듯 1~2문장.\n");
         } else if (timeWindows.paused(now)) {
             sb.append("지금: 적극 개입 시간대지만 사용자가 [10분만 조용히]를 눌러 ")
                     .append(timeWindows.pausedUntil().map(time::hm).orElse("")).append("까지 기본 동작.\n");
