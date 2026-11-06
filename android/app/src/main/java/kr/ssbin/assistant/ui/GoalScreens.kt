@@ -209,7 +209,8 @@ fun PlannedBlockDialog(item: TimelineItem, onDismiss: () -> Unit, onSent: () -> 
     var error by remember { mutableStateOf<String?>(null) }
     var watchOpen by remember { mutableStateOf(false) }
     val title = item.title.orEmpty()
-    if (watchOpen) BlockWatchDialog(item.id) { watchOpen = false }
+    val itemId = item.id
+    if (watchOpen && itemId != null) BlockWatchDialog(itemId) { watchOpen = false }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
