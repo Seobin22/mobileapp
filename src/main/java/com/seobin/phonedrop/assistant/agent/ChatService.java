@@ -38,9 +38,18 @@ public class ChatService {
     private final PushService push;
     private final TimeUtil time;
     private final InterventionService interventions;
+    private final org.springframework.beans.factory.ObjectProvider<TimeWindows> windows;
+    private final org.springframework.beans.factory.ObjectProvider<TimeWindowRunner> windowRunner;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.Store> store;
 
     public ChatService(AssistantDb db, AssistantClock clock, TurnQueue turns, PushService push, TimeUtil time,
-                       InterventionService interventions) {
+                       InterventionService interventions,
+                       org.springframework.beans.factory.ObjectProvider<TimeWindows> windows,
+                       org.springframework.beans.factory.ObjectProvider<TimeWindowRunner> windowRunner,
+                       org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.Store> store) {
+        this.windows = windows;
+        this.windowRunner = windowRunner;
+        this.store = store;
         this.db = db;
         this.clock = clock;
         this.turns = turns;
@@ -99,6 +108,11 @@ public class ChatService {
             db.update("UPDATE questions SET status = 'answered', answered_at = ? WHERE id = ? AND status = 'open'",
                     clock.now(), questionId);
         }
+        // v3.6 §2.3: 사용자가 말을 걸면 적극 개입 시간대 알람에 반응한 것으로 본다.
+        TimeWindowRunner runner = windowRunner.getIfAvailable();
+        if (runner != null) {
+            runner.ack(false);
+        }
         ObjectNode ref = Json.object();
         ref.put("message_id", messageId);
         // v3.1 §3.6-4: 풀스크린 대화 중이면 대화 시간을 연장한다.
@@ -126,10 +140,28 @@ public class ChatService {
     /** interventionId: 풀스크린 대화의 답(v3.1 §3.6-3). 앱이 그 화면에 표시하고 TTS 로 읽는다. */
     public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
                               boolean silent, Long interventionId) {
+        return sendAssistant(text, kind, importance, questionId, confirmationId, silent, interventionId, null);
+    }
+
+    /**
+     * action: 답장에 붙는 버튼(v3.6 §1.2 open_settings).
+     * v3.6 §2.2: 방해 금지 시간대에는 사용자에게 한 답까지 모두 소리 없이 보낸다. 적극 개입 시간대에 비서가 먼저 보내는 말은
+     * speak=true 로 보내 앱이 §2.4 조건(무음 아님·통화 아님)을 다시 확인한 뒤 소리로 읽는다.
+     */
+    public long sendAssistant(String text, String kind, String importance, Long questionId, Long confirmationId,
+                              boolean silent, Long interventionId, String action) {
+        TimeWindows tw = windows.getIfAvailable();
+        Instant now = clock.now();
+        boolean dnd = tw != null && tw.dndAt(now).isPresent();
+        if (dnd) {
+            silent = true;
+        }
+        boolean speak = !silent && !dnd && interventionId == null && !"reply".equals(kind) && tw != null
+                && store.getIfAvailable() != null && tw.activeEffective(now, store.getObject());
         long id = db.insert("""
                         INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id,
-                        intervention_id, created_at) VALUES ('assistant', ?, ?, ?, ?, ?, ?, ?, ?)""",
-                text, kind, importance, silent, questionId, confirmationId, interventionId, clock.now());
+                        intervention_id, action, created_at) VALUES ('assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                text, kind, importance, silent, questionId, confirmationId, interventionId, action, now);
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "chat.message");
         data.put("message_id", String.valueOf(id));
@@ -140,6 +172,10 @@ public class ChatService {
             data.put("text", text.length() > 1000 ? text.substring(0, 1000) : text);
         }
         data.put("preview", text.length() > 60 ? text.substring(0, 60) : text);
+        if (speak) {
+            data.put("speak", "true");
+            data.put("text", text.length() > 1000 ? text.substring(0, 1000) : text);
+        }
         push.pushAll(data);
         return id;
     }
@@ -156,17 +192,33 @@ public class ChatService {
                 text, kind, importance, questionId, confirmationId, heldBlockId, clock.now());
     }
 
+    /** v3.6: 방해 금지 시간대에 모아 둔다(채팅에도 안 보인다). 끝나면 TimeWindowRunner 가 묶음으로 보낸다. */
+    public long holdAssistantWindow(String text, String kind, String importance, Long questionId, Long confirmationId,
+                                    long heldWindowId) {
+        return db.insert("""
+                        INSERT INTO messages(role, content, kind, importance, silent, question_id, confirmation_id,
+                        held_window_id, created_at) VALUES ('assistant', ?, ?, ?, TRUE, ?, ?, ?, ?)""",
+                text, kind, importance, questionId, confirmationId, heldWindowId, clock.now());
+    }
+
     public long askUser(String text, List<String> options) {
         return askUser(text, options, null);
     }
 
     /** heldBlockId 가 있으면 방해 금지 일정이 끝날 때까지 모아 둔다. */
     public long askUser(String text, List<String> options, Long heldBlockId) {
+        return askUser(text, options, heldBlockId, null);
+    }
+
+    /** heldWindowId(v3.6): 방해 금지 시간대가 끝날 때까지 모아 둔다. */
+    public long askUser(String text, List<String> options, Long heldBlockId, Long heldWindowId) {
         ArrayNode opts = Json.array();
         options.forEach(opts::add);
         long questionId = db.insert("INSERT INTO questions(text, options, asked_at) VALUES (?, ?, ?)",
                 text, options.isEmpty() ? null : Json.write(opts), clock.now());
-        if (heldBlockId != null) {
+        if (heldWindowId != null) {
+            holdAssistantWindow(text, "question", "normal", questionId, null, heldWindowId);
+        } else if (heldBlockId != null) {
             holdAssistant(text, "question", "normal", questionId, null, heldBlockId);
         } else {
             sendAssistant(text, "question", "normal", questionId, null);
@@ -176,8 +228,8 @@ public class ChatService {
 
     public Map<String, Object> list(long afterId) {
         String sql = afterId > 0
-                ? "SELECT * FROM (SELECT * FROM messages WHERE id > ? AND held_block_id IS NULL ORDER BY id LIMIT 200) ORDER BY id"
-                : "SELECT * FROM (SELECT * FROM messages WHERE held_block_id IS NULL ORDER BY id DESC LIMIT 100) ORDER BY id";
+                ? "SELECT * FROM (SELECT * FROM messages WHERE id > ? AND held_block_id IS NULL AND held_window_id IS NULL ORDER BY id LIMIT 200) ORDER BY id"
+                : "SELECT * FROM (SELECT * FROM messages WHERE held_block_id IS NULL AND held_window_id IS NULL ORDER BY id DESC LIMIT 100) ORDER BY id";
         var spec = db.jdbc().sql(sql);
         if (afterId > 0) {
             spec = spec.param(afterId);
@@ -216,6 +268,12 @@ public class ChatService {
             Long card = AssistantDb.nullableLong(rs, "card_id");
             if (card != null) {
                 m.put("card_id", card);
+            }
+            if (rs.getString("action") != null) {
+                m.put("action", rs.getString("action"));
+            }
+            if (!"chat".equals(rs.getString("channel"))) {
+                m.put("channel", rs.getString("channel"));
             }
             m.put("read", rs.getObject("read_at") != null);
             m.put("created_at", time.iso(AssistantDb.instant(rs, "created_at")));
@@ -265,7 +323,7 @@ public class ChatService {
         return db.jdbc().sql("""
                         SELECT COUNT(*), COALESCE(SUM(CASE WHEN importance = 'high' AND silent = FALSE THEN 1 ELSE 0 END), 0)
                         FROM messages WHERE role = 'assistant' AND kind IN ('proactive', 'briefing', 'checkin')
-                        AND held_block_id IS NULL AND created_at >= ?""")
+                        AND held_block_id IS NULL AND held_window_id IS NULL AND created_at >= ?""")
                 .param(AssistantDb.ts(dayStart))
                 .query((rs, n) -> new int[]{rs.getInt(1), rs.getInt(2)}).single();
     }

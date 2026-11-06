@@ -50,6 +50,21 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getString("first_unlock_day", null)
         set(value) = prefs.edit().putString("first_unlock_day", value).apply()
 
+    /** v3.6 plan.sync 의 time_windows(앞으로 24시간, JSON). 서버와 끊겨도 이 값으로 막는다. */
+    var timeWindows: String
+        get() = prefs.getString("time_windows", "[]") ?: "[]"
+        set(value) = prefs.edit().putString("time_windows", value).apply()
+
+    /** v3.6 [10분만 조용히] 끝 시각(ISO). 비면 멈춤 아님. */
+    var activePausedUntil: String
+        get() = prefs.getString("active_paused_until", "") ?: ""
+        set(value) = prefs.edit().putString("active_paused_until", value).apply()
+
+    /** v3.6 §2.5 방해 금지라 막은 일(종류·시각만, 최근 것이 앞). */
+    var guardLog: List<String>
+        get() = (prefs.getString("guard_log", "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("guard_log", value.joinToString("\n")).apply()
+
     val configured: Boolean get() = apiToken.isNotBlank() && serverUrl.isNotBlank()
 
     companion object {

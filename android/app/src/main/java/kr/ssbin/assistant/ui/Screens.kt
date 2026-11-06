@@ -276,7 +276,7 @@ fun SettingsScreen(onBack: () -> Unit, onReconfigure: () -> Unit) {
             OutlinedTextField(sleep, { sleep = it }, label = { Text("취침 (HH:MM, 자정 넘김 가능)") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 dnd, { dnd = it },
-                label = { Text("방해 금지 (한 줄에 하나: 요일 시작-끝)") },
+                label = { Text("조용한 시간 (무음만, 한 줄에 하나: 요일 시작-끝)") },
                 placeholder = { Text("1,2,3,4,5 13:00-14:00") },
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth(),
@@ -302,6 +302,7 @@ fun SettingsScreen(onBack: () -> Unit, onReconfigure: () -> Unit) {
                     message = r.fold({ "저장했습니다" }, { ApiClient.errorMessage(it) })
                 }
             }) { Text("저장") }
+            TimeWindowsSection()
             TravelSection()
             AiModelSection()
             Spacer(Modifier.width(1.dp))

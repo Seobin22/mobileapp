@@ -601,8 +601,20 @@ public class FixedBlockService {
         store.block(r.id()).ifPresent(b -> {
             m.put("interrupt_level", b.interruptLevel());
             m.put("place_name", b.placeName());
+            // v3.6 §1.3: 방해 금지 시간대와 겹치면 저장은 하되 앱이 알린다(사용자 판단).
+            TimeWindows tw = timeWindows == null ? null : timeWindows.getIfAvailable();
+            if (tw != null && tw.occurrences(b.blockedStart(), b.end()).stream().anyMatch(TimeWindows.Occ::dnd)) {
+                m.put("dnd_warning", "방해 금지 시간이라 이 일정 알람이 안 울려요");
+            }
         });
         return m;
+    }
+
+    private org.springframework.beans.factory.ObjectProvider<TimeWindows> timeWindows;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setTimeWindows(org.springframework.beans.factory.ObjectProvider<TimeWindows> timeWindows) {
+        this.timeWindows = timeWindows;
     }
 
     private void record(Long turnId, long blockId, JsonNode before) {

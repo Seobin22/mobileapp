@@ -24,6 +24,8 @@ class AssistantMessagingService : FirebaseMessagingService() {
             "plan.sync" -> InterventionController.onPlanSync(applicationContext, data)
             "chat.message" -> Chat.onChatPush(applicationContext, data)
             "confirmation" -> Chat.onConfirmationPush(applicationContext, data)
+            "active.alarm" -> kr.ssbin.assistant.intervention.ActiveAlarm.show(applicationContext, data)
+            "active.alarm_end" -> kr.ssbin.assistant.intervention.ActiveAlarm.cancel(applicationContext)
         }
     }
 }

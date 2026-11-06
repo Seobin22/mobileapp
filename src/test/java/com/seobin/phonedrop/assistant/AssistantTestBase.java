@@ -97,7 +97,8 @@ abstract class AssistantTestBase {
                 "work_products", "wakeups", "daily_flags", "tasks",
                 "goals", "events", "notes", "data_migrations",
                 "device_events", "devices", "processed_actions", "settings", "block_facts", "day_facts", "cards",
-                "pattern_stats", "memory_items", "memory_ops_log", "memory_checks", "memory_state"}) {
+                "pattern_stats", "memory_items", "memory_ops_log", "memory_checks", "memory_state",
+                "time_windows", "time_window_runs", "voice_sessions"}) {
             db.update("DELETE FROM " + table);
         }
         db.update("UPDATE memory SET content = '' WHERE id = 1");

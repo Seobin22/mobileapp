@@ -409,7 +409,7 @@ public class MemoryJobs {
             Instant notesSince = since == null ? clock.now().minus(Duration.ofDays(1)) : Instant.parse(since);
             StringBuilder sb = new StringBuilder();
             List<String[]> msgs = db.jdbc().sql("""
-                            SELECT id, role, content FROM messages WHERE id > ? AND no_memory = FALSE AND held_block_id IS NULL
+                            SELECT id, role, content FROM messages WHERE id > ? AND no_memory = FALSE AND held_block_id IS NULL AND held_window_id IS NULL
                             AND kind NOT IN ('outcome_card', 'day_card') ORDER BY id LIMIT 80""")
                     .param(fromMsg)
                     .query((rs, n) -> new String[]{String.valueOf(rs.getLong(1)), rs.getString(2), rs.getString(3)}).list();

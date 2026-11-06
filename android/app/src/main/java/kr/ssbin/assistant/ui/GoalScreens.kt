@@ -188,7 +188,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                     val api = ApiClient.get(context)
                     val r = withContext(Dispatchers.IO) {
                         runCatching {
-                            if (initial?.id == null) api.createFixedBlock(body) else api.patchFixedBlock(initial.id, body)
+                            warnDnd(context, if (initial?.id == null) api.createFixedBlock(body) else api.patchFixedBlock(initial.id, body))
                         }
                     }
                     // 고정 블록끼리 겹치면 서버 사유("○○와 겹쳐요…")를 그대로 보여준다.

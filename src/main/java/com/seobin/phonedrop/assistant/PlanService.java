@@ -23,6 +23,12 @@ public class PlanService {
     private final SettingsService settings;
     private final PushService push;
     private final com.seobin.phonedrop.assistant.insight.BlockFacts facts;
+    private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setWindows(org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows) {
+        this.windows = windows;
+    }
 
     public PlanService(AssistantDb db, AssistantClock clock, TimeUtil time, Store store,
                        SettingsService settings, PushService push,
@@ -88,8 +94,25 @@ public class PlanService {
             }
         }
 
+        // v3.6 §2.5: 앱이 소리·진동·TTS·화면 넘김 직전에 다시 확인하도록 시간대(앞으로 24시간)를 보낸다.
+        ArrayNode windowList = Json.array();
+        String pausedUntil = "";
+        com.seobin.phonedrop.assistant.agent.TimeWindows tw = windows == null ? null : windows.getIfAvailable();
+        if (tw != null) {
+            for (com.seobin.phonedrop.assistant.agent.TimeWindows.Occ o : tw.occurrences(now, until)) {
+                ObjectNode w = windowList.addObject();
+                w.put("kind", o.kind());
+                w.put("name", o.name());
+                w.put("from", time.iso(o.start()));
+                w.put("to", time.iso(o.end()));
+            }
+            pausedUntil = tw.pausedUntil().filter(now::isBefore).map(time::iso).orElse("");
+        }
+
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", "plan.sync");
+        data.put("time_windows", Json.write(windowList));
+        data.put("active_paused_until", pausedUntil);
         data.put("plan_version", String.valueOf(version()));
         data.put("quiet_windows", Json.write(quiet));
         data.put("upcoming", Json.write(upcoming));

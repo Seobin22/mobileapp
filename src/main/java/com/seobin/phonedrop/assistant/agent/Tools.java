@@ -95,6 +95,7 @@ public class Tools {
     private final com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts;
     private final com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore;
     private final Replans replans;
+    private final TimeWindows timeWindows;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
@@ -105,7 +106,9 @@ public class Tools {
                  DocumentService documents, com.seobin.phonedrop.assistant.insight.InsightTools insightTools,
                  com.seobin.phonedrop.assistant.insight.Categories categories,
                  com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts,
-                 com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore, Replans replans) {
+                 com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore, Replans replans,
+                 TimeWindows timeWindows) {
+        this.timeWindows = timeWindows;
         this.replans = replans;
         this.insightTools = insightTools;
         this.categories = categories;
@@ -993,21 +996,27 @@ public class Tools {
         InterruptPolicy.Decision d = answer ? new InterruptPolicy.Decision(InterruptPolicy.Mode.SEND, null)
                 : interrupts.proactive(ctx.trigger);
         if (d.mode() == InterruptPolicy.Mode.HOLD) {
-            long id = chat.holdAssistant(text, kind, importance, null, null, d.heldBlockId());
+            long id = interrupts.send(d, text, kind, importance, null, null);
             if ("reply".equals(kind)) {
                 ctx.sentReply = true;
             }
             ObjectNode r = Json.object();
             r.put("ok", true);
             r.put("message_id", id);
-            r.put("held_until_fixed_block_ends", d.heldBlockId());
+            if (d.heldWindowId() != null) {
+                r.put("held_until_dnd_window_ends", d.heldWindowId());
+            } else {
+                r.put("held_until_fixed_block_ends", d.heldBlockId());
+            }
             r.put("note", "방해 금지 일정 중이라 일정이 끝나면 묶어서 보냅니다");
             return r;
         }
         boolean silent = d.silent() || silentFor(kind, importance);
         // 풀스크린 대화의 답은 그 개입에 붙인다(앱이 화면에 표시하고 TTS 로 읽는다).
         Long interventionId = "reply".equals(kind) ? ctx.interventionId : null;
-        long id = chat.sendAssistant(text, kind, importance, null, null, silent, interventionId);
+        // v3.6 §1.2: 시간대는 사용자만 바꾼다. 비서는 [설정 열기] 버튼만 붙일 수 있다.
+        String action = "open_settings".equals(in.path("action").asString("")) ? "open_settings" : null;
+        long id = chat.sendAssistant(text, kind, importance, null, null, silent, interventionId, action);
         if ("reply".equals(kind)) {
             ctx.sentReply = true;
         }
@@ -1030,6 +1039,10 @@ public class Tools {
         if (!"checkin".equals(kind) && !store.startedBlocks().isEmpty()) {
             return true;
         }
+        // v3.6 §2.2: 적극 개입 시간대에는 메시지 예산을 보지 않는다(LLM 간격 제한은 TimeWindowRunner).
+        if (timeWindows.activeEffective(now, store)) {
+            return false;
+        }
         int[] today = chat.proactiveToday();
         if (today[0] >= settings.getInt("messages.daily_budget")) {
             return !("high".equals(importance) && today[1] < settings.getInt("messages.high_per_day"));
@@ -1050,7 +1063,8 @@ public class Tools {
         }
         InterruptPolicy.Decision d = interrupts.proactive(ctx.trigger);
         long questionId = chat.askUser(text, options,
-                d.mode() == InterruptPolicy.Mode.HOLD ? d.heldBlockId() : null);
+                d.mode() == InterruptPolicy.Mode.HOLD ? d.heldBlockId() : null,
+                d.mode() == InterruptPolicy.Mode.HOLD ? d.heldWindowId() : null);
         ctx.sentReply = true; // 질문도 사용자에게 한 답이다(텍스트를 다시 reply 로 보내지 않는다)
         ObjectNode r = Json.object();
         r.put("ok", true);

@@ -490,6 +490,13 @@
             "normal",
             "high"
           ]
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "open_settings"
+          ],
+          "description": "방해 금지·적극 개입 시간대를 바꾸자고 제안할 때 [설정 열기] 버튼을 붙인다(시간대는 사용자만 바꾼다)."
         }
       },
       "required": [

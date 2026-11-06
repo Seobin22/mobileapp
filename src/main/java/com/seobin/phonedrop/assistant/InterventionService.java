@@ -49,11 +49,29 @@ public class InterventionService {
     private final GoalCoverage coverage;
     private final BlockLogs logs;
     private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Replans> replans;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindowRunner> windowRunner;
+
+    /** v3.6 §2.2: 적극 개입 시간대(멈춤·진행 중 고정 일정 아님)인가. */
+    private boolean activeNow() {
+        com.seobin.phonedrop.assistant.agent.TimeWindows tw = windows.getIfAvailable();
+        return tw != null && tw.activeEffective(clock.now(), store);
+    }
+
+    /** 화면 다시 띄우기 간격. 적극 개입 시간대에는 active.alarm_repeat_min(반응할 때까지 반복). */
+    private int reshowMinutes() {
+        return activeNow() ? Math.max(1, settings.getInt("active.alarm_repeat_min"))
+                : settings.getInt("fullscreen.reshow_minutes");
+    }
 
     public InterventionService(AssistantDb db, AssistantClock clock, Jobs jobs, Store store, TimeUtil time,
                                SettingsService settings, PlanService plan, PushService push, TurnQueue turns,
                                GoalCoverage coverage, BlockLogs logs,
-                               org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Replans> replans) {
+                               org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Replans> replans,
+                               org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows,
+                               org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindowRunner> windowRunner) {
+        this.windows = windows;
+        this.windowRunner = windowRunner;
         this.replans = replans;
         this.db = db;
         this.clock = clock;
@@ -229,7 +247,7 @@ public class InterventionService {
         sendLevel(intervention);
         logs.add(b.id(), "intervention_shown", "system", "L" + LEVEL + " 표시");
 
-        jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(settings.getInt("fullscreen.reshow_minutes"))), null);
+        jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(reshowMinutes())), null);
         Instant expireAt = expireAt(b);
         jobs.schedule(EXPIRE, id, expireAt, null);
         time.firstQuietStart(now, expireAt).ifPresent(at -> jobs.schedule(SUSPEND, id, at, null));
@@ -243,7 +261,7 @@ public class InterventionService {
         }
         sendLevel(i);
         jobs.schedule(RESHOW, i.id(),
-                clock.now().plus(Duration.ofMinutes(settings.getInt("fullscreen.reshow_minutes"))), null);
+                clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
         return true;
     }
 
@@ -397,7 +415,7 @@ public class InterventionService {
                 i.id());
         sendLevel(store.intervention(i.id()).orElseThrow());
         jobs.schedule(RESHOW, i.id(),
-                clock.now().plus(Duration.ofMinutes(settings.getInt("fullscreen.reshow_minutes"))), null);
+                clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
         return true;
     }
 
@@ -514,9 +532,11 @@ public class InterventionService {
         String memo = memoOf.fixed() ? store.fullMemo(memoOf) : "";
         data.put("memo", memo);
         data.put("tts_text", memo.isBlank() ? b.screenText() : b.screenText() + " " + firstSentence(memo));
-        data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
+        data.put("reshow_minutes", String.valueOf(reshowMinutes()));
         data.put("block_end", time.iso(b.end()));
         data.put("expire_at", time.iso(expireAt(b)));
+        // v3.6 §2.3: 적극 개입 시간대면 화면에 [10분만 조용히] 버튼
+        data.put("active_window", String.valueOf(activeNow()));
         if (b.workProductId() != null) {
             data.put("work_product_id", String.valueOf(b.workProductId()));
         }
@@ -560,6 +580,10 @@ public class InterventionService {
         String type = req.path("type").asString("");
         Long interventionId = numericId(req.path("intervention_id"));
         Long blockId = numericId(req.path("block_id"));
+        com.seobin.phonedrop.assistant.agent.TimeWindowRunner runner = windowRunner.getIfAvailable();
+        if (runner != null && !"local_fired".equals(type)) {
+            runner.ack(false); // v3.6 §2.3: 개입 화면 조작은 적극 개입 알람에 반응한 것
+        }
         String status = switch (type) {
             case "start" -> start(interventionId, blockId, false);
             case "already_started" -> start(interventionId, blockId, true);

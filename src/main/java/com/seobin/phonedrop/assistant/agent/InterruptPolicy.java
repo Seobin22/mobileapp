@@ -29,8 +29,15 @@ public class InterruptPolicy {
 
     public enum Mode { SEND, SILENT, HOLD }
 
-    /** HOLD 면 heldBlockId 에 모아 둔다. */
-    public record Decision(Mode mode, Long heldBlockId) {
+    /**
+     * HOLD 면 heldBlockId(방해 금지 고정 일정) 또는 heldWindowId(v3.6 방해 금지 시간대)에 모아 둔다.
+     * active: 적극 개입 시간대(메시지 예산 무시, §2.2).
+     */
+    public record Decision(Mode mode, Long heldBlockId, Long heldWindowId, boolean active) {
+
+        public Decision(Mode mode, Long heldBlockId) {
+            this(mode, heldBlockId, null, false);
+        }
 
         public boolean silent() {
             return mode == Mode.SILENT;
@@ -43,9 +50,11 @@ public class InterruptPolicy {
     private final TimeUtil time;
     private final Jobs jobs;
     private final ChatService chat;
+    private final TimeWindows windows;
 
     public InterruptPolicy(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, Jobs jobs,
-                           ChatService chat) {
+                           ChatService chat, TimeWindows windows) {
+        this.windows = windows;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -58,7 +67,9 @@ public class InterruptPolicy {
     /** 결정대로 비서 메시지를 보낸다(HOLD 면 저장만 하고 알리지 않는다). */
     public long send(Decision d, String text, String kind, String importance, Long questionId, Long confirmationId) {
         if (d.mode() == Mode.HOLD) {
-            return chat.holdAssistant(text, kind, importance, questionId, confirmationId, d.heldBlockId());
+            return d.heldWindowId() != null
+                    ? chat.holdAssistantWindow(text, kind, importance, questionId, confirmationId, d.heldWindowId())
+                    : chat.holdAssistant(text, kind, importance, questionId, confirmationId, d.heldBlockId());
         }
         return chat.sendAssistant(text, kind, importance, questionId, confirmationId, d.silent());
     }
@@ -68,6 +79,11 @@ public class InterruptPolicy {
         Instant now = clock.now();
         if (trigger != null && Permissions.fromUser(trigger)) {
             return new Decision(Mode.SEND, null);
+        }
+        // v3.6 §2.1: 방해 금지 시간대가 가장 우선. 끝나는 시각에 묶음 1개(TimeWindowRunner).
+        Optional<TimeWindows.Occ> dndWindow = windows.dndAt(now);
+        if (dndWindow.isPresent()) {
+            return new Decision(Mode.HOLD, null, dndWindow.get().windowId(), false);
         }
         // v3.4 §4: 이동 중에는 알림 허용처럼 보낸다(수면·방해 금지 시간대는 무음).
         if (store.travelInProgress(now)) {
@@ -80,6 +96,9 @@ public class InterruptPolicy {
         }
         if (time.isQuiet(now) || quietFixedInProgress(now)) {
             return new Decision(Mode.SILENT, null);
+        }
+        if (windows.activeEffective(now, store)) {
+            return new Decision(Mode.SEND, null, null, true);
         }
         return new Decision(Mode.SEND, null);
     }
@@ -116,10 +135,14 @@ public class InterruptPolicy {
     }
 
     List<Held> held(long blockId) {
+        return held("held_block_id", blockId);
+    }
+
+    private List<Held> held(String column, long id) {
         return new ArrayList<>(db.jdbc().sql("""
                         SELECT id, content, kind, importance, question_id, confirmation_id, goal_id FROM messages
-                        WHERE held_block_id = ? ORDER BY id""")
-                .param(blockId)
+                        WHERE %s = ? ORDER BY id""".formatted(column))
+                .param(id)
                 .query((rs, n) -> new Held(rs.getLong("id"), rs.getString("content"), rs.getString("kind"),
                         rs.getString("importance"), AssistantDb.nullableLong(rs, "question_id"),
                         AssistantDb.nullableLong(rs, "confirmation_id"), AssistantDb.nullableLong(rs, "goal_id")))
@@ -154,11 +177,19 @@ public class InterruptPolicy {
      * 무음으로 다시 붙인다(앱이 새 id 만 받아 가므로 새 행으로 옮긴다).
      */
     public boolean release(long blockId) {
-        List<Held> list = held(blockId);
+        String title = store.block(blockId).map(store::blockTitle).orElse("일정");
+        return release(held(blockId), title);
+    }
+
+    /** v3.6: 방해 금지 시간대가 끝나면 "그동안 온 소식" 1개. */
+    public boolean releaseWindow(long windowId, String name) {
+        return release(held("held_window_id", windowId), name);
+    }
+
+    private boolean release(List<Held> list, String title) {
         if (list.isEmpty()) {
             return false;
         }
-        String title = store.block(blockId).map(store::blockTitle).orElse("일정");
         StringBuilder sb = new StringBuilder("'" + title + "' 동안 온 소식이에요");
         int interactive = 0;
         for (Held h : list) {

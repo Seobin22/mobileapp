@@ -218,6 +218,16 @@ class InterventionActivity : ComponentActivity() {
                         color = Color.White, textAlign = TextAlign.Center)
                 }
             }
+            // v3.6 §2.3: 적극 개입 시간대에는 [10분만 조용히](그 시간대를 잠깐 기본 동작으로)
+            val activeNow = androidx.compose.runtime.remember(current?.id) {
+                androidx.compose.runtime.mutableStateOf(WindowGuard.active(this@InterventionActivity) != null)
+            }
+            if (activeNow.value && !imeVisible) {
+                androidx.compose.material3.TextButton(onClick = {
+                    ActiveAlarm.pause(applicationContext)
+                    activeNow.value = false
+                }) { Text("10분만 조용히", color = Color(0xFFBFA8B0)) }
+            }
             Spacer(Modifier.height(12.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                 items(lines, key = { it.id }) { line -> Bubble(line.mine, line.text) }

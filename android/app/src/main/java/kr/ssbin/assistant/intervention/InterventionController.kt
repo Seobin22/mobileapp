@@ -89,6 +89,8 @@ object InterventionController {
             negotiationMinutes = (data["talk_timeout_minutes"] ?: data["negotiation_timeout_minutes"])?.toIntOrNull() ?: 5,
         )
         AppDatabase.dao(context).savePlan(snapshot)
+        // v3.6 §2.5: 시간대를 로컬에도 저장해 서버와 끊겨도 막는다.
+        WindowGuard.save(context, data["time_windows"], data["active_paused_until"])
         LocalScheduler.rescheduleAll(context)
     }
 

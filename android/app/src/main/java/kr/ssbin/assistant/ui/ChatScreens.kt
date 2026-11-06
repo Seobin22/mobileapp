@@ -413,6 +413,9 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
             if (m.kind.startsWith("goal_")) {
                 GoalPromptButtons(m, onChanged = { Chat.requestRefresh() })
             }
+            if (!mine && m.action == "open_settings") {
+                OutlinedButton(onClick = { MainActivity.openSettings.tryEmit(Unit) }) { Text("설정 열기") }
+            }
             if (m.kind == "confirmation") {
                 if (m.confirmation_status == "pending") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -433,6 +436,7 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
                 }
             }
             Text(time(m.created_at) + (if (m.intervention_id != null) " · 📱 시작 화면에서" else "") +
+                (if (m.channel == "voice") " · 🎤 음성" else "") +
                 (if (m.silent) " · 🔕" else "") + (if (waiting) " · 대기 중" else ""), style = MaterialTheme.typography.labelSmall,
                 color = if (mine) Color(0xFFFFE0EA) else Color.Gray)
         }

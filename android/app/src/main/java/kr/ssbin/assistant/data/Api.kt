@@ -71,6 +71,19 @@ interface AssistantApi {
     @PUT("v1/settings")
     suspend fun putSetting(@Body body: JsonObject): JsonObject
 
+    // v3.6 방해 금지·적극 개입 시간대(설정 화면 전용)
+    @GET("v1/settings/time-windows")
+    suspend fun timeWindows(): TimeWindowsResponse
+
+    @PUT("v1/settings/time-windows")
+    suspend fun putTimeWindows(@Body body: TimeWindowsRequest): TimeWindowsResponse
+
+    @POST("v1/time-windows/ack")
+    suspend fun ackActiveWindow(): JsonObject
+
+    @POST("v1/time-windows/pause")
+    suspend fun pauseActiveWindow(): JsonObject
+
     // v3.5 기록·기억
     @POST("v1/outcome-cards/{id}")
     suspend fun submitCard(@Path("id") id: Long, @Body body: JsonObject): JsonObject

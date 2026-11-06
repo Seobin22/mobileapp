@@ -47,6 +47,11 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** 개입 화면 [미루기 요청] 뒤 채팅 탭을 연다(v3 §8.1). */
         const val EXTRA_OPEN_CHAT = "open_chat"
+        /** v3.6 적극 개입 알람을 눌러 열었다(반응). */
+        const val EXTRA_ACTIVE_ACK = "active_ack"
+
+        /** 채팅의 [설정 열기] 버튼(v3.6 §1.2) → 설정 화면. */
+        val openSettings = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     }
 
     /** onResume 마다 증가. 권한 상태·목록을 다시 읽는 신호. */
@@ -59,6 +64,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val prefs = Prefs.get(this)
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
+        if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -73,6 +79,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(chatSignal) {
                     if (chatSignal > 0 && prefs.configured) screen = Screen.Home
                 }
+                LaunchedEffect(Unit) { openSettings.collect { if (prefs.configured) screen = Screen.Settings } }
                 when (screen) {
                     Screen.Setup -> SetupScreen(onDone = {
                         syncNow()
@@ -94,6 +101,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
+        if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
     }
 
     override fun onResume() {

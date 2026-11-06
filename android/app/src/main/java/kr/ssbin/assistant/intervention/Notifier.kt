@@ -27,6 +27,8 @@ object Notifier {
     }
 
     fun showFullScreen(context: Context, entity: InterventionEntity) {
+        // v3.6 §2.5: 방해 금지 시간대면 서버가 시켜도 화면을 넘기지 않는다.
+        if (WindowGuard.block(context, "fullscreen")) return
         val intent = Intent(context, InterventionActivity::class.java)
             .putExtra(InterventionActivity.EXTRA_ID, entity.id)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

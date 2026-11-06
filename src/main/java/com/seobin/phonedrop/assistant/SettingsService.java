@@ -85,6 +85,20 @@ public class SettingsService {
         d.put("card.daytime_max", "2");
         d.put("card.evening_wait_min", "30");
         d.put("card.expire_days", "2");
+        // v3.6 시간대(active.* 는 사용자 전용, 비서 도구로는 못 바꾼다)
+        d.put("active.alarm_repeat_min", "3");
+        d.put("active.llm_min_interval_min", "10");
+        d.put("active.llm_max", "12");
+        d.put("active.pause_min", "10");
+        d.put("active.auto_voice", "false");
+        d.put("active.paused_until", "null");
+        // v3.6 음성 탭. voice.model 이 비면 Haiku 계열
+        d.put("voice.model", "\"\"");
+        d.put("voice.stt_mode", "\"batch\"");
+        d.put("voice.voice_id", "\"\"");
+        d.put("voice.speed", "1.0");
+        d.put("voice.end_silence_ms", "800");
+        d.put("voice.daily_turn_cap", "200");
 
         DEFAULTS = Map.copyOf(d);
     }
@@ -161,6 +175,26 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
+                case "active.paused_until" -> {
+                    if (!value.isNull() && !value.isString()) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "voice.stt_mode" -> {
+                    if (!List.of("batch", "realtime").contains(value.asString())) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "voice.voice_id" -> {
+                    if (!value.isString() || !value.asString().matches("[A-Za-z0-9_-]{0,64}")) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "voice.speed" -> {
+                    if (!value.isNumber() || value.asDouble() < 0.7 || value.asDouble() > 1.2) {
+                        throw new IllegalArgumentException();
+                    }
+                }
                 case "travel.home_hint_at" -> {
                     if (!value.isNull() && !value.isString()) {
                         throw new IllegalArgumentException();
@@ -176,12 +210,12 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "llm.model", "documents.model", "memory.model" -> {
+                case "llm.model", "documents.model", "memory.model", "voice.model" -> {
                     if (!value.isString() || !value.asString().matches("[A-Za-z0-9._:/@-]{0,100}")) {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "privacy.sensitive_mode", "web.enabled", "memory.enabled" -> {
+                case "privacy.sensitive_mode", "web.enabled", "memory.enabled", "active.auto_voice" -> {
                     if (!value.isBoolean()) {
                         throw new IllegalArgumentException();
                     }

@@ -124,7 +124,47 @@ data class MessageDto(
     val document_id: Long? = null,
     /** v3.5: 정리 카드(outcome_card)·아침 카드(day_card). */
     val card: CardDto? = null,
+    /** v3.6: 답장 버튼(open_settings = [설정 열기]). */
+    val action: String? = null,
+    /** v3.6: voice = 음성 탭에서 오간 말. 없으면 chat. */
+    val channel: String? = null,
 )
+
+// ------------------------------------------------------------------ v3.6 시간대
+
+@Serializable
+data class TimeWindowDto(
+    val id: Long = 0,
+    val kind: String,
+    val name: String,
+    val days: List<Int>,
+    val start_time: String,
+    val end_type: String = "time",
+    val end_time: String? = null,
+    val end_fallback_time: String = "12:00",
+    val enabled: Boolean = true,
+)
+
+@Serializable
+data class WindowPreviewDto(
+    val kind: String,
+    val name: String,
+    val from: String,
+    val to: String,
+    val end_type: String = "time",
+    val fallback: Boolean = false,
+)
+
+@Serializable
+data class TimeWindowsResponse(
+    val windows: List<TimeWindowDto> = emptyList(),
+    val today: List<WindowPreviewDto> = emptyList(),
+    val now: String? = null,
+    val paused_until: String? = null,
+)
+
+@Serializable
+data class TimeWindowsRequest(val windows: List<TimeWindowDto>)
 
 // ------------------------------------------------------------------ v3 작업물
 

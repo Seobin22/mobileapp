@@ -38,9 +38,13 @@ public class TimeUtil {
     }
 
     private final SettingsService settings;
+    /** v3.6 시간대(방해 금지는 조용한 구간에 더하고, 적극 개입은 수면·옛 방해 금지 구간에서 뺀다). 순환 참조라 지연 조회. */
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows;
 
-    public TimeUtil(SettingsService settings) {
+    public TimeUtil(SettingsService settings,
+                    org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.TimeWindows> windows) {
         this.settings = settings;
+        this.windows = windows;
     }
 
     public ZoneId zone() {
@@ -135,15 +139,25 @@ public class TimeUtil {
             }
         }
 
-        raw.sort(Comparator.comparing(Window::start));
-        List<Window> merged = new ArrayList<>();
-        for (Window w : raw) {
-            if (!merged.isEmpty() && !w.start().isAfter(merged.getLast().end())) {
-                Window prev = merged.removeLast();
-                merged.add(new Window(prev.start(), w.end().isAfter(prev.end()) ? w.end() : prev.end()));
-            } else {
-                merged.add(w);
+        List<Window> merged = merge(raw);
+        // v3.6 §2.1: 방해 금지 시간대 > 적극 개입 시간대 > 기본(수면·옛 방해 금지 설정)
+        com.seobin.phonedrop.assistant.agent.TimeWindows tw = windows.getIfAvailable();
+        if (tw != null) {
+            Instant rangeStart = first.atStartOfDay(z).toInstant();
+            Instant rangeEnd = last.plusDays(1).atStartOfDay(z).toInstant();
+            List<com.seobin.phonedrop.assistant.agent.TimeWindows.Occ> occs = tw.occurrences(rangeStart, rangeEnd);
+            for (com.seobin.phonedrop.assistant.agent.TimeWindows.Occ o : occs) {
+                if (!o.dnd()) {
+                    merged = subtract(merged, o.start(), o.end());
+                }
             }
+            List<Window> withDnd = new ArrayList<>(merged);
+            for (com.seobin.phonedrop.assistant.agent.TimeWindows.Occ o : occs) {
+                if (o.dnd()) {
+                    withDnd.add(new Window(o.start(), o.end()));
+                }
+            }
+            merged = merge(withDnd);
         }
 
         List<Window> result = new ArrayList<>();
@@ -151,6 +165,39 @@ public class TimeUtil {
             if (w.overlaps(from, to)) {
                 result.add(new Window(w.start().isBefore(from) ? from : w.start(),
                         w.end().isAfter(to) ? to : w.end()));
+            }
+        }
+        return result;
+    }
+
+    private static List<Window> merge(List<Window> raw) {
+        List<Window> sorted = new ArrayList<>(raw);
+        sorted.sort(Comparator.comparing(Window::start));
+        List<Window> merged = new ArrayList<>();
+        for (Window w : sorted) {
+            if (!merged.isEmpty() && !w.start().isAfter(merged.getLast().end())) {
+                Window prev = merged.removeLast();
+                merged.add(new Window(prev.start(), w.end().isAfter(prev.end()) ? w.end() : prev.end()));
+            } else {
+                merged.add(w);
+            }
+        }
+        return merged;
+    }
+
+    /** 구간 목록에서 [s, e) 를 뺀다. */
+    private static List<Window> subtract(List<Window> list, Instant s, Instant e) {
+        List<Window> result = new ArrayList<>();
+        for (Window w : list) {
+            if (!w.overlaps(s, e)) {
+                result.add(w);
+                continue;
+            }
+            if (w.start().isBefore(s)) {
+                result.add(new Window(w.start(), s));
+            }
+            if (e.isBefore(w.end())) {
+                result.add(new Window(e, w.end()));
             }
         }
         return result;

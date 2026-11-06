@@ -17,6 +17,7 @@ class AssistantApp : Application() {
         super.onCreate()
         Notifier.createChannels(this)
         Chat.createChannel(this)
+        kr.ssbin.assistant.intervention.ActiveAlarm.createChannel(this)
         if (Prefs.get(this).configured) {
             Sync.schedulePeriodic(this)
         }

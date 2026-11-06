@@ -91,6 +91,9 @@
             android:name=".intervention.ReshowReceiver"
             android:exported="false" />
         <receiver
+            android:name=".intervention.ActiveAlarmReceiver"
+            android:exported="false" />
+        <receiver
             android:name=".schedule.BootReceiver"
             android:exported="true">
             <intent-filter>

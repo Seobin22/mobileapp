@@ -79,6 +79,10 @@ object Chat {
             if (kr.ssbin.assistant.intervention.InterventionState.visibleId == interventionId) return
         }
         if (data["silent"] == "true") return
+        // v3.6 §2.4: 적극 개입 시간대에 비서가 먼저 건 말은 조건이 맞으면 소리로 읽는다(앱이 다시 확인).
+        if (data["speak"] == "true") {
+            kr.ssbin.assistant.intervention.Speaker.speak(context, data["text"] ?: data["preview"].orEmpty())
+        }
         if (ChatVisibility.visible) return // 채팅 화면을 보고 있으면 알림을 띄우지 않는다
         if (data["channel"] == CHANNEL_CHECKIN) {
             notify(context, "진행 확인", data["preview"].orEmpty(), CHANNEL_CHECKIN, CHECKIN_NOTIFICATION_ID)
@@ -122,6 +126,8 @@ object Chat {
         channel: String = CHANNEL_CHAT,
         notificationId: Int = NOTIFICATION_ID,
     ) {
+        // v3.6 §2.5: 방해 금지 시간대면 알림(소리·진동)을 띄우지 않는다. 채팅에는 쌓인다.
+        if (kr.ssbin.assistant.intervention.WindowGuard.block(context, "notification")) return
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED

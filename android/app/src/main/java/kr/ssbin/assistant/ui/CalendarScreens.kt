@@ -969,7 +969,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
         val d = detail
         when {
             isNew && freq != "none" -> submit { api.createSeries(seriesBody()) }
-            isNew -> submit { api.createFixedBlock(fixedBody) }
+            isNew -> submit { warnDnd(context, api.createFixedBlock(fixedBody)) }
             isSeries && d != null && scopeChoice == "one" -> submit {
                 api.patchFixedBlock(d.id, fixedBody)
                 if (memo != d.series!!.memo) api.patchSeries(d.series.id, SeriesRequest(memo = memo), "all")
@@ -978,7 +978,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
                 api.patchSeries(d.series!!.id, seriesBody(), scopeChoice ?: "all",
                     if (scopeChoice == "following") d.occurrence_date else null)
             }
-            d != null -> submit { api.patchFixedBlock(d.id, fixedBody) }
+            d != null -> submit { warnDnd(context, api.patchFixedBlock(d.id, fixedBody)) }
         }
     }
 
@@ -1115,5 +1115,14 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
             },
             dismissButton = { TextButton(onClick = { askScope = null }) { Text("취소") } },
         )
+    }
+}
+
+
+/** v3.6 §1.3: 고정 일정이 방해 금지 시간대와 겹치면 서버가 dnd_warning 을 준다. 저장은 됐고 알리기만 한다. */
+fun warnDnd(context: android.content.Context, r: kotlinx.serialization.json.JsonObject) {
+    val text = (r["dnd_warning"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+        android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
     }
 }

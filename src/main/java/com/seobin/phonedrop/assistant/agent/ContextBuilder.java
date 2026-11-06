@@ -47,6 +47,12 @@ public class ContextBuilder {
     private final com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext;
 
     private final Replans replans;
+    private TimeWindows timeWindows;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setTimeWindows(TimeWindows timeWindows) {
+        this.timeWindows = timeWindows;
+    }
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                           Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
@@ -91,6 +97,7 @@ public class ContextBuilder {
 
                 .append(" / 집중 잘 되는 시간: ").append(windows(settings.get("life.focus_windows")))
                 .append(" / 방해 금지: ").append(windows(settings.get("dnd.windows"))).append("\n\n");
+        sb.append(timeWindowSection(now));
 
         sb.append("# 이번 실행 이유\n").append(reason(trigger, ref)).append("\n\n");
 
@@ -275,7 +282,7 @@ public class ContextBuilder {
         int n = settings.getInt("agent.context_messages");
         sb.append("# 최근 대화 (최근 ").append(n).append("개)\n");
         List<String> recent = db.jdbc().sql("""
-                        SELECT * FROM (SELECT id, role, kind, content, created_at FROM messages WHERE held_block_id IS NULL
+                        SELECT * FROM (SELECT id, role, kind, content, created_at FROM messages WHERE held_block_id IS NULL AND held_window_id IS NULL
                         ORDER BY id DESC LIMIT ?)
                         ORDER BY id""")
                 .param(n)
@@ -286,6 +293,40 @@ public class ContextBuilder {
                         + "] " + rs.getString("content")).list();
         sb.append(recent.isEmpty() ? "없음" : String.join("\n", recent)).append('\n');
         return sb.toString();
+    }
+
+    /**
+     * v3.6 §1.2·§2.2: 사용자가 정한 시간대(오늘·내일). 비서는 읽기만 한다.
+     */
+    private String timeWindowSection(Instant now) {
+        java.time.LocalDate today = time.local(now).toLocalDate();
+        Instant from = today.atStartOfDay(time.zone()).toInstant();
+        Instant to = today.plusDays(2).atStartOfDay(time.zone()).toInstant();
+        List<TimeWindows.Occ> occs = timeWindows.occurrences(from, to);
+        if (occs.isEmpty() && timeWindows.list().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("# 시간대(사용자 설정. 비서는 바꿀 수 없다. 바꾸는 게 좋겠으면 제안만 하고 send_message 에 action=\"open_settings\" 를 붙여 [설정 열기] 버튼을 준다)\n");
+        for (TimeWindows.Occ o : occs) {
+            sb.append(timeWindows.contextLine(o)).append('\n');
+        }
+        if (timeWindows.dndAt(now).isPresent()) {
+            sb.append("지금: 방해금지 시간대 — 먼저 보내는 말은 끝날 때 묶어서 간다. 계획 블록을 이 시간에 두지 않는다.\n");
+        } else if (timeWindows.activeAt(now).isPresent()) {
+            sb.append("지금: 적극 개입 시간대 — 먼저 말 걸어도 된다(메시지 예산 없음, 말은 짧게, 소리로 읽힐 수 있음).\n");
+        } else if (timeWindows.paused(now)) {
+            sb.append("지금: 적극 개입 시간대지만 사용자가 [10분만 조용히]를 눌러 ")
+                    .append(timeWindows.pausedUntil().map(time::hm).orElse("")).append("까지 기본 동작.\n");
+        }
+        return sb.append('\n').toString();
+    }
+
+    private String hmOf(String iso) {
+        try {
+            return time.hm(TimeUtil.parse(iso));
+        } catch (RuntimeException e) {
+            return iso;
+        }
     }
 
     private String reason(String trigger, JsonNode ref) {
@@ -368,6 +409,14 @@ public class ContextBuilder {
                         + " 작업물은 만들지 않는다";
             }
             case "pulse" -> "pulse: 정기 점검(먼저 말 걸 가치가 있을 때만 send_message)";
+            case "active_window" -> "ack".equals(ref.path("reason").asString(""))
+                    ? "active_window: 사용자가 '" + ref.path("name").asString("") + "' 적극 개입 시간대 알람을 껐다(~"
+                    + hmOf(ref.path("until").asString("")) + "). 오늘 할 일을 첫 한두 개만 짧게 브리핑하고 첫 할 일을 지금 시작하라고 민다."
+                    + " send_message kind=proactive 1개, 소리로 읽힐 수 있으니 1~2문장"
+                    : "active_window: '" + ref.path("name").asString("") + "' 적극 개입 시간대(~"
+                    + hmOf(ref.path("until").asString("")) + ", 이번 회차 " + ref.path("count").asInt() + "번째 먼저 말 걸기)."
+                    + " 아직 시작한 블록이 없다. 첫 할 일을 시작하라고 짧고 단호하게 민다(앞서 한 말을 반복하지 말고 방법을 바꾼다)."
+                    + " send_message kind=proactive 1개, 1~2문장";
             case "morning" -> "morning: 아침 브리핑(" + ref.path("logical_day").asString("") + ")";
             case "evening" -> "evening: 저녁 회고(" + ref.path("logical_day").asString("") + ")";
             default -> trigger + ": " + ref;
