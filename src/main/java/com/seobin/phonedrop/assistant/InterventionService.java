@@ -48,10 +48,13 @@ public class InterventionService {
     private final TurnQueue turns;
     private final GoalCoverage coverage;
     private final BlockLogs logs;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Replans> replans;
 
     public InterventionService(AssistantDb db, AssistantClock clock, Jobs jobs, Store store, TimeUtil time,
                                SettingsService settings, PlanService plan, PushService push, TurnQueue turns,
-                               GoalCoverage coverage, BlockLogs logs) {
+                               GoalCoverage coverage, BlockLogs logs,
+                               org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Replans> replans) {
+        this.replans = replans;
         this.db = db;
         this.clock = clock;
         this.jobs = jobs;
@@ -641,11 +644,26 @@ public class InterventionService {
         } else {
             int minutes = t != null ? t.estMinutes() : (int) Duration.between(b.start(), b.end()).toMinutes();
             Instant end = now.plus(Duration.ofMinutes(Math.max(5, minutes)));
+            List<Long> displaced = new java.util.ArrayList<>();
             for (Store.Block other : store.activeBlocksOverlapping(now, end)) {
                 if (other.id() != b.id() && "planned".equals(other.status())) {
                     store.setBlockStatus(other.id(), "cancelled");
                     cancelBlockJobs(other.id());
+                    if (other.travel()) {
+                        continue; // 이동 블록은 기존대로(시스템이 다시 계산)
+                    }
+                    ObjectNode d = Json.object();
+                    d.put("replanned", true);
+                    logs.add(other.id(), "note", "system", "늦게 시작한 블록#" + b.id() + "과 겹쳐 취소", d);
+                    displaced.add(other.id());
                 }
+            }
+            if (!displaced.isEmpty() && !replans.getObject().detectDropped(displaced).isEmpty()) {
+                ObjectNode ref = Json.object();
+                ref.put("block_id", b.id());
+                ref.set("displaced", Json.MAPPER.valueToTree(displaced));
+                ref.put("reason", "late_start");
+                turns.enqueue("blocks_displaced", ref, TurnQueue.PRIORITY_DEFAULT);
             }
             db.update("""
                             UPDATE blocks SET status = 'started', actual_start = ?, start_at = ?, end_at = ?,

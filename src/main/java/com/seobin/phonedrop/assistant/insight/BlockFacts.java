@@ -192,7 +192,7 @@ public class BlockFacts {
         Integer drift = first == null ? null : (int) Duration.between(first, b.start()).toMinutes();
         int moves = db.jdbc().sql("""
                         SELECT COUNT(*) FROM block_logs WHERE block_id = ? AND type = 'moved' AND content NOT LIKE '끝%'""")
-                .param(blockId).query(Integer.class).single();
+                .param(blockId).query(Integer.class).single() + carriedMoves(blockId);
         int snoozes = db.jdbc().sql("SELECT COUNT(*) FROM interventions WHERE block_id = ? AND status = 'snoozed'")
                 .param(blockId).query(Integer.class).single();
         ZonedDateTime local = time.local(b.start());
@@ -238,6 +238,17 @@ public class BlockFacts {
                 actualMinutes, delay, drift, moves, snoozes,
                 band(local.getHour()), day.getDayOfWeek().getValue(), tactics, statusFinal, outcome, outcomeSrc, now,
                 blockId);
+    }
+
+    /** 다시 계획으로 이어 받은 블록(moved 기록의 carried_moves): 원래 블록이 옮겨진 횟수. */
+    private int carriedMoves(long blockId) {
+        int sum = 0;
+        for (String data : db.jdbc().sql("""
+                        SELECT data FROM block_logs WHERE block_id = ? AND type = 'moved' AND data LIKE '%"carried_moves"%'""")
+                .param(blockId).query(String.class).list()) {
+            sum += Json.parse(data).path("carried_moves").asInt(0);
+        }
+        return sum;
     }
 
     /** 처음 예정 시작: 첫 이동 기록의 원래 시각. 이동한 적이 없으면 지금 시작. 이동했는데 원래 시각을 못 읽으면 null. */

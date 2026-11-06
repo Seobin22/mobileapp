@@ -94,6 +94,7 @@ public class Tools {
     private final com.seobin.phonedrop.assistant.insight.Categories categories;
     private final com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts;
     private final com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore;
+    private final Replans replans;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
@@ -104,7 +105,8 @@ public class Tools {
                  DocumentService documents, com.seobin.phonedrop.assistant.insight.InsightTools insightTools,
                  com.seobin.phonedrop.assistant.insight.Categories categories,
                  com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts,
-                 com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore) {
+                 com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore, Replans replans) {
+        this.replans = replans;
         this.insightTools = insightTools;
         this.categories = categories;
         this.blockFacts = blockFacts;
@@ -732,13 +734,30 @@ public class Tools {
     }
 
     private void cancelBlock(Context ctx, Store.Block b) {
+        cancelBlock(ctx, b, null);
+    }
+
+    /** data 가 있으면 기록에 남긴다(다시 계획: Replans.replannedData). */
+    private void cancelBlock(Context ctx, Store.Block b, JsonNode data) {
         coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
         JsonNode before = changes.snapshot("block", b.id());
         interventions.cancelRunningForBlock(b.id());
         store.setBlockStatus(b.id(), "cancelled");
         interventions.cancelBlockJobs(b.id());
         changes.record(ctx.turnId, "block", b.id(), before, changes.snapshot("block", b.id()));
-        logs.add(b.id(), "note", "assistant", "비서가 취소");
+        logs.add(b.id(), "note", "assistant", data == null ? "비서가 취소" : "비서가 다시 계획하며 취소", data);
+    }
+
+    /** 계획에서 빠진 할 일을 결과·저장됨 줄에 붙인다. */
+    private void reportDropped(Context ctx, ObjectNode r, List<Replans.Dropped> dropped) {
+        if (dropped.isEmpty()) {
+            return;
+        }
+        r.set("dropped", Json.MAPPER.valueToTree(dropped.stream().map(d -> d.toJson(time)).toList()));
+        r.put("dropped_note", "이 할 일들은 계획에서 빠져 앞으로 블록이 없습니다. 사용자가 빼라고 한 게 아니면 다시 배치하세요");
+        for (Replans.Dropped d : dropped) {
+            ctx.savedLines.add("계획에서 빠짐: " + d.title() + " (원래 " + time.dayText(d.start()) + " " + time.hm(d.start()) + ")");
+        }
     }
 
     private void setStatus(Context ctx, String entity, String table, long id, String status) {
@@ -808,13 +827,57 @@ public class Tools {
             return r;
         }
 
+        // 같은 할 일(같은 연결 대상)의 기존 블록은 취소하지 않고 새 시각으로 옮긴다. 시간 순서대로 짝을 짓는다.
+        List<Store.Block> pool = new ArrayList<>(replaced.stream()
+                .sorted(java.util.Comparator.comparing(Store.Block::start).thenComparing(Store.Block::id)).toList());
+        java.util.Map<Planned, Store.Block> matched = new java.util.IdentityHashMap<>();
+        for (Planned p : planned.stream().sorted(java.util.Comparator.comparing(Planned::start)).toList()) {
+            for (Store.Block b : pool) {
+                if (java.util.Objects.equals(b.taskId(), p.taskId())
+                        && java.util.Objects.equals(b.linkedFixedBlockId(), p.linkedFixedBlockId())) {
+                    matched.put(p, b);
+                    pool.remove(b);
+                    break;
+                }
+            }
+        }
         List<Long> cancelled = new ArrayList<>();
-        for (Store.Block b : replaced) {
-            cancelBlock(ctx, b);
+        for (Store.Block b : pool) {
+            cancelBlock(ctx, b, Replans.replannedData());
             cancelled.add(b.id());
+        }
+        List<Long> moved = new ArrayList<>();
+        for (Planned p : planned) {
+            Store.Block b = matched.get(p);
+            if (b == null) {
+                continue;
+            }
+            String screen = p.screenText().isEmpty() ? b.screenText() : p.screenText();
+            if (b.start().equals(p.start()) && b.end().equals(p.end()) && java.util.Objects.equals(screen, b.screenText())) {
+                continue; // 그대로
+            }
+            coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+            JsonNode before = changes.snapshot("block", b.id());
+            db.update("""
+                            UPDATE blocks SET start_at = ?, end_at = ?, screen_text = ?, version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                    p.start(), p.end(), screen, b.id());
+            interventions.scheduleBlockJobs(store.block(b.id()).orElseThrow());
+            changes.record(ctx.turnId, "block", b.id(), before, changes.snapshot("block", b.id()));
+            if (!b.start().equals(p.start())) {
+                ObjectNode data = Json.object();
+                data.put("from_start", time.iso(b.start()));
+                data.put("to_start", time.iso(p.start()));
+                data.put("reason", "다시 계획");
+                logs.add(b.id(), "moved", "assistant", time.hm(b.start()) + "→" + time.hm(p.start()) + " (비서 다시 계획)", data);
+            }
+            moved.add(b.id());
         }
         List<Long> created = new ArrayList<>();
         for (Planned p : planned) {
+            if (matched.containsKey(p)) {
+                continue;
+            }
             Store.Task t = store.task(p.taskId()).orElseThrow();
             String screen = p.screenText().isEmpty() ? SCREEN_PREFIX + t.firstAction() : p.screenText();
             long id = db.insert("""
@@ -831,13 +894,17 @@ public class Tools {
             }
             interventions.scheduleBlockJobs(store.block(id).orElseThrow());
             changes.record(ctx.turnId, "block", id, null, changes.snapshot("block", id));
+            replans.inherit(id, "assistant");
             created.add(id);
         }
+        List<Replans.Dropped> dropped = replans.detectDropped(cancelled);
         plan.bumpAndSync();
         ObjectNode r = Json.object();
         r.put("ok", true);
         r.set("created", Json.MAPPER.valueToTree(created));
+        r.set("moved", Json.MAPPER.valueToTree(moved));
         r.set("cancelled", Json.MAPPER.valueToTree(cancelled));
+        reportDropped(ctx, r, dropped);
         return r;
     }
 
@@ -1055,7 +1122,7 @@ public class Tools {
             if (b.travel()) {
                 continue; // 이동 블록은 시스템 관리(지우지 않는다)
             }
-            cancelBlock(ctx, b);
+            cancelBlock(ctx, b, Replans.replannedData());
             displaced.add(b.id());
         }
         long id = db.insert("""
@@ -1069,6 +1136,8 @@ public class Tools {
         changes.record(ctx.turnId, "block", id, null, changes.snapshot("block", id));
         logs.add(id, "created", "assistant", "비서가 할일#" + taskId + "로 지금 시작");
         logs.add(id, "started", "user", "시작");
+        replans.inherit(id, "assistant");
+        List<Replans.Dropped> dropped = replans.detectDropped(displaced);
         plan.bumpAndSync();
         ObjectNode r = okWithId(id);
         r.put("block_id", id);
@@ -1077,6 +1146,7 @@ public class Tools {
         if (!displaced.isEmpty()) {
             r.put("note", "displaced 블록은 취소됐습니다. 남은 일을 다시 배치하세요");
         }
+        reportDropped(ctx, r, dropped);
         return r;
     }
 

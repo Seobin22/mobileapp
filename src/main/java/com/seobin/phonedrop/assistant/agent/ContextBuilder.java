@@ -46,11 +46,14 @@ public class ContextBuilder {
     private final DocumentService documents;
     private final com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext;
 
+    private final Replans replans;
+
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                           Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
                           Deadlines deadlines, MemoService memos, BlockLogs logs, GoalPrompts goalPrompts,
                           TravelService travel, DocumentService documents,
-                          com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext) {
+                          com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext, Replans replans) {
+        this.replans = replans;
         this.memoryContext = memoryContext;
         this.db = db;
         this.clock = clock;
@@ -205,6 +208,15 @@ public class ContextBuilder {
         loose.forEach(t -> sb.append("- ").append(taskLine(t)).append('\n'));
         sb.append('\n');
 
+        // 다시 계획하다 빠진 할 일(블록이 취소됐고 앞으로 블록이 없음). 있을 때만 보인다.
+        List<Replans.Dropped> dropped = replans.unresolved();
+        if (!dropped.isEmpty()) {
+            sb.append("# 계획에서 빠진 할 일(다시 배치하거나 사용자에게 묻는다. 사용자가 빼라고 했으면 그대로 둔다)\n");
+            dropped.forEach(d -> sb.append("- 할일#").append(d.taskId()).append(' ').append(d.title()).append(" (원래 블록#")
+                    .append(d.blockId()).append(' ').append(md(d.start())).append(' ').append(time.hm(d.start())).append(")\n"));
+            sb.append('\n');
+        }
+
         sb.append("# 메모(open)\n");
         List<String> notes = db.jdbc().sql("SELECT id, content FROM notes WHERE status = 'open' ORDER BY id")
                 .query((rs, n) -> "- 메모#" + rs.getLong(1) + " " + rs.getString(2)).list();
@@ -323,7 +335,10 @@ public class ContextBuilder {
                     + "). 이미 반영된 사실이다. 할 일의 남은 시간·다음 블록을 맞추고, 필요할 때만 짧게 알린다";
             case "task_changed_by_user" -> "task_changed_by_user: 사용자가 앱에서 할일#" + ref.path("task_id").asLong()
                     + "을 직접 바꿈(" + ref.path("fields").asString("") + "). 이미 반영된 결정이니 시간표를 맞추고 짧게 알린다";
-            case "blocks_displaced" -> "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
+            case "blocks_displaced" -> "late_start".equals(ref.path("reason").asString(""))
+                    ? "blocks_displaced: 블록#" + ref.path("block_id").asLong() + "을 늦게 시작해 겹친 계획 블록 "
+                    + ref.path("displaced") + "이 취소됐다. 그 할 일을 다시 배치하고 짧게 알린다"
+                    : "blocks_displaced: 사용자가 앱에서 고정 블록#" + ref.path("block_id").asLong()
                     + "을 넣어 계획 블록 " + ref.path("displaced") + "이 취소됐다. 재배치하고 알린다";
             case "block_missed" -> "block_missed: 블록#" + ref.path("block_id").asLong() + "이 놓침(missed) 상태가 됨, 이유 "
                     + switch (ref.path("reason").asString("")) {
