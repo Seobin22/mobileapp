@@ -213,6 +213,10 @@ public class ChatService {
             if (c != null) {
                 m.put("confirmation_id", c);
             }
+            Long card = AssistantDb.nullableLong(rs, "card_id");
+            if (card != null) {
+                m.put("card_id", card);
+            }
             m.put("read", rs.getObject("read_at") != null);
             m.put("created_at", time.iso(AssistantDb.instant(rs, "created_at")));
             return m;
@@ -225,6 +229,21 @@ public class ChatService {
                                 m.put("options", Json.parse(rs.getString(1)));
                             }
                             m.put("question_status", rs.getString(2));
+                            return null;
+                        }).list();
+            }
+            if (m.containsKey("card_id")) {
+                // v3.5 §10.1: 정리 카드·아침 카드
+                db.jdbc().sql("SELECT kind, logical_day, evening, status, payload FROM cards WHERE id = ?").param(m.get("card_id"))
+                        .query((rs, n) -> {
+                            Map<String, Object> c = new LinkedHashMap<>();
+                            c.put("id", m.get("card_id"));
+                            c.put("kind", rs.getString(1));
+                            c.put("logical_day", rs.getObject(2, java.time.LocalDate.class).toString());
+                            c.put("evening", rs.getBoolean(3));
+                            c.put("status", rs.getString(4));
+                            c.put("payload", Json.parse(rs.getString(5)));
+                            m.put("card", c);
                             return null;
                         }).list();
             }
@@ -255,7 +274,7 @@ public class ChatService {
     public int turnsToday() {
         Instant dayStart = time.activeWindow(time.logicalDay(clock.now())).start();
         return db.jdbc().sql("""
-                        SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND trigger <> 'document_process'
+                        SELECT COUNT(*) FROM turns WHERE status <> 'queued' AND trigger NOT IN ('document_process', 'memory_job')
                         AND started_at >= ?""")
                 .param(AssistantDb.ts(dayStart)).query(Integer.class).single();
     }

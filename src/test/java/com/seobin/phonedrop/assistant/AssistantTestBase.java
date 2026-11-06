@@ -96,10 +96,12 @@ abstract class AssistantTestBase {
                 "travel_cache", "kakao_calls", "document_chunks", "documents", "blocks", "fixed_series",
                 "work_products", "wakeups", "daily_flags", "tasks",
                 "goals", "events", "notes", "data_migrations",
-                "device_events", "devices", "processed_actions", "settings"}) {
+                "device_events", "devices", "processed_actions", "settings", "block_facts", "day_facts", "cards",
+                "pattern_stats", "memory_items", "memory_ops_log", "memory_checks", "memory_state"}) {
             db.update("DELETE FROM " + table);
         }
         db.update("UPDATE memory SET content = '' WHERE id = 1");
+        db.update("UPDATE memory_profile SET content = '', updated_by = NULL");
         llm.reset();
         mapApi.reset();
         db.update("UPDATE plan_state SET plan_version = 0");

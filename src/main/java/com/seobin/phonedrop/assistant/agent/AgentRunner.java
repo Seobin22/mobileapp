@@ -58,10 +58,25 @@ public class AgentRunner {
     private final GoalPrompts goalPrompts;
     private final DocumentService documents;
     private final String systemTemplate;
+    private final com.seobin.phonedrop.assistant.insight.MemoryJobs memoryJobs;
+    private final com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext;
+    private final com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.insight.Cards> cards;
+    private final com.seobin.phonedrop.assistant.TimeUtil time;
 
     public AgentRunner(Tx tx, AssistantDb db, AssistantClock clock, SettingsService settings, ContextBuilder context,
                        Tools tools, ChatService chat, Jobs jobs, LlmClient llm, ProactiveService proactive,
-                       GoalCoverage coverage, Store store, GoalPrompts goalPrompts, DocumentService documents) {
+                       GoalCoverage coverage, Store store, GoalPrompts goalPrompts, DocumentService documents,
+                       com.seobin.phonedrop.assistant.insight.MemoryJobs memoryJobs,
+                       com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext,
+                       com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore,
+                       org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.insight.Cards> cards,
+                       com.seobin.phonedrop.assistant.TimeUtil time) {
+        this.memoryJobs = memoryJobs;
+        this.memoryContext = memoryContext;
+        this.memoryStore = memoryStore;
+        this.cards = cards;
+        this.time = time;
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -131,6 +146,22 @@ public class AgentRunner {
             tx.exec(() -> endTurn(turnId, "ok", new Stats(), null));
             return "ok";
         }
+        // v3.5 §0-5: 백그라운드 작업(서술 추출·사실 뽑기·밤 정리·분류 추정)은 대화 turn 이 아니다. 하루 turn 수에 넣지 않는다.
+        if (com.seobin.phonedrop.assistant.insight.MemoryJobs.TRIGGER.equals(trigger)) {
+            tx.exec(() -> db.update("UPDATE turns SET status = 'running', started_at = ? WHERE id = ?", clock.now(), turnId));
+            Stats s = new Stats();
+            try {
+                com.seobin.phonedrop.assistant.insight.MemoryJobs.Usage u = memoryJobs.run(ref);
+                s.inTokens = u.inputTokens();
+                s.outTokens = u.outputTokens();
+                tx.exec(() -> endTurn(turnId, "ok", s, null));
+                return "ok";
+            } catch (RuntimeException e) {
+                log.warn("memory job turn {} failed: {}", turnId, e.toString());
+                tx.exec(() -> endTurn(turnId, "failed", s, e.toString()));
+                return "failed";
+            }
+        }
         // 풀스크린 대화도 사용자가 직접 한 말이다(답이 있어야 하고, 한도 초과 안내도 한다).
         boolean fromUser = Permissions.fromUser(trigger);
         int hardLimit = settings.getInt("agent.daily_turn_hard");
@@ -153,7 +184,8 @@ public class AgentRunner {
         setStage(turnId, "thinking", STAGE_THINKING);
 
         String system = systemTemplate.replace("{persona}", settings.getString("persona"))
-                .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")));
+                .replace("{min_horizon_days}", String.valueOf(settings.getInt("goal.min_horizon_days")))
+                .replace("{profile}", tx.run(memoryContext::systemSection));
         String userContent = tx.run(() -> context.build(trigger, ref));
         // v3 §4.4: web.enabled=false 이거나 soft 상한을 넘으면 web_search 를 tools 에서 뺀다.
         boolean webSearch = settings.getBoolean("web.enabled") && !tx.run(proactive::overSoftLimit);
@@ -276,6 +308,15 @@ public class AgentRunner {
         }
         if ("morning".equals(trigger)) {
             goalPrompts.markReminded();
+            // v3.5 §4·§8-7: 아침 카드(잠·컨디션)를 브리핑 뒤에 붙이고, '확인 필요'는 한 번 물은 것으로 둔다.
+            cards.getObject().sendDayCard(time.logicalDay(clock.now()));
+            memoryStore.markChecksAsked(3);
+        }
+        if ("evening".equals(trigger) && memoryStore.enabled()) {
+            memoryJobs.enqueue("memory_reflection", null); // §8 밤 정리(회고 turn 이 끝난 뒤 1번)
+        }
+        if (fromUser) {
+            memoryJobs.onUserTurn(); // §7.3 사실 뽑기 주기
         }
         // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
         if (fromUser && !ctx.savedLines.isEmpty()) {

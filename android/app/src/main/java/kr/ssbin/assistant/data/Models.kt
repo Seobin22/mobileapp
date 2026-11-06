@@ -122,6 +122,8 @@ data class MessageDto(
     val goal_id: Long? = null,
     /** v3.3: 채팅으로 올린 자료(파일 카드). */
     val document_id: Long? = null,
+    /** v3.5: 정리 카드(outcome_card)·아침 카드(day_card). */
+    val card: CardDto? = null,
 )
 
 // ------------------------------------------------------------------ v3 작업물
@@ -224,6 +226,8 @@ data class FixedBlockRequest(
     val end: String? = null,
     /** v3.3 §1: dnd | quiet | allow, "" = 비서가 정함 */
     val interrupt_level: String? = null,
+    /** v3.5 §1: 분류(선택) */
+    val category: String? = null,
 )
 
 // ------------------------------------------------------------------ v3.3 이동 시간·자료
@@ -418,6 +422,9 @@ data class SeriesDto(
 
 @Serializable
 data class BlockDetailDto(
+    /** v3.5: 분류(물려받은 값 포함)와 그 블록에 직접 정한 출처 */
+    val category: String? = null,
+    val category_src: String? = null,
     val id: Long,
     val kind: String,
     val start: String,
@@ -476,6 +483,7 @@ data class SeriesRequest(
     val first_action: String? = null,
     val memo: String? = null,
     val interrupt_level: String? = null,
+    val category: String? = null,
 )
 
 @Serializable
@@ -484,4 +492,134 @@ data class AppLatestDto(
     val version_code: Long = 0,
     val version_name: String = "",
     val size: Long = 0,
+)
+
+// ------------------------------------------------------------------ v3.5 기록·기억
+
+@Serializable
+data class CardFieldDto(val value: JsonElement? = null, val src: String? = null, val confirmed: Boolean = false)
+
+@Serializable
+data class CardBlockDto(
+    val block_id: Long,
+    val title: String = "",
+    val start: String = "",
+    val end: String = "",
+    val fixed: Boolean = false,
+    val category: String = "other",
+    val progress_unit: String? = null,
+    val outcome: CardFieldDto = CardFieldDto(),
+    val focus: CardFieldDto = CardFieldDto(),
+    val reason_tags: CardFieldDto = CardFieldDto(),
+    val progress_done: CardFieldDto = CardFieldDto(),
+)
+
+@Serializable
+data class ChipDto(val tag: String, val label: String)
+
+@Serializable
+data class ReasonChipsDto(val done: List<ChipDto> = emptyList(), val not_done: List<ChipDto> = emptyList())
+
+@Serializable
+data class CardPayloadDto(
+    val evening: Boolean = false,
+    val blocks: List<CardBlockDto> = emptyList(),
+    val reason_chips: ReasonChipsDto = ReasonChipsDto(),
+    val day: String? = null,
+)
+
+@Serializable
+data class CardDto(
+    val id: Long,
+    val kind: String,
+    val logical_day: String,
+    val evening: Boolean = false,
+    val status: String,
+    val payload: CardPayloadDto = CardPayloadDto(),
+)
+
+@Serializable
+data class ProfileSectionDto(val section: String, val label: String = "", val content: String = "", val updated_by: String? = null)
+
+@Serializable
+data class ProfileResponse(val sections: List<ProfileSectionDto> = emptyList(), val max_chars: Int = 400,
+                           val memory_enabled: Boolean = true)
+
+@Serializable
+data class MemoryItemDto(
+    val id: Long,
+    val kind: String,
+    val category: String = "other",
+    val content: String,
+    val evidence: JsonElement? = null,
+    val confidence: Double = 0.5,
+    val goal_id: Long? = null,
+    val status: String = "active",
+    val created_by: String = "",
+    val created_at: String? = null,
+    val updated_at: String? = null,
+)
+
+@Serializable
+data class MemoryItemsResponse(val items: List<MemoryItemDto> = emptyList())
+
+@Serializable
+data class StatDto(
+    val metric: String,
+    val dimension: String,
+    val key: String,
+    val value: Double? = null,
+    val raw_value: Double? = null,
+    val n: Int = 0,
+    val baseline: Double? = null,
+    val notable: Boolean = false,
+    val insufficient: Boolean = true,
+    val title: String? = null,
+)
+
+@Serializable
+data class PatternSummaryDto(
+    val computed_at: String? = null,
+    val min_samples: Int = 8,
+    val band_completion: List<StatDto> = emptyList(),
+    val sleep_completion: List<StatDto> = emptyList(),
+    val condition_completion: List<StatDto> = emptyList(),
+    val goal_pace: List<StatDto> = emptyList(),
+    val notable: List<StatDto> = emptyList(),
+    val insights: List<MemoryItemDto> = emptyList(),
+    val guidelines: List<MemoryItemDto> = emptyList(),
+)
+
+@Serializable
+data class FactDto(
+    val block_id: Long,
+    val logical_day: String = "",
+    val kind: String = "planned",
+    val category: String = "other",
+    val title: String = "",
+    val planned_start: String? = null,
+    val planned_minutes: Int? = null,
+    val actual_start: String? = null,
+    val actual_end: String? = null,
+    val actual_minutes: Int? = null,
+    val status: String = "pending",
+    val outcome: String? = null,
+    val outcome_src: String? = null,
+    val focus: Int? = null,
+    val focus_src: String? = null,
+    val reason_tags: List<String> = emptyList(),
+    val reason_src: String? = null,
+    val outcome_note: String? = null,
+    val focus_note: String? = null,
+    val reason_note: String? = null,
+    val extra_note: String? = null,
+    val progress_done: Int? = null,
+)
+
+@Serializable
+data class FactDayResponse(
+    val day: String,
+    val blocks: List<FactDto> = emptyList(),
+    val day_facts: JsonElement? = null,
+    val reason_chips: Map<String, Map<String, String>> = emptyMap(),
 )

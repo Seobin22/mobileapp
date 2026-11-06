@@ -22,9 +22,12 @@ public class PlanService {
     private final Store store;
     private final SettingsService settings;
     private final PushService push;
+    private final com.seobin.phonedrop.assistant.insight.BlockFacts facts;
 
     public PlanService(AssistantDb db, AssistantClock clock, TimeUtil time, Store store,
-                       SettingsService settings, PushService push) {
+                       SettingsService settings, PushService push,
+                       com.seobin.phonedrop.assistant.insight.BlockFacts facts) {
+        this.facts = facts;
         this.db = db;
         this.clock = clock;
         this.time = time;
@@ -39,6 +42,7 @@ public class PlanService {
 
     public int bumpAndSync() {
         db.update("UPDATE plan_state SET plan_version = plan_version + 1 WHERE id = 1");
+        facts.refreshNear(); // v3.5 §2.1: 블록이 바뀌는 길목마다 블록 기록의 코드 칸을 다시 계산한다
         push.pushAll(syncData());
         return version();
     }

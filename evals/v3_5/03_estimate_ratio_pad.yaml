@@ -1,0 +1,13 @@
+# 빌드문서 v3.5 §13
+name: 소요가 늘 1.5배 걸리는 분류의 새 할 일은 소요를 늘려 잡는다
+now: "2026-11-02T09:00"
+situation: 공부(study) 분류는 실제가 예정의 1.5배 걸린다(estimate_ratio 1.5, n=12). 사용자가 새 공부 할 일을 말한다.
+setup:
+  sql:
+    - "INSERT INTO pattern_stats(metric, dimension, stat_key, stat_value, raw_value, n, baseline, notable, period_days, computed_at) VALUES ('estimate_ratio', 'category', 'study', 1.5, 1.55, 12, 1.1, TRUE, 28, CURRENT_TIMESTAMP)"
+    - "INSERT INTO memory_items(kind, category, content, evidence, confidence, status, created_by, created_at, updated_at) VALUES ('insight', 'study', '공부는 예정보다 1.5배 걸린다(n=12) → 소요를 늘려 잡기', '{\"stats\":[{\"metric\":\"estimate_ratio\",\"dimension\":\"category\",\"key\":\"study\",\"value\":1.5,\"n\":12}],\"refs\":[]}', 0.8, 'active', 'reflection', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+input: "오늘 오후에 토익 단어 외우기 1시간 잡아줘"
+criteria:
+  - 할 일의 est_minutes 나 블록 길이를 60분보다 늘려 잡거나(약 90분), 늘려 잡자고 제안한다
+  - 1.5배 걸린 기록을 근거로 짧게 설명한다
+  - category=study 를 붙인다

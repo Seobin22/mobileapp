@@ -121,6 +121,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
     var location by remember { mutableStateOf(initial?.location ?: "") }
     var firstAction by remember { mutableStateOf("") }
     var goalId by remember { mutableStateOf(initial?.goal_id) }
+    var category by remember { mutableStateOf("") } // v3.5: 안 고르면 보내지 않는다(비서가 추정)
     var goals by remember { mutableStateOf<List<GoalDto>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -144,6 +145,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                 if (initial == null) {
                     OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동(선택)") })
                 }
+                CategoryChips(category) { category = it }
                 if (goals.isNotEmpty()) {
                     Text("목표 연결(선택)", style = MaterialTheme.typography.bodySmall)
                     Row(Modifier.fillMaxWidth().clickable { goalId = null }.padding(4.dp)) {
@@ -181,6 +183,7 @@ fun FixedBlockDialog(initial: TimelineItem?, onDismiss: () -> Unit, onSaved: () 
                     title = title.trim(), start = start, duration_min = minutes, lead_minutes = leadMinutes,
                     location = location.trim().ifEmpty { null }, goal_id = goalId,
                     first_action = firstAction.trim().ifEmpty { null },
+                    category = category.ifEmpty { null },
                 )
                 scope.launch {
                     val api = ApiClient.get(context)

@@ -254,10 +254,12 @@ class EvalRunner {
                     "intervention_logs", "interventions", "jobs", "block_logs", "series_exceptions", "blocks",
                     "fixed_series", "work_products", "wakeups", "daily_flags",
                     "tasks", "goals", "events", "notes", "data_migrations", "device_events", "devices",
-                    "processed_actions", "settings"}) {
+                    "processed_actions", "settings", "block_facts", "day_facts", "cards", "pattern_stats",
+                    "memory_items", "memory_ops_log", "memory_checks", "memory_state"}) {
                 db.update("DELETE FROM " + table);
             }
             db.update("UPDATE memory SET content = '' WHERE id = 1");
+            db.update("UPDATE memory_profile SET content = '', updated_by = NULL");
             settings.seedDefaults();
         });
         clock.set(LocalDateTime.parse(now).atZone(KST).toInstant());
@@ -423,6 +425,12 @@ class EvalRunner {
         }).list();
         sb.append("[memory]\n").append(db.jdbc().sql("SELECT content FROM memory WHERE id = 1").query(String.class).single())
                 .append('\n');
+        sb.append("[기억 항목]\n");
+        db.jdbc().sql("SELECT kind, category, status, content FROM memory_items ORDER BY id").query((rs, n) -> {
+            sb.append(rs.getString(1)).append('/').append(rs.getString(2)).append(' ').append(rs.getString(3)).append(' ')
+                    .append(rs.getString(4)).append('\n');
+            return null;
+        }).list();
         sb.append("[대화]\n");
         db.jdbc().sql("SELECT role, kind, silent, content FROM messages ORDER BY id").query((rs, n) -> {
             sb.append(rs.getString(1)).append('(').append(rs.getString(2)).append(rs.getBoolean(3) ? ", 알림 없음" : "")

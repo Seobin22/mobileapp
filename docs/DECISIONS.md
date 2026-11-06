@@ -306,3 +306,29 @@
 - 비서 도구 `adjust_travel {block_id(이동 또는 그 약속), delay_minutes | depart_at | minutes | reset}`: 사용자 말(user_message·풀스크린 대화)일 때만. 약속 시각은 그대로. 출발을 미루면 depart_at 에 저장해 재계산해도 유지, 약속 시작 1분 전까지만. 늦으면 travel_late_min(지각 예상). 출발 시각이 이미 지났으면 지금부터 N분. 약속 시각이 바뀌면 depart_at 을 지운다. 떠 있는 출발 화면은 '미룸'으로 닫는다.
 - 권한: 풀스크린 대화(intervention_talk)에서 이동 블록이 있는 약속의 시각을 move_block·upsert_fixed_block 으로 바꾸려 하면 확인 카드. 장소 없는 일정(공부 등)의 풀스크린 미루기는 그대로.
 - 지금 시작(start_now)은 겹치는 이동 블록을 지우지 않는다.
+
+## v3.5 하루 기록·패턴 분석·사용자 맞춤 메모리 (2026-11-06)
+- DB 는 V12 하나(`V12__v3_5_facts_memory.sql`). 새 테이블에는 외래 키를 두지 않았다(블록이 지워져도 기록이 남고, 테스트 초기화 순서에 묶이지 않게). JSON 칸은 VARCHAR.
+- `day_facts.condition` 은 H2 예약어와 겹치지 않게 열 이름만 `day_condition` 으로 했다(API 이름은 condition).
+- 코드는 `assistant/insight/` 패키지: `Categories`, `BlockFacts`, `DayFacts`, `Cards`, `PatternStats`, `MemoryStore`, `MemoryJobs`, `MemoryContext`, `InsightTools`, API `api/InsightController`.
+- **block_facts 코드 칸 다시 계산**: 블록을 바꾸는 경로가 많아 경로마다 부르지 않고, 코드 칸을 블록·기록에서 언제든 다시 만들 수 있게 했다. `plan.bumpAndSync`(블록 변경 길목) 때 어제~내일, 카드·통계·API 를 읽기 전에 해당 범위를 다시 계산한다.
+- **처음 예정 시작**: 첫 `moved` 기록의 `data.from_start`(없으면 예전 글 "HH:mm→")에서 읽는다. 이동 기록이 없으면 지금 시작. 줄이 늦게 만들어져도 정확하다. 이동했는데 원래 시각을 못 읽으면 null(지연·미룸 통계에서 빠짐).
+- 일시정지 기능이 없어 `actual_minutes` = 실제 끝 − 실제 시작.
+- 결과(outcome)의 출처가 status·inferred 이면 블록 상태를 그대로 옮긴 값이라 블록이 바뀌면 다시 계산한다(되돌리기 반영). user·text 는 덮지 않는다. 사용자 [완료]·채팅으로 끝낸 블록 = status, 무응답 놓침·이동 블록 = inferred. 달력에서 결과를 바꾸면 user.
+- **카드 제출과 블록 상태**: 카드에서 고른 결과가 블록 상태와 다르면 블록 상태도 바꾼다(turn 없음). 아직 열려 있던 블록(planned·nudging·started)이 일부·못 함이 되면 기존 missed 흐름(block_missed turn)을 따른다. 이미 놓침 처리된 블록을 '일부'로 고치는 것은 turn 을 만들지 않는다(놓침 흐름은 그때 이미 돌았다).
+- **추정값 확정**: 블록을 하나라도 건드리고 저장하면 그 블록의 미리 채운 추정값을 user 로 확정한다. 아무것도 안 건드린 블록은 skipped(추정값은 inferred 로 남음, T10).
+- 카드는 이전 미제출 카드를 닫고(status closed) 그 블록을 새 카드로 옮긴다. '두 번 연속 미제출'은 그날 마지막 낮 카드 두 장이 모두 submitted 가 아닌 것으로 본다. '나중에'는 status later(블록은 queued).
+- 낮 카드 판단은 15분마다(`card_check` 작업), 기상~저녁 회고 시각 사이·수면/방해 금지 창 밖에서만. '다음 블록까지 15분'은 다음 블록의 개입 시각(start − lead) 기준. 진행 중 개입(풀스크린)이 있어도 참는다.
+- 저녁: `onEvening` 이 통계를 먼저 계산하고 대상이 있으면 정리 카드 → 제출·[나중에]·30분 뒤 중 먼저 오는 때 기존 저녁 회고 turn(하루 1번 확인). 방해 금지 일정 중이면 카드 없이 바로 회고.
+- 아침 카드는 morning turn 이 끝난 뒤 코드가 붙인다(조용한 알림). 이미 보냈거나 잠·컨디션 답이 있으면 다시 안 붙인다.
+- **백그라운드 작업**은 turn 대기열의 `memory_job` trigger 로 돌린다(LLM 을 기다리는 동안 DB 락 없음). 하루 turn 수·pulse '직전 turn'에서 뺀다. 토큰은 그 turns 행에 남고 관리 화면에 작업별로 보인다. 실패하면 다시 시도하지 않는다(밤 정리는 다음 날 다시).
+- `memory.model` 이 비면 `claude-haiku-5-5`. 그 모델 호출이 실패하면(제공자가 모르는 모델 등) 기본 모델로 한 번 더.
+- 사실 뽑기 주기는 사용자 turn(user_message·intervention_talk) 6번마다. 카드·아침 카드 서술이 처리되면 그때도 한 번.
+- 밤 정리의 insight 는 근거 통계(n ≥ min_samples)가 있어야 저장한다(목표 점검 insight 는 goal_id 로 예외). evidence 숫자는 코드가 pattern_stats 에서 채운다. 30일 안 쓰인 약한 항목(확신 < 0.5) 정리는 코드가 한다.
+- 프로필·대하는 법은 시스템 프롬프트 끝(`{profile}`)에 넣어 캐시를 탄다(하루 몇 번 바뀔 때만 캐시가 새로 쓰인다). 기존 memory 이전이 끝나기 전에는 옛 memory 글을 그대로 보여 준다.
+- `memory_save` 로 저장한 항목은 created_by=user(사용자가 분명히 말한 것)라 추출·정리가 바꾸지 않는다. 앱에서 고친 항목도 user 가 된다.
+- `memory_forget` 을 사용자 말 turn 에서 부르면 최근 사용자 메시지 2개를 no_memory 로 표시한다.
+- 통계 비율의 표본 보정은 문서 두 식이 같은 값이라 하나로 계산한다. notable 점수의 '차이'는 비율 metric 은 절대 차이, 그 밖은 상대 차이. pace_ratio·stall_steps 는 notable 후보에서 뺀다(밤 정리가 따로 본다).
+- 설득 성공 판정은 블록 기록을 다시 계산할 때 한다. data.tactic 은 enum 밖이면 도구가 거절한다(data.reason 에 미루는 이유 태그를 같이 남길 수 있다).
+- 분류: 블록은 블록 자신 → 반복 일정 → 할 일 → 목표 순으로 물려받는다(category_src 가 있는 것만 '정해진' 것으로 본다). 사용자가 고른 분류는 비서·추정이 바꾸지 않는다. 기존 데이터 분류 추정은 한 번(80개씩), 답에 없던 것은 other(inferred)로 확정.
+- 테스트: `assistant.cards.enabled=false`, `assistant.memory.auto-jobs=false`(기존 테스트 흐름 유지). v3.5 테스트는 직접 켠다.

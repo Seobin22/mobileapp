@@ -152,6 +152,10 @@
         "confirm_text": {
           "type": "string",
           "description": "확인 카드가 될 때 사용자에게 보일 이유 한 문장"
+        },
+        "category": {
+          "type": "string",
+          "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
         }
       }
     }
@@ -207,6 +211,10 @@
         },
         "sensitive": {
           "type": "boolean"
+        },
+        "category": {
+          "type": "string",
+          "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
         }
       }
     }
@@ -281,6 +289,10 @@
         "interrupt_from_user": {
           "type": "boolean",
           "description": "사용자가 방해 허용 정도를 직접 말했으면 true(이후 비서가 바꾸지 않는다)"
+        },
+        "category": {
+          "type": "string",
+          "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
         }
       }
     }
@@ -352,7 +364,7 @@
   },
   {
     "name": "save_memory",
-    "description": "사용자에 대한 지속적인 사실을 정리한 memory 전체를 교체한다. 기존 내용을 유지하면서 고쳐 쓴다.",
+    "description": "(곧 없어짐) 프로필 now 섹션 끝에 덧붙인다. 새로 쓸 때는 profile_edit·memory_save 를 쓴다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -406,6 +418,10 @@
               "linked_fixed_block_id": {
                 "type": "integer",
                 "description": "이 블록이 준비하는 고정 블록 id(예: KTX 예매 → 결혼식)"
+              },
+              "category": {
+                "type": "string",
+                "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
               }
             },
             "required": [
@@ -529,6 +545,10 @@
         },
         "block_id": {
           "type": "integer"
+        },
+        "category": {
+          "type": "string",
+          "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
         }
       }
     }
@@ -555,7 +575,7 @@
   },
   {
     "name": "end_block",
-    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다. 진행 중 고정 블록(\"시험 끝났어\")에 쓰면 지금 끝낸다(done, 실제 끝 = 지금). 사용자가 직접 말한 경우가 아니면 확인 카드가 된다.",
+    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다. 진행 중 고정 블록(\"시험 끝났어\")에 쓰면 지금 끝낸다(done, 실제 끝 = 지금). 사용자가 직접 말한 경우가 아니면 확인 카드가 된다. 사용자가 말한 집중(focus 1 안 됨·2 보통·3 잘 됨)과 이유(reason_tags)가 있으면 함께 남긴다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -571,6 +591,21 @@
         },
         "remaining_minutes": {
           "type": "integer"
+        },
+        "focus": {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
+        "reason_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "다 함: good_condition·deadline·fun·good_env·easy / 일부·못 함: tired·stuck·other_task·unwilling·forgot·no_time·unwell"
         }
       },
       "required": [
@@ -804,6 +839,10 @@
         "interrupt_from_user": {
           "type": "boolean",
           "description": "사용자가 방해 허용 정도를 직접 말했으면 true(이후 비서가 바꾸지 않는다)"
+        },
+        "category": {
+          "type": "string",
+          "description": "분류(선택): study 공부 | work 일 | class 수업 | exercise 운동 | chores 집안일·잡무 | selfcare 씻기·식사·준비 | rest 휴식 | social 약속 | other 기타. 블록은 할 일 → 목표 분류를 물려받으니 다를 때만 붙인다."
         }
       }
     }
@@ -831,7 +870,7 @@
   },
   {
     "name": "add_block_log",
-    "description": "블록에 기록을 남긴다(200자 이내). 풀스크린 대화 요약(talk_summary), 진행 보고(progress, 예: \"3챕터까지, 도입부에서 막힘\"), 미룬 이유(snooze_reason), 사용자에게 미리 알린 것(notice, 고정 블록에), 그 밖의 판단(note). 답장과 같은 응답에서 함께 부른다.",
+    "description": "블록에 기록을 남긴다(200자 이내). 풀스크린 대화 요약(talk_summary), 진행 보고(progress, 예: \"3챕터까지, 도입부에서 막힘\"), 미룬 이유(snooze_reason), 사용자에게 미리 알린 것(notice, 고정 블록에), 그 밖의 판단(note). 답장과 같은 응답에서 함께 부른다. 설득할 때(미루기 협상·풀스크린 대화·block_missed)는 data.tactic 에 쓴 설득 방식을 하나 남긴다(답장과 같은 응답에서 먼저).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -850,6 +889,29 @@
         },
         "content": {
           "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "description": "선택. tactic: 이번에 쓴 설득 방식, reason: 사용자가 미루는 이유 태그(tired·stuck·other_task·unwilling·forgot·no_time·unwell)",
+          "properties": {
+            "tactic": {
+              "type": "string",
+              "enum": [
+                "micro_step",
+                "reason_reminder",
+                "deadline_fact",
+                "time_commit",
+                "streak",
+                "empathy",
+                "reschedule",
+                "other"
+              ],
+              "description": "micro_step 아주 작게 시작 | reason_reminder 목표 이유 상기 | deadline_fact 마감·여유 숫자 | time_commit 구체 시각 약속 | streak 연속 기록 | empathy 공감 후 제안 | reschedule 시간 바꿔 주기 | other"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
         }
       },
       "required": [
@@ -976,6 +1038,144 @@
       "required": [
         "block_id"
       ]
+    }
+  },
+  {
+    "name": "profile_edit",
+    "description": "핵심 프로필(모든 turn 에 보이는 사용자 요약)을 고친다. section: life 생활 | personality 성향 | likes 좋아하는 것 | now 요즘 | work_style 일하는 방식. 섹션당 400자. op: insert(끝에 덧붙임) | replace(old_text 를 text 로) | rewrite(전체). 사용자가 직접 쓴 섹션에는 insert 만 된다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": "string",
+          "enum": [
+            "life",
+            "personality",
+            "likes",
+            "now",
+            "work_style"
+          ]
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "insert",
+            "replace",
+            "rewrite"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "old_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "section",
+        "op",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "memory_save",
+    "description": "사용자가 자신에 대해 분명히 말한 것을 바로 기억한다(200자 이내 한 문장). kind: fact(오래 가는 사실) | episode(의미 있는 사건) | guideline(사용자가 원하는 대하는 법). category: study|work|class|exercise|chores|selfcare|rest|social|other|snooze|persuasion|health|preference",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fact",
+            "episode",
+            "guideline"
+          ]
+        },
+        "category": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "goal_id": {
+          "type": "integer"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "category",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "memory_forget",
+    "description": "사용자가 잊어 달라고 한 기억을 지운다(item_id 또는 query 로 찾은 것). 사용자 말로 부르면 그 말과 바로 앞 메시지는 사실 뽑기에서 빠진다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "item_id": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "memory_search",
+    "description": "기억(사실·일화·대하는 법·패턴 결론)을 키워드·종류·분류·목표로 찾는다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fact",
+            "episode",
+            "guideline",
+            "insight"
+          ]
+        },
+        "category": {
+          "type": "string"
+        },
+        "goal_id": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_pattern_stats",
+    "description": "사용자 패턴 숫자 통계(최근 28일, 표본 보정값). metric: completion_rate·start_rate·drift_minutes_p50·estimate_ratio·focus_avg·focus_minutes_p50·reason_share·success_reason_share·attendance_rate·snooze_rate·pace_ratio·stall_steps·tactic_success_rate·response_latency_p50·travel_delay_ratio. dimension: band(dawn·morning·afternoon·evening·night)·weekday·category·goal·sleep·condition·tactic·reason_tag 등. insufficient=true 면 근거 부족이라 결론으로 쓰지 않는다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "metric": {
+          "type": "string"
+        },
+        "dimension": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      }
     }
   }
 ]

@@ -40,7 +40,7 @@ import kr.ssbin.assistant.data.Prefs
 import kr.ssbin.assistant.data.TimelineItem
 import kr.ssbin.assistant.work.Sync
 
-enum class Screen { Setup, Home, Permissions, Settings }
+enum class Screen { Setup, Home, Permissions, Settings, AboutMe }
 
 class MainActivity : ComponentActivity() {
 
@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
                     })
                     Screen.Home -> HomeScreen(tick = tick, openChat = chatSignal, navigate = { screen = it })
                     Screen.Permissions -> PermissionScreen(tick = tick, onBack = { screen = Screen.Home })
+                    Screen.AboutMe -> AboutMeScreen(onBack = { screen = Screen.Home })
                     Screen.Settings -> SettingsScreen(
                         onBack = { screen = Screen.Home },
                         onReconfigure = { screen = Screen.Setup },
@@ -136,6 +137,7 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
             TopAppBar(
                 title = { Text(when (tab) { 0 -> "실행 비서"; 1 -> "달력"; 2 -> "목표"; else -> "장소" }) },
                 actions = {
+                    TextButton(onClick = { navigate(Screen.AboutMe) }) { Text("나") }
                     TextButton(onClick = { navigate(Screen.Permissions) }) { Text("권한") }
                     TextButton(onClick = { navigate(Screen.Settings) }) { Text("설정") }
                 },

@@ -383,12 +383,15 @@ private fun MessageBubble(m: MessageDto, waiting: Boolean = false, onOption: (St
     }
     Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Column(
-            Modifier.widthIn(max = 300.dp)
+            Modifier.widthIn(max = if (m.card != null) 360.dp else 300.dp)
                 .background(if (mine) PINK else Color.White, RoundedCornerShape(12.dp))
                 .padding(10.dp)
         ) {
-            Text(m.content, color = if (mine) Color.White else Color.Unspecified)
+            Text(m.content, color = if (mine) Color.White else Color.Unspecified,
+                fontWeight = if (m.card != null) FontWeight.Bold else null)
             m.document_id?.let { DocumentCard(it, mine) }
+            // v3.5 §10.1: 정리 카드·아침 카드
+            m.card?.let { c -> if (c.kind == "day") DayCardView(c) else OutcomeCardView(c) }
             // "작업물#12" 를 누르면 작업물 뷰어(v3 §8.2)
             if (!mine) {
                 val context = LocalContext.current

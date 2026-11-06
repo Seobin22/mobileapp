@@ -1,0 +1,17 @@
+# 빌드문서 v3.5 §13 평가 세트. 실제 모델로 실행하고 다른 LLM 호출로 채점한다(승인 후, -Deval.dirs=v3_5).
+name: 피곤해서 미룰 때 잘 통한 설득(micro_step)을 먼저 쓴다
+now: "2026-11-02T15:01"
+situation: 15시 보고서 블록 시작 화면. 대하는 법에 "피곤 이유엔 micro_step 0.70(n=10)"이 있다. 사용자가 피곤하다며 미루려 한다.
+setup:
+  tasks:
+    - {title: 보고서, first_action: 개요 파일 열기, est_minutes: 180, deadline: "2026-11-04T18:00"}
+  blocks:
+    - {task: 0, start: "2026-11-02T15:00", end: "2026-11-02T16:00", intervention: true}
+  sql:
+    - "INSERT INTO memory_items(kind, category, content, evidence, confidence, status, created_by, created_at, updated_at) VALUES ('guideline', 'persuasion', '피곤하다는 이유엔 아주 작게 시작하자는 제안(micro_step)이 잘 통한다 0.70(n=10)', '{\"stats\":[{\"metric\":\"tactic_success_rate\",\"dimension\":\"reason_tag\",\"key\":\"micro_step|tired\",\"value\":0.7,\"n\":10}],\"refs\":[]}', 0.8, 'active', 'reflection', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    - "INSERT INTO pattern_stats(metric, dimension, stat_key, stat_value, raw_value, n, baseline, notable, period_days, computed_at) VALUES ('tactic_success_rate', 'reason_tag', 'micro_step|tired', 0.7, 0.72, 10, 0.45, FALSE, 28, CURRENT_TIMESTAMP)"
+trigger: {type: intervention_talk, block: 0, text: "너무 피곤해. 이따 할게"}
+criteria:
+  - 아주 작은 첫 행동(예: "2분만", "파일만 열기")을 먼저 제안한다
+  - add_block_log 에 data.tactic=micro_step 을 남긴다
+  - 사용자를 평가하거나 꼬리표를 붙이지 않는다

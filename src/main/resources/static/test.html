@@ -104,6 +104,15 @@
     </section>
 
     <section>
+        <h2>기록·기억 (v3.5) <button class="ghost" id="reloadInsight" style="float:right">새로고침</button></h2>
+        <div class="muted">백그라운드 작업(서술 추출·사실 뽑기·밤 정리·분류 추정) 토큰은 대화 turn 과 따로 센다(최근 7일).</div>
+        <div id="insightTokens" style="margin-top:6px">-</div>
+        <div class="muted" style="margin-top:8px">분류 목록에 없어 '기타'로 들어간 표현(목록 변경은 배포로 한다)</div>
+        <div id="insightHints">-</div>
+        <div class="muted" id="insightState" style="margin-top:6px"></div>
+    </section>
+
+    <section>
         <h2>먼저 말 걸기 · 작업물 <button class="ghost" id="reloadProactive" style="float:right">새로고침</button></h2>
         <div id="proactive" class="muted">-</div>
         <div id="workProduct" style="display:none;margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fffafc"></div>
@@ -436,7 +445,7 @@
     async function refreshAll() {
         $('tokenError').textContent = '';
         try {
-            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive(), loadKakao()]);
+            await Promise.all([loadStatus(), loadGoals(), loadAgent(), loadChat(), loadTimeline(), loadProactive(), loadKakao(), loadInsight()]);
         } catch (e) {
             $('tokenError').textContent = e.message;
         }
@@ -448,6 +457,19 @@
             + (r.native_key_configured === undefined ? '' : ' · 앱 지도 키 ' + (r.native_key_configured ? '있음' : '없음'));
     }
     async function loadKakao() { showKakao(await api('GET', '/v1/admin/kakao_status')); }
+    async function loadInsight() {
+        const r = await api('GET', '/v1/admin/insight');
+        const t = r.background_tokens_7d || [];
+        $('insightTokens').innerHTML = t.length === 0 ? '<span class="muted">아직 없음</span>'
+            : '<table><tr><th>작업</th><th>실행</th><th>실패</th><th>입력 토큰</th><th>출력 토큰</th></tr>'
+              + t.map(x => '<tr><td>' + esc(x.job) + '</td><td>' + x.runs + '</td><td>' + x.failed + '</td><td>'
+              + x.input_tokens + '</td><td>' + x.output_tokens + '</td></tr>').join('') + '</table>';
+        const h = r.other_category_hints || [];
+        $('insightHints').innerHTML = h.length === 0 ? '<span class="muted">없음</span>'
+            : h.map(x => esc(x.hint) + ' (' + x.count + ')').join(' · ');
+        $('insightState').textContent = '기억 ' + (r.memory_enabled ? '켜짐' : '꺼짐') + ' · ' + (r.state || []).join(' · ');
+    }
+    $('reloadInsight').onclick = () => loadInsight().catch(e => $('insightTokens').textContent = e.message);
     $('saveKakao').onclick = async () => {
         $('kakaoError').textContent = '';
         try {

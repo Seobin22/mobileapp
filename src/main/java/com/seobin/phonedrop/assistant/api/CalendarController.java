@@ -71,7 +71,9 @@ public class CalendarController {
                               TurnQueue turns, Changes changes, PlanService plan,
                               com.seobin.phonedrop.assistant.InterventionService interventions,
                               com.seobin.phonedrop.assistant.GoalCoverage coverage,
-                              com.seobin.phonedrop.assistant.agent.TravelService travel) {
+                              com.seobin.phonedrop.assistant.agent.TravelService travel,
+                              com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts) {
+        this.blockFacts = blockFacts;
         this.tx = tx;
         this.db = db;
         this.clock = clock;
@@ -138,6 +140,10 @@ public class CalendarController {
         m.put("goal_color", g == null ? "" : g.color());
         m.put("series_id", b.seriesId());
         m.put("lead_minutes", b.leadMinutes());
+        // v3.5 §1: 분류(물려받은 값)와 이 블록에 직접 정한 출처
+        m.put("category", blockFacts.category(b.id()));
+        m.put("category_src", db.jdbc().sql("SELECT category_src FROM blocks WHERE id = ?").param(b.id())
+                .query(String.class).optional().orElse(null));
         m.put("location", b.location());
         if (b.fixed()) {
             String memo = memos.fullMemo(b);
@@ -226,6 +232,8 @@ public class CalendarController {
     }
 
     /** 사용자가 결과를 직접 바꾼 상태 → 기록 문구 */
+    private final com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts;
+
     private static final Map<String, String> RESULT_LABELS = Map.of("done", "완료", "partial", "일부 완료", "missed", "놓침");
 
     /**
@@ -271,6 +279,8 @@ public class CalendarController {
             changes.record(turnId, "block", id, snapBefore, changes.snapshot("block", id));
             logs.add(id, "note", "user", "사용자가 결과를 바꿈: " + RESULT_LABELS.getOrDefault(before, before) + " → "
                     + RESULT_LABELS.get(status));
+            blockFacts.refresh(id);
+            blockFacts.setHuman(id, "outcome", status, "user"); // v3.5 §2.1: 달력에서 바꾼 결과는 user
             coverage.onBlockClosed(id);
             if (b.fixed()) {
                 travel.reconcile(travel.dayOf(b.start())); // 출발지·귀가가 달라질 수 있다

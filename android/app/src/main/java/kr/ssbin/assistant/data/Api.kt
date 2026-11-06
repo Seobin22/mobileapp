@@ -71,6 +71,44 @@ interface AssistantApi {
     @PUT("v1/settings")
     suspend fun putSetting(@Body body: JsonObject): JsonObject
 
+    // v3.5 기록·기억
+    @POST("v1/outcome-cards/{id}")
+    suspend fun submitCard(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @POST("v1/outcome-cards/{id}/later")
+    suspend fun cardLater(@Path("id") id: Long): JsonObject
+
+    @POST("v1/day-cards/{day}")
+    suspend fun submitDayCard(@Path("day") day: String, @Body body: JsonObject): JsonObject
+
+    @GET("v1/memory/profile")
+    suspend fun memoryProfile(): ProfileResponse
+
+    @PATCH("v1/memory/profile")
+    suspend fun patchProfile(@Body body: JsonObject): JsonObject
+
+    @GET("v1/memory/items")
+    suspend fun memoryItems(@Query("kind") kind: String? = null, @Query("category") category: String? = null,
+                            @Query("query") query: String? = null): MemoryItemsResponse
+
+    @PATCH("v1/memory/items/{id}")
+    suspend fun patchMemoryItem(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
+    @DELETE("v1/memory/items/{id}")
+    suspend fun deleteMemoryItem(@Path("id") id: Long): JsonObject
+
+    @POST("v1/memory/items/{id}/wrong")
+    suspend fun wrongMemoryItem(@Path("id") id: Long): JsonObject
+
+    @GET("v1/patterns/summary")
+    suspend fun patternSummary(): PatternSummaryDto
+
+    @GET("v1/facts/blocks")
+    suspend fun factBlocks(@Query("day") day: String): FactDayResponse
+
+    @PATCH("v1/facts/blocks/{id}")
+    suspend fun patchFact(@Path("id") id: Long, @Body body: JsonObject): JsonObject
+
     // v3.1 목표 탭(§3.7)·고정 블록(§4.4)
     @GET("v1/goals")
     suspend fun goals(): GoalsResponse

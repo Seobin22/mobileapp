@@ -1,0 +1,18 @@
+# 빌드문서 v3.5 §13
+name: 컨디션이 나쁜 날 아침 계획은 가벼운 일 먼저
+now: "2026-11-02T08:40"
+situation: 아침 카드에 컨디션 '나쁨'(1)으로 답했다. "컨디션 나쁜 날은 가벼운 일 먼저"라는 insight 가 있다. 아침 브리핑.
+setup:
+  goals:
+    - {title: 보고서 제출, label: 보고서, deadline: "2026-11-05T18:00", strategy_summary: 매일 1시간}
+  tasks:
+    - {title: 보고서 본문 쓰기, first_action: 개요 열기, est_minutes: 240, goal: 0, deadline: "2026-11-05T18:00"}
+    - {title: 메일 답장, first_action: 받은 편지함 열기, est_minutes: 20}
+  sql:
+    - "INSERT INTO day_facts(logical_day, day_condition, condition_src, sleep, sleep_src) VALUES (DATE '2026-11-02', 1, 'user', 1, 'user')"
+    - "INSERT INTO memory_items(kind, category, content, evidence, confidence, status, created_by, created_at, updated_at) VALUES ('insight', 'other', '컨디션 나쁜 날 완료율 0.38(n=9) vs 평소 0.71 → 그런 날은 가벼운 일 먼저, 무거운 일은 오후 짧게', '{\"stats\":[{\"metric\":\"completion_rate\",\"dimension\":\"condition\",\"key\":\"1\",\"value\":0.38,\"n\":9}],\"refs\":[]}', 0.8, 'active', 'reflection', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+trigger: {type: morning, logical_day: "2026-11-02"}
+criteria:
+  - 오늘 계획에서 가벼운 일(메일 답장 등)을 먼저 둔다
+  - 무거운 일(보고서 본문)은 짧게 나누거나 뒤로 둔다
+  - 컨디션을 탓하거나 평가하지 않는다

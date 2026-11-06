@@ -44,11 +44,14 @@ public class ContextBuilder {
     private final GoalPrompts goalPrompts;
     private final TravelService travel;
     private final DocumentService documents;
+    private final com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext;
 
     public ContextBuilder(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                           Timeline timeline, Facts facts, ChatService chat, GoalCoverage coverage, UserState userState,
                           Deadlines deadlines, MemoService memos, BlockLogs logs, GoalPrompts goalPrompts,
-                          TravelService travel, DocumentService documents) {
+                          TravelService travel, DocumentService documents,
+                          com.seobin.phonedrop.assistant.insight.MemoryContext memoryContext) {
+        this.memoryContext = memoryContext;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -254,9 +257,8 @@ public class ContextBuilder {
         }
         sb.append('\n');
 
-        sb.append("# memory\n");
-        String memory = db.jdbc().sql("SELECT content FROM memory WHERE id = 1").query(String.class).optional().orElse("");
-        sb.append(memory.isBlank() ? "(비어 있음)" : memory).append("\n\n");
+        // v3.5 §9: 프로필·대하는 법은 시스템 프롬프트(캐시). 여기에는 이 turn 에 맞는 패턴·기억만.
+        sb.append(memoryContext.section(trigger, ref));
 
         int n = settings.getInt("agent.context_messages");
         sb.append("# 최근 대화 (최근 ").append(n).append("개)\n");

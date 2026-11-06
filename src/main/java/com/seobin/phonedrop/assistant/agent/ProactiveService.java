@@ -54,10 +54,13 @@ public class ProactiveService {
     private final GoalCoverage coverage;
     private final GoalPrompts goalPrompts;
     private final boolean enabled;
+    private final org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.insight.Cards> cards;
 
     public ProactiveService(AssistantDb db, AssistantClock clock, Tx tx, Jobs jobs, Store store, TimeUtil time,
                             SettingsService settings, TurnQueue turns, ChatService chat, GoalCoverage coverage,
-                            GoalPrompts goalPrompts, @Value("${assistant.worker.enabled:true}") boolean enabled) {
+                            GoalPrompts goalPrompts, @Value("${assistant.worker.enabled:true}") boolean enabled,
+                            org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.insight.Cards> cards) {
+        this.cards = cards;
         this.db = db;
         this.clock = clock;
         this.tx = tx;
@@ -135,7 +138,8 @@ public class ProactiveService {
             return "started_block";
         }
         int recent = db.jdbc().sql("""
-                        SELECT COUNT(*) FROM turns WHERE status NOT IN ('queued', 'skipped') AND started_at >= ?""")
+                        SELECT COUNT(*) FROM turns WHERE status NOT IN ('queued', 'skipped') AND started_at >= ?
+                        AND trigger NOT IN ('document_process', 'memory_job')""")
                 .param(AssistantDb.ts(now.minus(PULSE_QUIET_AFTER_TURN))).query(Integer.class).single();
         if (recent > 0) {
             return "recent_turn";
@@ -199,9 +203,8 @@ public class ProactiveService {
             return false;
         }
         setFlag(day, "evening_done");
-        ObjectNode ref = Json.object();
-        ref.put("logical_day", day.toString());
-        turns.enqueue("evening", ref, TurnQueue.PRIORITY_DEFAULT);
+        // v3.5 §3.2: 통계를 먼저 계산하고, 정리할 블록이 있으면 정리 카드를 먼저 보낸 뒤 저녁 회고 turn.
+        cards.getObject().evening(day);
         return true;
     }
 

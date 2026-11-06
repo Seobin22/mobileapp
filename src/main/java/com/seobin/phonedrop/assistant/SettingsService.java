@@ -72,6 +72,19 @@ public class SettingsService {
         d.put("travel.home_hint_at", "null");
         // 문서 읽기·요약 모델. 비면 llm.model(이미지는 이미지 입력을 받는 모델이어야 한다)
         d.put("documents.model", "\"\"");
+        // v3.5 하루 기록·패턴 분석·사용자 맞춤 메모리. memory.model 이 비면 Haiku 계열(MemoryJobs.DEFAULT_MODEL)
+        d.put("memory.model", "\"\"");
+        d.put("memory.enabled", "true");
+        d.put("memory.extract_every_turns", "6");
+        d.put("memory.min_samples", "8");
+        d.put("memory.prior_k", "5");
+        d.put("memory.highlight_max", "5");
+        d.put("memory.profile_max_chars", "2000");
+        d.put("card.min_blocks", "3");
+        d.put("card.min_gap_hours", "4");
+        d.put("card.daytime_max", "2");
+        d.put("card.evening_wait_min", "30");
+        d.put("card.expire_days", "2");
 
         DEFAULTS = Map.copyOf(d);
     }
@@ -163,12 +176,12 @@ public class SettingsService {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "llm.model", "documents.model" -> {
+                case "llm.model", "documents.model", "memory.model" -> {
                     if (!value.isString() || !value.asString().matches("[A-Za-z0-9._:/@-]{0,100}")) {
                         throw new IllegalArgumentException();
                     }
                 }
-                case "privacy.sensitive_mode", "web.enabled" -> {
+                case "privacy.sensitive_mode", "web.enabled", "memory.enabled" -> {
                     if (!value.isBoolean()) {
                         throw new IllegalArgumentException();
                     }

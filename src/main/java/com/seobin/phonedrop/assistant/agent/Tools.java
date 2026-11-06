@@ -90,6 +90,10 @@ public class Tools {
     private final TravelService travel;
     private final DocumentService documents;
     private final JsonNode definitions;
+    private final com.seobin.phonedrop.assistant.insight.InsightTools insightTools;
+    private final com.seobin.phonedrop.assistant.insight.Categories categories;
+    private final com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts;
+    private final com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore;
 
     public Tools(AssistantDb db, AssistantClock clock, Store store, TimeUtil time, SettingsService settings,
                  Timeline timeline, Validator validator, Permissions permissions, Changes changes, ChatService chat,
@@ -97,7 +101,14 @@ public class Tools {
                  ProactiveService proactive, FixedBlockService fixedBlocks, GoalService goals,
                  GoalCoverage coverage, SeriesService series, MemoService memos, BlockLogs logs,
                  GoalPrompts goalPrompts, InterruptPolicy interrupts, TravelService travel,
-                 DocumentService documents) {
+                 DocumentService documents, com.seobin.phonedrop.assistant.insight.InsightTools insightTools,
+                 com.seobin.phonedrop.assistant.insight.Categories categories,
+                 com.seobin.phonedrop.assistant.insight.BlockFacts blockFacts,
+                 com.seobin.phonedrop.assistant.insight.MemoryStore memoryStore) {
+        this.insightTools = insightTools;
+        this.categories = categories;
+        this.blockFacts = blockFacts;
+        this.memoryStore = memoryStore;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -155,7 +166,7 @@ public class Tools {
                     return confirm(ctx, d.confirmationKind(), name, input);
                 }
             }
-            return switch (name) {
+            ObjectNode result = switch (name) {
                 case "get_timeline" -> getTimeline(input);
                 case "get_history" -> getHistory(input);
                 case "get_load_summary" -> ok(Json.MAPPER.valueToTree(timeline.loadSummary()));
@@ -188,10 +199,51 @@ public class Tools {
                 case "read_document" -> readDocument(input);
                 case "adjust_travel" -> adjustTravel(ctx, input);
                 case "link_document" -> linkDocument(ctx, input);
-                default -> error("알 수 없는 도구입니다: " + name);
+                default -> com.seobin.phonedrop.assistant.insight.InsightTools.NAMES.contains(name)
+                        ? insightTools.dispatch(name, input, Permissions.fromUser(ctx.trigger))
+                        : error("알 수 없는 도구입니다: " + name);
             };
+            afterTool(name, input, result);
+            return result;
         } catch (ApiException | IllegalArgumentException e) {
             return error(e.getMessage());
+        }
+    }
+
+    /** v3.5 §1: 만드는 도구의 category 칸(목록 밖 값은 other + hint). 고정 블록·반복 일정은 서비스에서. */
+    private void afterTool(String name, JsonNode in, ObjectNode result) {
+        if (!result.path("ok").asBoolean(false)) {
+            return;
+        }
+        switch (name) {
+            case "upsert_goal" -> {
+                if (result.hasNonNull("id")) {
+                    categories.applyFrom("goals", result.get("id").asLong(), in, "assistant");
+                }
+            }
+            case "upsert_task" -> {
+                if (result.hasNonNull("id")) {
+                    categories.applyFrom("tasks", result.get("id").asLong(), in, "assistant");
+                }
+            }
+            case "start_now" -> {
+                if (result.hasNonNull("id")) {
+                    categories.applyFrom("blocks", result.get("id").asLong(), in, "assistant");
+                }
+            }
+            case "set_schedule" -> {
+                JsonNode created = result.path("created");
+                int i = 0;
+                for (JsonNode b : in.path("blocks")) {
+                    if (i < created.size()) {
+                        categories.applyFrom("blocks", created.get(i).asLong(), b, "assistant");
+                    }
+                    i++;
+                }
+            }
+            case "undo_last" -> blockFacts.refreshNear();
+            default -> {
+            }
         }
     }
 
@@ -695,16 +747,16 @@ public class Tools {
         changes.record(ctx.turnId, entity, id, before, changes.snapshot(entity, id));
     }
 
+    /** v3.5 §7.2: 1버전 동안 남긴다. 내부적으로 프로필 now 섹션에 덧붙인다(전체 교체가 아니다). */
     private ObjectNode saveMemory(JsonNode in) {
-        String content = in.path("content").asString("");
-        int max = settings.getInt("memory.max_chars");
-        if (content.length() > max) {
-            return error("memory 는 " + max + "자 이하여야 합니다(지금 " + content.length() + "자). 줄여서 다시 저장하세요");
+        String content = in.path("content").asString("").strip();
+        if (content.isEmpty()) {
+            return error("content 가 비었습니다");
         }
-        db.update("UPDATE memory SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", content);
+        memoryStore.edit("now", "insert", content, null, "assistant");
         ObjectNode r = Json.object();
         r.put("ok", true);
-        r.put("chars", content.length());
+        r.put("note", "save_memory 는 곧 없어집니다. 프로필은 profile_edit, 사실·일화는 memory_save 를 쓰세요");
         return r;
     }
 
@@ -1118,6 +1170,25 @@ public class Tools {
         logs.add(id, "ended", "assistant", "done".equals(outcome) ? "완료"
                 : "부분 완료" + (in.hasNonNull("remaining_minutes") ? "(남은 " + in.get("remaining_minutes").asInt() + "분)" : ""));
         coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+        // v3.5: 사용자가 채팅에서 말한 집중·이유(비서가 뽑은 값 = text)
+        if (Permissions.fromUser(ctx.trigger)) {
+            blockFacts.refresh(id);
+            int focus = in.path("focus").asInt(0);
+            if (focus >= 1 && focus <= 3) {
+                blockFacts.setHuman(id, "focus", focus, "text");
+            }
+            if (in.path("reason_tags").isArray()) {
+                List<String> tags = new ArrayList<>();
+                in.get("reason_tags").forEach(t -> {
+                    if (com.seobin.phonedrop.assistant.insight.BlockFacts.validReason(t.asString(""))) {
+                        tags.add(t.asString());
+                    }
+                });
+                if (!tags.isEmpty()) {
+                    blockFacts.setHuman(id, "reason", tags, "text");
+                }
+            }
+        }
         if (in.hasNonNull("remaining_minutes") && b.taskId() != null) {
             JsonNode taskBefore = changes.snapshot("task", b.taskId());
             db.update("UPDATE tasks SET remaining_minutes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -1365,7 +1436,18 @@ public class Tools {
             return error("content 는 " + BlockLogs.ASSISTANT_MAX_CHARS + "자 이하여야 합니다(지금 " + content.length()
                     + "자). 줄여서 다시 남기세요");
         }
-        return okWithId(logs.add(blockId, type, "assistant", content));
+        // v3.5 §6: 설득할 때 data.tactic(설득 방식)을 남기면 블록 기록에 더한다.
+        JsonNode data = in.path("data");
+        String tactic = data.isObject() ? data.path("tactic").asString("") : "";
+        if (!tactic.isEmpty() && !com.seobin.phonedrop.assistant.insight.BlockFacts.TACTICS.contains(tactic)) {
+            return error("data.tactic 은 " + String.join("·", com.seobin.phonedrop.assistant.insight.BlockFacts.TACTICS)
+                    + " 중 하나입니다");
+        }
+        long logId = logs.add(blockId, type, "assistant", content, data.isObject() ? data : null);
+        if (!tactic.isEmpty()) {
+            blockFacts.addTactic(blockId, tactic, data.hasNonNull("reason") ? data.get("reason").asString() : null);
+        }
+        return okWithId(logId);
     }
 
     private ObjectNode getBlockHistory(JsonNode in) {

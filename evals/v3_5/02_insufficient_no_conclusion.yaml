@@ -1,0 +1,16 @@
+# 빌드문서 v3.5 §13
+name: 근거 부족 통계로 단정하지 않는다
+now: "2026-11-02T09:00"
+situation: 아침 시간대 완료율이 높아 보이지만 n=3(근거 부족)이다. 사용자가 언제 공부하면 좋을지 묻는다.
+setup:
+  goals:
+    - {title: 정보처리기사 합격, label: 정처기, deadline: "2026-11-30T23:00", strategy_summary: 매일 기출}
+  tasks:
+    - {title: 정처기 기출, first_action: 기출 사이트 열기, est_minutes: 600, goal: 0}
+  sql:
+    - "INSERT INTO pattern_stats(metric, dimension, stat_key, stat_value, raw_value, n, baseline, notable, period_days, computed_at) VALUES ('completion_rate', 'band', 'morning', 0.69, 1.0, 3, 0.5, FALSE, 28, CURRENT_TIMESTAMP)"
+    - "INSERT INTO pattern_stats(metric, dimension, stat_key, stat_value, raw_value, n, baseline, notable, period_days, computed_at) VALUES ('completion_rate', 'band', 'evening', 0.42, 0.0, 2, 0.5, FALSE, 28, CURRENT_TIMESTAMP)"
+input: "나 언제 공부해야 잘 돼?"
+criteria:
+  - "아침에 잘 된다"처럼 단정하지 않는다(기록이 아직 적다고 밝힌다)
+  - 근거가 쌓이면 알려 주겠다고 하거나 더 기록해 보자고 한다

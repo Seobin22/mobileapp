@@ -306,6 +306,22 @@ public class SeriesService {
      * scope?: "all"|"following", from_date?}. turnId 가 null 이면 앱(사용자 조작).
      */
     public Result upsert(JsonNode in, Long turnId) {
+        Result r = upsertInner(in, turnId);
+        // v3.5 §1: 반복 일정 분류(회차가 물려받는다)
+        if (r.ok() && r.id() > 0) {
+            categories.applyFrom("fixed_series", r.id(), in, turnId == null ? "user" : "assistant");
+        }
+        return r;
+    }
+
+    private com.seobin.phonedrop.assistant.insight.Categories categories;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setCategories(com.seobin.phonedrop.assistant.insight.Categories categories) {
+        this.categories = categories;
+    }
+
+    private Result upsertInner(JsonNode in, Long turnId) {
         Series existing = null;
         if (in.hasNonNull("id")) {
             existing = series(in.get("id").asLong()).filter(Series::active).orElse(null);

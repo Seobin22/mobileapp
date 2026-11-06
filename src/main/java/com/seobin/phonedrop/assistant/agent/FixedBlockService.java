@@ -63,7 +63,8 @@ public class FixedBlockService {
                              Validator validator, InterventionService interventions, PlanService plan, Changes changes,
                              GoalCoverage coverage, TurnQueue turns, BlockLogs logs,
                              com.seobin.phonedrop.assistant.TimeUtil time, InterruptPolicy interrupts,
-                             TravelService travel) {
+                             TravelService travel, com.seobin.phonedrop.assistant.insight.Categories categories) {
+        this.categories = categories;
         this.db = db;
         this.clock = clock;
         this.store = store;
@@ -85,6 +86,17 @@ public class FixedBlockService {
      * screen_text? | first_action?, sensitive?}. turnId 가 null 이면 앱 API(source=manual).
      */
     public Result upsert(JsonNode in, Long turnId) {
+        Result r = upsertInner(in, turnId);
+        // v3.5 §1: 분류(앱 입력 = user, 비서 도구 = assistant)
+        if (r.ok() && r.id() > 0) {
+            categories.applyFrom("blocks", r.id(), in, turnId == null ? "user" : "assistant");
+        }
+        return r;
+    }
+
+    private final com.seobin.phonedrop.assistant.insight.Categories categories;
+
+    private Result upsertInner(JsonNode in, Long turnId) {
         Long id = in.hasNonNull("id") ? in.get("id").asLong() : null;
         Store.Block existing = null;
         if (id != null) {

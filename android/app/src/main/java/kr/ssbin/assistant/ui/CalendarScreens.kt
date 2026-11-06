@@ -865,6 +865,8 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
     var onceMemo by remember { mutableStateOf("") }
     var interrupt by remember { mutableStateOf("") } // "" = 비서가 정함
     var interruptInitial by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("") } // v3.5 §10.2 분류 칩(선택)
+    var categoryInitial by remember { mutableStateOf("") }
     var freq by remember { mutableStateOf("none") }
     var interval by remember { mutableIntStateOf(1) }
     var byDays by remember { mutableStateOf(setOf<Int>()) }
@@ -891,6 +893,8 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
                 location = d.location ?: ""
                 interrupt = if (d.interrupt_set_by == "user") d.interrupt_level ?: "" else ""
                 interruptInitial = interrupt
+                category = d.category?.takeIf { it != "other" || d.category_src == "user" } ?: ""
+                categoryInitial = category
                 d.series?.let { sr ->
                     freq = sr.freq
                     interval = sr.interval
@@ -919,6 +923,9 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
     /** 바꿨을 때만 보낸다(그대로면 비서가 정한 값을 지우지 않는다). */
     fun interruptChange(): String? = if (isNew) interrupt.ifEmpty { null } else interrupt.takeIf { it != interruptInitial }
 
+    /** 분류도 바꿨을 때만 보낸다. 지웠으면 기타(other). */
+    fun categoryChange(): String? = if (category == categoryInitial) null else category.ifEmpty { "other" }
+
     fun seriesBody(): SeriesRequest = SeriesRequest(
         title = title.trim(), freq = freq, interval = interval,
         by_days = if (freq == "weekly") byDays.sorted().ifEmpty { listOf(LocalDate.parse(date.trim()).dayOfWeek.value) } else null,
@@ -927,6 +934,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
         start_date = date.trim(), until_date = until.trim().ifEmpty { null },
         lead_minutes = lead.trim().toIntOrNull(), location = location.trim().ifEmpty { null }, goal_id = goalId,
         first_action = firstAction.trim().ifEmpty { null }, memo = memo, interrupt_level = interruptChange(),
+        category = categoryChange(),
     )
 
     fun submit(block: suspend () -> Unit) {
@@ -951,11 +959,12 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
         val fixedBody = if (inProgress) FixedBlockRequest(
             title = title.trim(), duration_min = minutes, location = location.trim(),
             memo = if (detail?.series != null) onceMemo else memo, interrupt_level = interruptChange(),
+            category = categoryChange(),
         ) else FixedBlockRequest(
             title = title.trim(), start = start, duration_min = minutes, lead_minutes = leadText.toIntOrNull(),
             location = location.trim().ifEmpty { null }, goal_id = goalId,
             first_action = firstAction.trim().ifEmpty { null }, memo = if (isSeries) onceMemo else memo,
-            interrupt_level = interruptChange(),
+            interrupt_level = interruptChange(), category = categoryChange(),
         )
         val d = detail
         when {
@@ -1015,6 +1024,7 @@ fun FixedEditDialog(blockId: Long?, presetStart: LocalDateTime?, onDismiss: () -
                         )
                     }
                 }
+                CategoryChips(category) { category = it }
                 if (isNew) OutlinedTextField(firstAction, { firstAction = it }, label = { Text("첫 행동(선택)") })
                 if ((isNew || isSeries) && !inProgress) {
                     Text("반복", fontWeight = FontWeight.Bold)

@@ -43,7 +43,8 @@ public class AssistantDb {
             "assistant/db/V8__goal_prompts.sql",
             "assistant/db/V9__v3_3.sql",
             "assistant/db/V10__travel_blocks.sql",
-            "assistant/db/V11__travel_adjust.sql"
+            "assistant/db/V11__travel_adjust.sql",
+            "assistant/db/V12__v3_5_facts_memory.sql"
     );
 
     private static final Logger log = LoggerFactory.getLogger(AssistantDb.class);
