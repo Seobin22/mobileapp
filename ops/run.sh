@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 아침 루틴 놓침·적극 개입 말하기 조사(읽기 전용, 제목·내용 없음): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
+# 저녁 이동 블록·일정 끝 알람 조사(읽기 전용, 제목·내용 없음): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -42,15 +42,15 @@ fi
 
 cat > "$WORK/queries.sql" <<'SQL'
 SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst FROM (VALUES 1);
-SELECT 'W_DEF' AS q, id, kind, days, start_time, end_type, end_time, end_fallback_time, enabled, FORMATDATETIME(updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd FROM time_windows;
-SELECT 'W_RUNS' AS q, window_id, FORMATDATETIME(occ_start,'MM-dd HH:mm','en','Asia/Seoul') AS occ, alarm_count, FORMATDATETIME(alarm_last_at,'HH:mm','en','Asia/Seoul') AS alarm_last, FORMATDATETIME(acked_at,'HH:mm','en','Asia/Seoul') AS acked, llm_count, FORMATDATETIME(llm_last_at,'HH:mm','en','Asia/Seoul') AS llm_last, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS ended FROM time_window_runs ORDER BY id DESC LIMIT 6;
-SELECT 'B' AS q, b.id, b.kind, b.status, b.task_id, b.goal_id, b.series_id, b.link_role, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(b.end_at,'HH:mm','en','Asia/Seoul') AS en, b.lead_minutes AS lead, FORMATDATETIME(b.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS created, FORMATDATETIME(b.updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd FROM blocks b WHERE b.start_at >= DATEADD('HOUR', -14, CURRENT_TIMESTAMP) AND b.start_at < DATEADD('HOUR', 8, CURRENT_TIMESTAMP) AND b.status <> 'cancelled' ORDER BY b.start_at;
-SELECT 'L' AS q, l.block_id, l.type, l.actor, FORMATDATETIME(l.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS at FROM block_logs l JOIN blocks b ON b.id=l.block_id WHERE b.start_at >= DATEADD('HOUR', -14, CURRENT_TIMESTAMP) AND b.start_at < DATEADD('HOUR', 8, CURRENT_TIMESTAMP) AND b.status <> 'cancelled' ORDER BY l.id;
-SELECT 'F' AS q, block_id, status_final, outcome, outcome_src, card_state FROM block_facts WHERE logical_day >= DATEADD('DAY', -1, CURRENT_DATE) ORDER BY block_id;
-SELECT 'I' AS q, i.id, i.block_id, i.status, i.level, i.reason, i.end_reason, FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(i.ended_at,'HH:mm','en','Asia/Seoul') AS en FROM interventions i WHERE i.started_at >= DATEADD('HOUR', -14, CURRENT_TIMESTAMP) ORDER BY i.id;
-SELECT 'T' AS q, trigger, status, COUNT(*) AS n, FORMATDATETIME(MIN(started_at),'MM-dd HH:mm','en','Asia/Seoul') AS first, FORMATDATETIME(MAX(started_at),'MM-dd HH:mm','en','Asia/Seoul') AS last FROM turns WHERE started_at >= DATEADD('HOUR', -14, CURRENT_TIMESTAMP) GROUP BY trigger, status ORDER BY first;
-SELECT 'M' AS q, kind, silent, channel, COUNT(*) AS n, FORMATDATETIME(MAX(created_at),'MM-dd HH:mm','en','Asia/Seoul') AS last FROM messages WHERE role='assistant' AND created_at >= DATEADD('HOUR', -14, CURRENT_TIMESTAMP) GROUP BY kind, silent, channel;
-SELECT 'D' AS q, id, app_version, FORMATDATETIME(last_heartbeat,'MM-dd HH:mm','en','Asia/Seoul') AS hb, capabilities FROM devices ORDER BY last_heartbeat DESC LIMIT 2;
+SELECT 'B' AS q, b.id, b.kind, b.status, b.link_role, b.travel_direction AS dir, b.linked_fixed_block_id AS linked, b.series_id AS ser, b.task_id, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(b.end_at,'HH:mm','en','Asia/Seoul') AS en, b.lead_minutes AS lead, b.buffer_after_min AS buf, b.interrupt_level AS lvl, b.lead_includes_travel AS lit, (b.lat IS NOT NULL) AS has_place, FORMATDATETIME(b.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS created, FORMATDATETIME(b.updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd FROM blocks b WHERE b.start_at >= DATEADD('HOUR', 7, CAST(CURRENT_DATE AS TIMESTAMP WITH TIME ZONE)) AND b.start_at < DATEADD('HOUR', 16, CAST(CURRENT_DATE AS TIMESTAMP WITH TIME ZONE)) ORDER BY b.start_at, b.id;
+SELECT 'BT' AS q, t.block_id, t.direction, t.mode, t.minutes, t.source, FORMATDATETIME(t.computed_at,'MM-dd HH:mm','en','Asia/Seoul') AS at FROM block_travel t JOIN blocks b ON b.id=t.block_id WHERE b.start_at >= DATEADD('HOUR', 7, CAST(CURRENT_DATE AS TIMESTAMP WITH TIME ZONE)) AND b.start_at < DATEADD('HOUR', 16, CAST(CURRENT_DATE AS TIMESTAMP WITH TIME ZONE)) ORDER BY t.id;
+SELECT 'W' AS q, id, status, task_id, created_by_turn AS turn_id, FORMATDATETIME(fire_at,'MM-dd HH:mm','en','Asia/Seoul') AS fire, FORMATDATETIME(created_at,'MM-dd HH:mm','en','Asia/Seoul') AS created FROM wakeups WHERE created_at >= DATEADD('HOUR', -20, CURRENT_TIMESTAMP) ORDER BY id;
+SELECT 'U' AS q, t.id, t.trigger, t.status, FORMATDATETIME(t.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, t.tool_names FROM turns t WHERE t.started_at >= DATEADD('HOUR', -20, CURRENT_TIMESTAMP) AND t.trigger NOT IN ('memory_job','voice','active_window') ORDER BY t.id;
+SELECT 'C' AS q, c.turn_id, c.entity, c.entity_id, FORMATDATETIME(c.created_at,'MM-dd HH:mm','en','Asia/Seoul') AS at, (c.before_value IS NULL) AS created_new FROM changes c WHERE c.created_at >= DATEADD('HOUR', -20, CURRENT_TIMESTAMP) ORDER BY c.id;
+SELECT 'I' AS q, i.id, i.block_id, i.status, i.level, i.reason, i.end_reason, FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(i.ended_at,'HH:mm','en','Asia/Seoul') AS en FROM interventions i WHERE i.started_at >= DATEADD('HOUR', -12, CURRENT_TIMESTAMP) ORDER BY i.id;
+SELECT 'H' AS q, held_block_id, held_window_id, COUNT(*) AS n FROM messages WHERE (held_block_id IS NOT NULL OR held_window_id IS NOT NULL) GROUP BY held_block_id, held_window_id;
+SELECT 'J' AS q, type, target_id, status, FORMATDATETIME(fire_at,'MM-dd HH:mm','en','Asia/Seoul') AS fire FROM jobs WHERE fire_at >= DATEADD('HOUR', -6, CURRENT_TIMESTAMP) AND fire_at < DATEADD('HOUR', 6, CURRENT_TIMESTAMP) AND type NOT IN ('turn','time_window_tick') ORDER BY fire_at;
+SELECT 'S' AS q, s.id, s.lead_minutes, s.buffer_after_min, s.interrupt_level FROM fixed_series s WHERE s.id IN (8, 12);
 SQL
 
 while IFS= read -r q; do
