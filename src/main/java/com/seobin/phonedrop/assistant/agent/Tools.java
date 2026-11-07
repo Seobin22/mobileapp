@@ -985,6 +985,11 @@ public class Tools {
         if (b == null) {
             return error("블록#" + id + "이 없습니다");
         }
+        // 2026-11-07: 반복 일정 회차는 시각이 지난 뒤 옮기지 않는다(그 회차만 놓침, 다음 회차는 그대로)
+        Long seriesId = db.jdbc().sql("SELECT series_id FROM blocks WHERE id = ?").param(b.id()).query(Long.class).optional().orElse(null);
+        if (seriesId != null && !clock.now().isBefore(b.start())) {
+            return error("반복 일정의 지난 회차는 옮기지 않습니다. 못 했으면 end_block outcome=missed 로 기록하세요(다음 회차는 그대로)");
+        }
         if (!List.of("planned", "nudging").contains(b.status())) {
             return error("블록#" + id + "은 " + b.status() + " 상태라 옮길 수 없습니다(planned·nudging 만)");
         }
@@ -1306,11 +1311,59 @@ public class Tools {
         return okWithId(id);
     }
 
+    /**
+     * 2026-11-07(사용자 요청): 시작하지 않은 블록을 '놓침'으로 기록한다. 매일·반복되는 일(습관 목표 블록, 반복 일정 회차)은
+     * 시각이 지나 못 했으면 옮기지 않고 그 회차만 놓침으로 끝낸다(다음 회차는 그대로).
+     */
+    private ObjectNode markMissed(Context ctx, Store.Block b, JsonNode in) {
+        long id = b.id();
+        if ("missed".equals(b.status())) {
+            return okWithId(id);
+        }
+        if (!List.of("planned", "nudging").contains(b.status())) {
+            return error("블록#" + id + "은 " + b.status() + " 상태라 놓침으로 바꿀 수 없습니다(planned·nudging 만)");
+        }
+        Instant now = clock.now();
+        if (now.isBefore(b.start())) {
+            return error("블록#" + id + "은 아직 시작 시각 전입니다. 오늘 안 할 거면 놓침이 아니라 옮기거나 취소합니다");
+        }
+        JsonNode before = changes.snapshot("block", id);
+        store.runningForBlock(id).ifPresent(i -> interventions.end(i, "expired", "user_missed", "expired"));
+        db.update("UPDATE blocks SET status = 'missed', updated_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+        interventions.cancelBlockJobs(id);
+        changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+        boolean user = Permissions.fromUser(ctx.trigger);
+        logs.add(id, "missed", user ? "user" : "assistant", "놓침(못 함)");
+        coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+        coverage.onBlockClosed(id);
+        blockFacts.refresh(id);
+        if (user) {
+            blockFacts.setHuman(id, "outcome", "missed", "text");
+            if (in.path("reason_tags").isArray()) {
+                List<String> tags = new ArrayList<>();
+                in.get("reason_tags").forEach(t -> {
+                    if (com.seobin.phonedrop.assistant.insight.BlockFacts.validReason(t.asString(""))) {
+                        tags.add(t.asString());
+                    }
+                });
+                if (!tags.isEmpty()) {
+                    blockFacts.setHuman(id, "reason", tags, "text");
+                }
+            }
+        }
+        ctx.savedLines.add("저장됨: 놓침 · " + store.blockTitle(b) + " " + time.hm(b.start()));
+        plan.bumpAndSync();
+        return okWithId(id);
+    }
+
     private ObjectNode endBlock(Context ctx, JsonNode in) {
         long id = in.path("block_id").asLong(-1);
         Store.Block b = store.block(id).orElse(null);
         if (b == null) {
             return error("블록#" + id + "이 없습니다");
+        }
+        if ("missed".equals(in.path("outcome").asString(""))) {
+            return markMissed(ctx, b, in);
         }
         if (b.fixed() && !"started".equals(b.status())) {
             // v3.3 §2: "시험 끝났어" → [시작]을 누르지 않은 진행 중 고정 일정 지금 끝내기

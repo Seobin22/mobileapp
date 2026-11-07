@@ -441,7 +441,7 @@
   },
   {
     "name": "move_block",
-    "description": "planned 또는 nudging 블록 하나를 옮긴다. new_end 를 생략하면 길이를 유지한다. 계획 블록은 자유롭게, 고정 블록은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 진행 중 개입(시작 화면)의 블록을 옮기면 미룸(snoozed)으로 끝나고 새 시각에 다시 뜬다.",
+    "description": "planned 또는 nudging 블록 하나를 옮긴다. new_end 를 생략하면 길이를 유지한다. 계획 블록은 자유롭게, 고정 블록은 사용자가 방금 말한 경우가 아니면 확인 카드가 된다. 진행 중 개입(시작 화면)의 블록을 옮기면 미룸(snoozed)으로 끝나고 새 시각에 다시 뜬다. 매일·반복되는 일의 지난 회차는 옮기지 않는다(end_block outcome=missed).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -587,7 +587,7 @@
   },
   {
     "name": "end_block",
-    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다. 진행 중 고정 블록(\"시험 끝났어\")에 쓰면 지금 끝낸다(done, 실제 끝 = 지금). 사용자가 직접 말한 경우가 아니면 확인 카드가 된다. 사용자가 말한 집중(focus 1 안 됨·2 보통·3 잘 됨)과 이유(reason_tags)가 있으면 함께 남긴다.",
+    "description": "진행 중(started) 블록을 끝낸다. outcome=done(이번 블록 분량 완료) 또는 partial. remaining_minutes 를 주면 할 일의 남은 시간을 갱신한다. 할 일 자체를 완료하려면 upsert_task(status=done)를 따로 호출한다. 진행 중 고정 블록(\"시험 끝났어\")에 쓰면 지금 끝낸다(done, 실제 끝 = 지금). 사용자가 직접 말한 경우가 아니면 확인 카드가 된다. 사용자가 말한 집중(focus 1 안 됨·2 보통·3 잘 됨)과 이유(reason_tags)가 있으면 함께 남긴다. outcome=missed: 시작하지 않고 시각이 지난 블록(planned·nudging)을 '놓침'으로 기록한다. 매일·반복되는 일(기상 루틴 같은 습관 목표의 블록, 반복 일정 회차)을 못 했으면 옮기지 말고 missed 로 그 회차만 끝낸다(다음 회차는 그대로). 한 번뿐인 할 일(남은 분량이 있는 일)만 move_block·set_schedule 로 다시 잡는다.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -598,7 +598,8 @@
           "type": "string",
           "enum": [
             "done",
-            "partial"
+            "partial",
+            "missed"
           ]
         },
         "remaining_minutes": {

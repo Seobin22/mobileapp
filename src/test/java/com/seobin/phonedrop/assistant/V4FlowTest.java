@@ -194,6 +194,29 @@ class V4FlowTest extends AssistantTestBase {
     }
 
     @Test
+    void missedRoutineIsRecordedNotMoved() {
+        // 2026-11-07: 아침 루틴을 못 했는데 비서가 옮길 수밖에 없어 '놓침'이 남지 않았다
+        long task = tool("user_message", "upsert_task", "{\"title\":\"기상 루틴\",\"first_action\":\"물 마시기\",\"est_minutes\":20}").get("id").asLong();
+        long b = tool("user_message", "set_schedule", "{\"from\":\"" + iso("2026-11-02T09:30") + "\",\"to\":\"" + iso("2026-11-02T09:50")
+                + "\",\"blocks\":[{\"task_id\":" + task + ",\"start\":\"" + iso("2026-11-02T09:30") + "\",\"end\":\"" + iso("2026-11-02T09:50") + "\"}]}")
+                .get("created").get(0).asLong();
+        // 아직 시작 전이면 놓침으로 못 바꾼다
+        assertThat(tool("user_message", "end_block", "{\"block_id\":" + b + ",\"outcome\":\"missed\"}").path("ok").asBoolean(true)).isFalse();
+        runUntil("2026-11-02T09:36");
+        assertThat(store.runningForBlock(b)).isPresent();
+        ObjectNode r = tool("intervention_talk", "end_block", "{\"block_id\":" + b + ",\"outcome\":\"missed\"}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+        assertThat(block(b).status()).isEqualTo("missed");
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(db.jdbc().sql("SELECT outcome FROM block_facts WHERE block_id = ?").param(b).query(String.class).single())
+                .isEqualTo("missed");
+        push.clear();
+        runUntil("2026-11-02T10:20"); // 놓침으로 끝낸 뒤에는 그 블록 알람이 다시 오지 않는다
+        assertThat(push.ofType("intervention.level").stream().filter(d -> String.valueOf(b).equals(d.get("block_id"))).count())
+                .isZero();
+    }
+
+    @Test
     void unreachableDeviceIsNotIgnoring() {
         deviceAlive = false;
         long blockId = createBlock("보고서", "2026-11-02T10:00", 30)[1];
