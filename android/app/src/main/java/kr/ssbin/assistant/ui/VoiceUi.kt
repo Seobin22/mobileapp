@@ -254,6 +254,23 @@ fun VoiceSettingsSection() {
         Text("말 속도 %.2f".format(speed))
         Slider(value = speed, onValueChange = { speed = (it * 20).toInt() / 20f }, valueRange = 0.7f..1.2f,
             onValueChangeFinished = { put("voice.speed", JsonPrimitive(speed.toDouble())) })
+        // 2026-11-10: 음성 알림 끄기(적극 개입 시간대 목소리보다 우선). 깨우기 알람 소리·진동은 그대로.
+        var mute by remember { mutableStateOf(Prefs.get(context).voiceMuteUntil) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("음성 알림")
+            val now = System.currentTimeMillis()
+            val endOfDay = java.time.LocalDate.now().plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            listOf(0L to "켜기", endOfDay to "오늘만 끄기", Long.MAX_VALUE to "끄기").forEach { (v, label) ->
+                val selected = when (v) {
+                    0L -> mute <= now
+                    Long.MAX_VALUE -> mute == Long.MAX_VALUE
+                    else -> mute in (now + 1) until Long.MAX_VALUE
+                }
+                FilterChip(selected = selected, onClick = { mute = v; Prefs.get(context).voiceMuteUntil = v }, label = { Text(label) })
+            }
+        }
+        Text("끄면 적극 개입 시간대에도 비서가 소리로 말하지 않고 알림으로만 보내요(깨우기 알람 소리는 울려요).",
+            style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         var sens by remember { mutableStateOf(Prefs.get(context).voiceSensitivity) }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("마이크 민감도")

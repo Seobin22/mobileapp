@@ -74,6 +74,11 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getInt("voice_end_silence_ms", 800)
         set(value) = prefs.edit().putInt("voice_end_silence_ms", value).apply()
 
+    /** 음성 알림 끄기: 이 시각(ms)까지 끔. 0 = 켜짐, Long.MAX_VALUE = 계속 끔. 이 기기에만 저장. */
+    var voiceMuteUntil: Long
+        get() = prefs.getLong("voice_mute_until", 0)
+        set(value) = prefs.edit().putLong("voice_mute_until", value).apply()
+
     /** 마이크 민감도(0.7 낮게 · 1.0 보통 · 1.6 높게). 이 기기에만 저장. */
     var voiceSensitivity: Float
         get() = prefs.getFloat("voice_sensitivity", 1.3f)

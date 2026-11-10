@@ -1,5 +1,9 @@
 package kr.ssbin.assistant.ui
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Alignment
+import androidx.compose.runtime.collectAsState
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -51,6 +55,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_ACTIVE_ACK = "active_ack"
         /** 음성 대화 알림을 눌러 열었다 → 음성 탭. */
         const val EXTRA_OPEN_VOICE = "open_voice"
+        /** 알림의 [음성으로 대답]: 음성 탭을 열고 바로 시작(음성 탭 [시작]과 같다). */
+        const val EXTRA_START_VOICE = "start_voice"
         val openVoice = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
 
         /** 채팅의 [설정 열기] 버튼(v3.6 §1.2) → 설정 화면. */
@@ -69,6 +75,7 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
         if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
         if (intent.getBooleanExtra(EXTRA_OPEN_VOICE, false)) openVoice.tryEmit(Unit)
+        startVoiceIfAsked(intent)
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -107,6 +114,18 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) openChat.intValue++
         if (intent.getBooleanExtra(EXTRA_ACTIVE_ACK, false)) kr.ssbin.assistant.intervention.ActiveAlarm.ack(this)
         if (intent.getBooleanExtra(EXTRA_OPEN_VOICE, false)) openVoice.tryEmit(Unit)
+        startVoiceIfAsked(intent)
+    }
+
+    private fun startVoiceIfAsked(intent: android.content.Intent) {
+        if (!intent.getBooleanExtra(EXTRA_START_VOICE, false)) return
+        intent.removeExtra(EXTRA_START_VOICE)
+        openVoice.tryEmit(Unit)
+        if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED && !kr.ssbin.assistant.voice.VoiceEngine.active
+        ) {
+            kr.ssbin.assistant.voice.VoiceEngine.launch(this) // 앱이 앞에 있으니 마이크를 켤 수 있다
+        }
     }
 
     override fun onResume() {
@@ -168,6 +187,20 @@ fun HomeScreen(tick: Int, openChat: Int = 0, navigate: (Screen) -> Unit) {
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            // 2026-11-10: 음성 대화 중이면 어느 탭에서든 맨 위에 표시(누르면 음성 탭, [종료]로 바로 끝)
+            val voicePhase by kr.ssbin.assistant.voice.VoiceEngine.phase.collectAsState()
+            if (voicePhase != kr.ssbin.assistant.voice.VoiceEngine.Phase.Idle) {
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFFE03131)).clickable { tab = 4 }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("● REC  음성 대화 중", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { kr.ssbin.assistant.voice.VoiceEngine.stop(context, "user") }) {
+                        Text("종료", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             if (!allGranted) {
                 Text(
                     "권한이 빠져 있어 화면이 제때 안 뜰 수 있어요. 눌러서 확인",

@@ -27,6 +27,7 @@ object Chat {
 
     const val CHANNEL_CHAT = "chat"
     const val CHANNEL_CHECKIN = "checkin"
+    const val CHANNEL_SPOKEN = "spoken"
     private const val NOTIFICATION_ID = 3001
     private const val CHECKIN_NOTIFICATION_ID = 3002
 
@@ -83,7 +84,10 @@ object Chat {
         // 2026-11-10: 소리로 말하면 진동 푸시는 띄우지 않는다(채팅에는 쌓인다). 말할 수 없을 때(통화 중 등)만 알림.
         if (data["speak"] == "true" && kr.ssbin.assistant.intervention.Speaker.speak(context,
                 data["text"] ?: data["preview"].orEmpty(), data["message_id"]?.toLongOrNull())
-        ) return
+        ) {
+            notifySpoken(context, data["preview"].orEmpty()) // 2026-11-10: 진동·소리 없는 알림 + [음성으로 대답]
+            return
+        }
         if (ChatVisibility.visible) return // 채팅 화면을 보고 있으면 알림을 띄우지 않는다
         if (data["channel"] == CHANNEL_CHECKIN) {
             notify(context, "진행 확인", data["preview"].orEmpty(), CHANNEL_CHECKIN, CHECKIN_NOTIFICATION_ID)
@@ -149,6 +153,38 @@ object Chat {
             .setContentIntent(pending)
             .build()
         NotificationManagerCompat.from(context).notify(notificationId, notification)
+    }
+
+    /** 비서가 소리로 말한 메시지: 조용한 알림에 [음성으로 대답](= 음성 탭 [시작]). */
+    private fun notifySpoken(context: Context, text: String) {
+        if (kr.ssbin.assistant.intervention.WindowGuard.block(context, "notification")) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_SPOKEN, "비서가 소리로 말한 메시지", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            setSound(null, null)
+            enableVibration(false)
+            description = "적극 개입 시간대에 소리로 말한 내용(진동 없음)"
+        })
+        val open = PendingIntent.getActivity(context, 1,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val voice = PendingIntent.getActivity(context, 2,
+            Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_START_VOICE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = NotificationCompat.Builder(context, CHANNEL_SPOKEN)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("실행 비서")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .addAction(0, "음성으로 대답", voice)
+            .build()
+        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, n)
     }
 
     fun clearNotification(context: Context) {

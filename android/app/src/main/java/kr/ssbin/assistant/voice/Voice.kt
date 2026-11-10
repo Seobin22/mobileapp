@@ -310,6 +310,7 @@ object VoiceEngine {
                         utter.reset()
                         preroll.forEach { writePcm(utter, it) }
                         preroll.clear()
+                        beep(start = true) // 2026-11-10: 내 말차례 시작
                     }
                 } else {
                     writePcm(utter, copy)
@@ -324,7 +325,10 @@ object VoiceEngine {
                     if (silenceMs >= endSilence || utterMs >= MAX_UTTERANCE_MS) {
                         inUtterance = false
                         speechRun = 0
-                        if (voicedFrames >= 8) send(boost(utter.toByteArray()))
+                        if (voicedFrames >= 8) {
+                            beep(start = false) // 내 말차례 끝(보냄)
+                            send(boost(utter.toByteArray()))
+                        }
                         utter.reset()
                     }
                 }
@@ -365,6 +369,17 @@ object VoiceEngine {
 
     @Volatile
     private var speakEndedAt = 0L
+
+    private var tone: android.media.ToneGenerator? = null
+
+    /** 말차례 알림음: 시작은 짧게 한 번, 끝(서버로 보냄)은 두 번. */
+    private fun beep(start: Boolean) {
+        runCatching {
+            val t = tone ?: android.media.ToneGenerator(AudioManager.STREAM_MUSIC, 60).also { tone = it }
+            t.startTone(if (start) android.media.ToneGenerator.TONE_PROP_BEEP else android.media.ToneGenerator.TONE_PROP_ACK,
+                if (start) 120 else 250)
+        }
+    }
 
     /** 화면의 [그만 말하기]: 비서 말·받기를 멈추고, 그때까지 말한 부분만 남긴다(§3.3 끊고 들어오기를 버튼으로). */
     fun stopSpeaking() {
@@ -562,7 +577,8 @@ object VoiceEngine {
 class VoiceForegroundService : Service() {
 
     companion object {
-        const val CHANNEL = "voice"
+        /** 2026-11-10: 접히지 않고 [종료]가 보이게 중요도를 올린 새 채널(소리·진동 없음). */
+        const val CHANNEL = "voice_live"
         private const val NOTIFICATION_ID = 5001
         const val ACTION_STOP = "kr.ssbin.assistant.VOICE_STOP"
         private const val LONG_PRESS_MS = 1000L
@@ -582,7 +598,11 @@ class VoiceForegroundService : Service() {
             return START_NOT_STICKY
         }
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "음성 대화", NotificationManager.IMPORTANCE_LOW))
+        runCatching { nm.deleteNotificationChannel("voice") }
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "음성 대화 중", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            setSound(null, null)
+            enableVibration(false)
+        })
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(),
             if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
         setupMediaSession()
@@ -598,9 +618,14 @@ class VoiceForegroundService : Service() {
             .setAction(ACTION_STOP).putExtra("reason", "notification"),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("음성 대화 중")
-            .setContentText("종료하려면 [종료] · 볼륨 버튼 길게 · 이어폰 버튼")
+            .setSmallIcon(R.drawable.ic_rec)
+            .setColor(0xFFE03131.toInt())
+            .setContentTitle("● REC 음성 대화 중")
+            .setContentText("[종료]로 끝내기 · 볼륨 버튼 길게 · 이어폰 버튼")
+            .setUsesChronometer(true)
+            .setWhen(System.currentTimeMillis())
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setContentIntent(open)
             .addAction(0, "종료", stop)

@@ -86,8 +86,12 @@ object WindowGuard {
     /**
      * §2.4 소리로 말하기 조건: 방해 금지·멈춤 아님 + 적극 개입 시간대, 무음·진동 모드가 아니거나 이어폰 연결, 통화 중 아님.
      */
+    /** 설정 '음성 알림 끄기'(오늘만·계속). 적극 개입 시간대의 '목소리로 말하기'보다 우선한다. */
+    fun voiceMuted(context: Context): Boolean = System.currentTimeMillis() < Prefs.get(context).voiceMuteUntil
+
     fun canSpeak(context: Context): Boolean {
         if (block(context, "tts")) return false
+        if (voiceMuted(context)) return false
         if (active(context) == null) return false
         val audio = context.getSystemService(AudioManager::class.java) ?: return false
         if (audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION ||
@@ -113,88 +117,96 @@ object WindowGuard {
 /** 비서가 먼저 거는 말을 소리로 읽는다(§2.4, 기기 음성). 조건은 매번 WindowGuard.canSpeak 로 다시 확인한다. */
 object Speaker {
 
+    /** 2026-11-10: 메시지가 여러 개 와도 겹치지 않게 한 줄로 차례대로 말한다(한 번에 하나, 끝나야 다음). */
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     @Volatile
     private var tts: TextToSpeech? = null
-    private var pending: String? = null
 
     /**
-     * v3.6 §5: 비서 목소리(ElevenLabs, 서버를 거침)를 먼저 쓰고, 안 되면 기기 음성. 음성 대화 중이면 읽지 않는다(그쪽이 말한다).
+     * 비서 목소리(ElevenLabs, 서버를 거침)를 먼저 쓰고, 안 되면 기기 음성. 말하면 true(그러면 진동 푸시 대신 조용한 알림).
+     * 음성 대화 중·채팅 화면을 보는 중·음성 알림 끔이면 말하지 않는다.
      */
-    /** 말하면 true(그러면 진동 알림을 띄우지 않는다). */
     fun speak(context: Context, text: String, messageId: Long? = null): Boolean {
-        if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active) return false
+        if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active ||
+            kr.ssbin.assistant.chat.ChatVisibility.visible
+        ) return false
         val app = context.applicationContext
-        if (messageId != null) {
-            Thread {
-                val ok = runCatching {
-                    val bytes = kotlinx.coroutines.runBlocking { ApiClient.get(app).messageAudio(messageId).bytes() }
-                    val f = java.io.File.createTempFile("say", ".mp3", app.cacheDir)
-                    f.writeBytes(bytes)
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        if (!WindowGuard.canSpeak(app)) { f.delete(); return@post }
-                        val p = android.media.MediaPlayer()
-                        runCatching {
-                            p.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
-                            p.setDataSource(f.path)
-                            p.setOnCompletionListener { it.release(); f.delete() }
-                            p.prepare()
-                            p.start()
-                        }.onFailure { p.release(); f.delete() }
-                    }
-                }.isSuccess
-                if (!ok) deviceSpeak(app, text)
-            }.start()
-            return true
+        worker.execute {
+            // 차례가 왔을 때 다시 확인(그 사이 채팅을 열었거나 음성을 껐을 수 있다)
+            if (!WindowGuard.canSpeak(app) || kr.ssbin.assistant.chat.ChatVisibility.visible ||
+                kr.ssbin.assistant.voice.VoiceEngine.active
+            ) return@execute
+            val ok = messageId != null && runCatching { playServerAudio(app, messageId) }.getOrDefault(false)
+            if (!ok) deviceSpeakBlocking(app, text)
         }
-        deviceSpeak(app, text)
         return true
     }
 
-    /** 깨우기 질문: 알람 음량(USAGE_ALARM)으로 기기 음성. 무음 모드에서도 들린다. */
+    /** 깨우기 질문: 알람 소리가 먼저 울린 뒤 같은 줄에서 차례대로. 음성 알림 끔이면 말하지 않는다(알람 소리는 그대로). */
     fun speakAlarm(context: Context, text: String) {
         val app = context.applicationContext
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            var engine: TextToSpeech? = null
-            engine = TextToSpeech(app) init@{ status ->
-                val e = engine ?: return@init
-                if (status == TextToSpeech.SUCCESS) {
-                    e.language = Locale.KOREAN
-                    e.setAudioAttributes(android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
-                    e.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {}
-                        override fun onDone(utteranceId: String?) { e.shutdown() }
-                        @Deprecated("Deprecated in Java")
-                        override fun onError(utteranceId: String?) { e.shutdown() }
-                    })
-                    e.speak(text, TextToSpeech.QUEUE_FLUSH, null, "wake-${System.currentTimeMillis()}")
-                } else {
-                    e.shutdown()
-                }
-            }
-        }, 4000) // 알람 소리가 먼저 울린 뒤
+        if (WindowGuard.voiceMuted(app)) return
+        worker.execute {
+            Thread.sleep(4000)
+            if (!WindowGuard.voiceMuted(app)) deviceSpeakBlocking(app, text)
+        }
     }
 
-    private fun deviceSpeak(context: Context, text: String) {
-        if (!WindowGuard.canSpeak(context)) return
-        val engine = tts
-        if (engine != null) {
-            engine.speak(text, TextToSpeech.QUEUE_ADD, null, "proactive-${System.currentTimeMillis()}")
-            return
+    /** mp3 를 받아 끝까지 재생하고 돌아온다. */
+    private fun playServerAudio(app: Context, messageId: Long): Boolean {
+        val bytes = kotlinx.coroutines.runBlocking { ApiClient.get(app).messageAudio(messageId).bytes() }
+        val f = java.io.File.createTempFile("say", ".mp3", app.cacheDir)
+        f.writeBytes(bytes)
+        val done = java.util.concurrent.CountDownLatch(1)
+        var started = false
+        main.post {
+            val p = android.media.MediaPlayer()
+            runCatching {
+                p.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
+                p.setDataSource(f.path)
+                p.setOnCompletionListener { it.release(); f.delete(); done.countDown() }
+                p.setOnErrorListener { mp, _, _ -> mp.release(); f.delete(); done.countDown(); true }
+                p.prepare()
+                p.start()
+                started = true
+            }.onFailure { p.release(); f.delete(); done.countDown() }
         }
-        pending = text
-        val app = context.applicationContext
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            tts = TextToSpeech(app) { status ->
+        done.await(120, java.util.concurrent.TimeUnit.SECONDS)
+        return started
+    }
+
+    private fun ensureTts(app: Context): TextToSpeech? {
+        tts?.let { return it }
+        val ready = java.util.concurrent.CountDownLatch(1)
+        main.post {
+            var e: TextToSpeech? = null
+            e = TextToSpeech(app) { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    tts?.language = Locale.KOREAN
-                    tts?.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
-                    pending?.let { tts?.speak(it, TextToSpeech.QUEUE_ADD, null, "proactive-first") }
+                    e?.language = Locale.KOREAN
+                    e?.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
+                    tts = e
                 }
-                pending = null
+                ready.countDown()
             }
         }
+        ready.await(10, java.util.concurrent.TimeUnit.SECONDS)
+        return tts
+    }
+
+    /** 기기 음성으로 끝까지 말하고 돌아온다. */
+    private fun deviceSpeakBlocking(app: Context, text: String) {
+        val e = ensureTts(app) ?: return
+        val done = java.util.concurrent.CountDownLatch(1)
+        e.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) { done.countDown() }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) { done.countDown() }
+        })
+        if (e.speak(text, TextToSpeech.QUEUE_ADD, null, "say-${System.nanoTime()}") != TextToSpeech.SUCCESS) return
+        done.await(90, java.util.concurrent.TimeUnit.SECONDS)
     }
 }
 
