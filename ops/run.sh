@@ -41,9 +41,11 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst FROM (VALUES 1);
-SELECT 'VS' AS q, id, FORMATDATETIME(started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS en, end_reason FROM voice_sessions ORDER BY id DESC LIMIT 5;
-SELECT 'WU' AS q, FORMATDATETIME(updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd, id FROM time_windows;
+SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst, (SELECT value FROM settings WHERE key='active.paused_until') AS paused FROM (VALUES 1);
+SELECT 'D' AS q, id, app_version, FORMATDATETIME(last_heartbeat,'MM-dd HH:mm','en','Asia/Seoul') AS hb FROM devices ORDER BY last_heartbeat DESC LIMIT 1;
+SELECT 'W_RUNS' AS q, window_id, FORMATDATETIME(occ_start,'MM-dd HH:mm','en','Asia/Seoul') AS occ, alarm_count, FORMATDATETIME(acked_at,'HH:mm','en','Asia/Seoul') AS acked, llm_count, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS ended FROM time_window_runs ORDER BY id DESC LIMIT 2;
+SELECT 'M' AS q, m.id, m.kind, m.silent, FORMATDATETIME(m.created_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS at FROM messages m WHERE m.role='assistant' AND m.created_at >= DATEADD('MINUTE', -60, CURRENT_TIMESTAMP) ORDER BY m.id;
+SELECT 'B' AS q, b.id, b.kind, b.status, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(b.end_at,'HH:mm','en','Asia/Seoul') AS en, b.lead_minutes AS lead FROM blocks b WHERE b.status <> 'cancelled' AND b.end_at >= DATEADD('MINUTE', -60, CURRENT_TIMESTAMP) AND b.start_at < DATEADD('HOUR', 2, CURRENT_TIMESTAMP) ORDER BY b.start_at;
 SQL
 
 while IFS= read -r q; do
