@@ -218,14 +218,23 @@ class InterventionActivity : ComponentActivity() {
                         color = Color.White, textAlign = TextAlign.Center)
                 }
             }
-            // 2026-11-10: 알림 전에 이미 끝냈으면 [이미 완료함]
+            // 2026-11-10: 알림 전에 이미 끝냈으면 [이미 완료함], 오늘은 못 하면 [지금 할 수 없음](하루 이상 뒤 빈 시간으로)
             if (!imeVisible) {
-                OutlinedButton(
-                    onClick = { onDonePressed() },
-                    enabled = current != null,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
-                ) {
-                    Text("이미 완료함", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = { onDonePressed() },
+                        enabled = current != null,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) {
+                        Text("이미 완료함", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = { onCannotPressed() },
+                        enabled = current != null,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) {
+                        Text("지금 할 수 없음", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
                 }
             }
             // v3.6 §2.3: 적극 개입 시간대에는 [10분만 조용히](그 시간대를 잠깐 기본 동작으로)
@@ -446,6 +455,14 @@ class InterventionActivity : ComponentActivity() {
         if (spokenFor == current.id || lines.isNotEmpty() || WindowGuard.active(this) != null) return
         spokenFor = current.id
         engine.speak(current.ttsText, TextToSpeech.QUEUE_FLUSH, null, "intervention-${current.id}")
+    }
+
+    private fun onCannotPressed() {
+        val current = entity.value ?: return
+        handled = true
+        val app = applicationContext
+        Thread { InterventionController.onUserAction(app, current, "cannot_now") }.start()
+        finish()
     }
 
     private fun onDonePressed() {

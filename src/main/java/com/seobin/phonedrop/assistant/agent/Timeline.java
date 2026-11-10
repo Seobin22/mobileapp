@@ -207,6 +207,36 @@ public class Timeline {
         return false;
     }
 
+    /**
+     * 2026-11-10 [지금 할 수 없음]: from 이후(최대 14일) 활동 시간 안에서 minutes 분이 이어진 첫 빈 시간의 시작(5분 단위로 올림).
+     * 이미 있는 블록(금지 구간 포함)·조용한 구간은 피한다. exceptBlockId 는 옮길 그 블록 자신.
+     */
+    public java.util.Optional<Instant> firstFreeSlot(Instant from, int minutes, Long exceptBlockId) {
+        Instant to = from.plus(Duration.ofDays(MAX_DAYS));
+        List<Store.Block> active = store.activeBlocks();
+        for (LocalDate d = time.logicalDay(from); !d.isAfter(time.logicalDay(to.minusSeconds(1))); d = d.plusDays(1)) {
+            TimeUtil.Window window = time.activeWindow(d);
+            Instant s = max(window.start(), from);
+            Instant e = min(window.end(), to);
+            if (!s.isBefore(e)) {
+                continue;
+            }
+            List<TimeUtil.Window> busy = new ArrayList<>();
+            active.stream().filter(b -> exceptBlockId == null || b.id() != exceptBlockId)
+                    .filter(b -> b.blockedStart().isBefore(e) && s.isBefore(b.blockedEnd()))
+                    .forEach(b -> busy.add(new TimeUtil.Window(b.blockedStart(), b.blockedEnd())));
+            busy.addAll(time.quietWindows(s, e));
+            for (TimeUtil.Window f : subtract(s, e, busy)) {
+                long epochMin = (f.start().getEpochSecond() + 299) / 300 * 300;
+                Instant start = Instant.ofEpochSecond(epochMin);
+                if (!start.plus(Duration.ofMinutes(minutes)).isAfter(f.end())) {
+                    return java.util.Optional.of(start);
+                }
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     /** get_load_summary (빌드문서 v2 §5.1). */
     public Map<String, Object> loadSummary() {
         Instant now = clock.now();

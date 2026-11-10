@@ -359,6 +359,14 @@ public class ContextBuilder {
                 .orElse("오늘 남은 고정 일정 없음");
     }
 
+    private String hmDay(String iso) {
+        try {
+            return time.dayText(TimeUtil.parse(iso));
+        } catch (RuntimeException e) {
+            return iso;
+        }
+    }
+
     private String hmOf(String iso) {
         try {
             return time.hm(TimeUtil.parse(iso));
@@ -442,6 +450,14 @@ public class ContextBuilder {
                     + " 작업을 알림 전에 이미 시작했다고 알림(시작하라고 다시 권하지 말고, 체크인 예약 등 동행)"
                     : "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
                     + " 작업을 시작함(체크인 예약 등 동행)";
+            case "cannot_now" -> ref.hasNonNull("moved_to")
+                    ? "cannot_now: 사용자가 알림 화면에서 [지금 할 수 없음]을 눌렀다. 코드가 블록#" + ref.path("block_id").asLong()
+                    + "을 하루 이상 뒤 빈 시간 " + hmDay(ref.path("moved_to").asString("")) + "로 옮겨 뒀다(이미 있는 일정은 밀지 않음)."
+                    + " 다시 시키지 말고, 채팅으로 그 시각을 알리며 그대로 둘지 다른 때로 고칠지 짧게 묻는다(send_message kind=proactive 1개)."
+                    + " 마감이 그보다 빠르면 함께 알린다"
+                    : "cannot_now: 사용자가 [지금 할 수 없음]을 눌렀다. 블록#" + ref.path("block_id").asLong()
+                    + (ref.path("series").asBoolean(false) ? "은 반복 일정이라 이번 회차만 놓침으로 기록했다(다음 회차는 그대로). 짧게 알리기만 한다"
+                    : "을 옮길 빈 시간이 14일 안에 없어 놓침으로 기록했다. 언제 할지 짧게 묻는다");
             case "block_ended" -> "already_done".equals(ref.path("reason").asString(""))
                     ? "block_ended: 사용자가 알림 화면에서 [이미 완료함]을 눌렀다 — 블록#" + ref.path("block_id").asLong()
                     + "을 알림 전에 이미 끝냈다(done). 다시 시키지 말고, 할 일이 다 끝났는지 애매하면 짧게 묻고 다음 일을 챙긴다"

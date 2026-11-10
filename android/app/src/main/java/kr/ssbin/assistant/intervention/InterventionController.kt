@@ -162,6 +162,15 @@ object InterventionController {
         ActionQueue.enqueue(context, if (already) "already_started" else "start", entity.id, entity.blockId)
     }
 
+    /** [이미 완료함]·[지금 할 수 없음]: 모든 효과를 풀고 서버에 알린다(서버가 완료·옮기기를 한다). */
+    fun onUserAction(context: Context, entity: InterventionEntity, type: String) {
+        kr.ssbin.assistant.lock.Lock.off(context)
+        Notifier.cancel(context)
+        Reshow.cancel(context)
+        AppDatabase.dao(context).endIntervention(entity.id, localId(entity.blockId), System.currentTimeMillis())
+        ActionQueue.enqueue(context, type, entity.id, entity.blockId)
+    }
+
     /** [이미 완료함]: 알림 전에 끝냈다. 모든 효과를 풀고 서버에 알린다. */
     fun onUserDone(context: Context, entity: InterventionEntity) {
         kr.ssbin.assistant.lock.Lock.off(context)

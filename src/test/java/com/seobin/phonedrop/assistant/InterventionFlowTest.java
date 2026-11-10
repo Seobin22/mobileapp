@@ -333,4 +333,22 @@ class InterventionFlowTest extends AssistantTestBase {
         runUntil("2026-11-02T10:30");
         assertThat(push.ofType("intervention.level")).hasSize(pushes);
     }
+
+    @Test
+    void cannotNowMovesToFirstFreeSlotFromTomorrow() {
+        long[] ids = createBlock("보고서", "2026-11-02T10:00", 60);
+        createBlock("내일 아침 일", "2026-11-03T07:30", 60); // 내일 기상(07:30) 직후는 이미 차 있다
+        runUntil("2026-11-02T10:01");
+        assertThat(action("cannot_now", onlyIntervention().id(), ids[1], "c1").get("status")).isEqualTo("ok");
+        Store.Block b = block(ids[1]);
+        assertThat(b.status()).isEqualTo("planned");
+        assertThat(b.start()).isEqualTo(at("2026-11-03T08:30")); // 다음 날, 이미 있는 일정을 밀지 않고 바로 뒤 빈 시간
+        assertThat(db.jdbc().sql("SELECT end_reason FROM interventions WHERE block_id = ?").param(ids[1])
+                .query(String.class).single()).isEqualTo("cannot_now");
+        assertThat(db.jdbc().sql("SELECT trigger_ref FROM turns WHERE trigger = 'cannot_now'").query(String.class).single())
+                .contains("moved_to");
+        int pushes = push.ofType("intervention.level").size();
+        runUntil("2026-11-02T11:30");
+        assertThat(push.ofType("intervention.level")).hasSize(pushes); // 오늘은 더 울리지 않는다
+    }
 }

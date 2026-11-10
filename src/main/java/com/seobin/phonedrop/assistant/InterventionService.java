@@ -858,6 +858,7 @@ public class InterventionService {
             case "start" -> start(interventionId, blockId, false);
             case "already_started" -> start(interventionId, blockId, true);
             case "already_done" -> alreadyDone(interventionId, blockId);
+            case "cannot_now" -> cannotNow(interventionId, blockId);
             case "dismiss" -> dismiss(interventionId, blockId);
             case "emergency_unlock" -> emergencyUnlock(interventionId, blockId);
             case "snooze_request" -> snoozeRequest(interventionId, blockId);
@@ -1032,6 +1033,67 @@ public class InterventionService {
         turns.enqueue("block_ended", ref, TurnQueue.PRIORITY_DEFAULT);
         plan.bumpAndSync();
         return "ok";
+    }
+
+    /**
+     * 2026-11-10(사용자 요청) [지금 할 수 없음]: 하루 이상 미룬다. 적어도 다음 날부터, 이미 있는 일정을 밀지 않고 빈 시간 중 가장
+     * 이른 곳으로 옮겨 두고(최대 14일), 비서가 채팅으로 "여기로 옮겨 뒀어요, 고칠까요?"라고 묻는다(cannot_now turn).
+     * 반복 일정 회차는 다음 회차가 있으니 옮기지 않고 오늘 회차만 놓침.
+     */
+    private String cannotNow(Long interventionId, Long blockId) {
+        Optional<Store.Intervention> found = resolve(interventionId, blockId);
+        Long target = blockId != null ? blockId : found.map(Store.Intervention::blockId).orElse(null);
+        if (target == null) {
+            return "ok";
+        }
+        Store.Block b = store.block(target).orElse(null);
+        if (b == null || b.travel() || !List.of("planned", "nudging", "missed").contains(b.status())) {
+            return "ok";
+        }
+        Instant now = clock.now();
+        found.filter(Store.Intervention::active).ifPresent(i -> {
+            end(i, "expired", "cannot_now", "expired");
+            store.log(i.id(), i.blockId(), i.level(), now, "cannot_now");
+        });
+        cancelBlockJobs(target);
+        Long seriesId = db.jdbc().sql("SELECT series_id FROM blocks WHERE id = ?").param(target).query(Long.class)
+                .optional().orElse(null);
+        ObjectNode ref = Json.object();
+        ref.put("block_id", target);
+        java.util.Optional<Instant> slot = seriesId != null ? java.util.Optional.empty()
+                : timeline.getObject().firstFreeSlot(time.activeWindow(time.logicalDay(now).plusDays(1)).start(),
+                        (int) Math.max(5, Duration.between(b.start(), b.end()).toMinutes()), target);
+        if (slot.isPresent()) {
+            Instant start = slot.get();
+            Instant end = start.plus(Duration.between(b.start(), b.end()));
+            db.update("""
+                            UPDATE blocks SET status = 'planned', start_at = ?, end_at = ?, version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                    AssistantDb.ts(start), AssistantDb.ts(end), target);
+            ObjectNode d = Json.object();
+            d.put("from_start", time.iso(b.start()));
+            d.put("to_start", time.iso(start));
+            d.put("reason", "지금 할 수 없음");
+            logs.add(target, "moved", "user", time.hm(b.start()) + "→" + time.dayText(start) + " (지금 할 수 없음)", d);
+            scheduleBlockJobs(store.block(target).orElseThrow());
+            ref.put("moved_to", time.iso(start));
+        } else {
+            store.setBlockStatus(target, "missed");
+            logs.add(target, "missed", "user", seriesId != null ? "지금 할 수 없음(반복 일정 — 이번 회차만 놓침)"
+                    : "지금 할 수 없음(14일 안에 빈 시간이 없어 놓침)");
+            coverage.onBlockClosed(target);
+            ref.put("series", seriesId != null);
+        }
+        turns.enqueue("cannot_now", ref, TurnQueue.PRIORITY_DEFAULT);
+        plan.bumpAndSync();
+        return "ok";
+    }
+
+    private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Timeline> timeline;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setTimeline(org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Timeline> timeline) {
+        this.timeline = timeline;
     }
 
     /** v4 §2.4: 비상 해제. 확인 없이 바로: suspended(emergency), 블록 missed, block_missed(reason=emergency). */
