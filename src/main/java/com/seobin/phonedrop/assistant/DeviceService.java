@@ -67,6 +67,11 @@ public class DeviceService {
         if (updated == 0) {
             throw ApiException.notFound("등록되지 않은 기기입니다: " + deviceId);
         }
+        // 2026-11-10: 앱 버전을 하트비트마다 갱신(예전엔 등록 때만 받아 업데이트 뒤에도 옛 버전으로 남았다)
+        String version = req.path("app_version").asString("").trim();
+        if (!version.isEmpty() && version.length() <= 50) {
+            db.update("UPDATE devices SET app_version = ? WHERE id = ?", version, deviceId);
+        }
         for (JsonNode event : req.path("events")) {
             String at = event.path("at").asString("");
             String type = event.path("type").asString("unknown");

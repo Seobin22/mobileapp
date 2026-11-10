@@ -24,6 +24,7 @@ data class RegisterResponse(val device_id: Long)
 @Serializable
 data class HeartbeatRequest(
     val device_id: Long,
+    val app_version: String = kr.ssbin.assistant.BuildConfig.VERSION_NAME,
     val capabilities: Map<String, Boolean>,
     val events: List<JsonObject> = emptyList(),
 )
