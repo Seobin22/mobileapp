@@ -128,7 +128,7 @@ object Speaker {
      * 비서 목소리(ElevenLabs, 서버를 거침)를 먼저 쓰고, 안 되면 기기 음성. 말하면 true(그러면 진동 푸시 대신 조용한 알림).
      * 음성 대화 중·채팅 화면을 보는 중·음성 알림 끔이면 말하지 않는다.
      */
-    fun speak(context: Context, text: String, messageId: Long? = null): Boolean {
+    fun speak(context: Context, text: String, messageId: Long? = null, textAudio: Boolean = false): Boolean {
         if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active ||
             kr.ssbin.assistant.chat.ChatVisibility.visible
         ) return false
@@ -138,7 +138,17 @@ object Speaker {
             if (!WindowGuard.canSpeak(app) || kr.ssbin.assistant.chat.ChatVisibility.visible ||
                 kr.ssbin.assistant.voice.VoiceEngine.active
             ) return@execute
-            val ok = messageId != null && runCatching { playServerAudio(app, messageId) }.getOrDefault(false)
+            val ok = runCatching {
+                when {
+                    messageId != null -> playServerAudio(app) { ApiClient.get(app).messageAudio(messageId).bytes() }
+                    textAudio -> playServerAudio(app) {
+                        ApiClient.get(app).textAudio(kotlinx.serialization.json.buildJsonObject {
+                            put("text", kotlinx.serialization.json.JsonPrimitive(text))
+                        }).bytes()
+                    }
+                    else -> false
+                }
+            }.getOrDefault(false)
             if (!ok) deviceSpeakBlocking(app, text)
         }
         return true
@@ -155,8 +165,8 @@ object Speaker {
     }
 
     /** mp3 를 받아 끝까지 재생하고 돌아온다. */
-    private fun playServerAudio(app: Context, messageId: Long): Boolean {
-        val bytes = kotlinx.coroutines.runBlocking { ApiClient.get(app).messageAudio(messageId).bytes() }
+    private fun playServerAudio(app: Context, fetch: suspend () -> ByteArray): Boolean {
+        val bytes = kotlinx.coroutines.runBlocking { fetch() }
         val f = java.io.File.createTempFile("say", ".mp3", app.cacheDir)
         f.writeBytes(bytes)
         val done = java.util.concurrent.CountDownLatch(1)

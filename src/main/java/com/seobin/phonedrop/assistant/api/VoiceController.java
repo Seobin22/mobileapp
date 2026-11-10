@@ -115,6 +115,13 @@ public class VoiceController {
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("audio/mpeg")).body(voice.speakMessage(id));
     }
 
+    /** 블록 알람 문구를 비서 목소리로(mp3). {text} */
+    @PostMapping(value = "/v1/voice/tts", produces = "audio/mpeg")
+    public ResponseEntity<byte[]> textAudio(@RequestBody JsonNode body) {
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("audio/mpeg"))
+                .body(voice.speakText(body.path("text").asString("")));
+    }
+
     // ---------------------------------------------------------------- 관리 화면 '음성 연결'
 
     @GetMapping("/v1/admin/voice_status")

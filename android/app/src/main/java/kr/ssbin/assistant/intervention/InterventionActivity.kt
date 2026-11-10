@@ -442,7 +442,8 @@ class InterventionActivity : ComponentActivity() {
     private fun speakIfNeeded() {
         val current = entity.value ?: return
         val engine = tts ?: return
-        if (spokenFor == current.id || lines.isNotEmpty()) return
+        // 적극 개입 시간대에는 알림이 이미 비서 목소리로 말했다(겹치지 않게 화면에서는 다시 읽지 않는다)
+        if (spokenFor == current.id || lines.isNotEmpty() || WindowGuard.active(this) != null) return
         spokenFor = current.id
         engine.speak(current.ttsText, TextToSpeech.QUEUE_FLUSH, null, "intervention-${current.id}")
     }

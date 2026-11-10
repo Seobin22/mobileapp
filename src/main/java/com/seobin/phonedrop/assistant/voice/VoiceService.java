@@ -305,6 +305,19 @@ public class VoiceService {
         return mp3;
     }
 
+    /** 2026-11-10: 블록 알람 문구처럼 메시지가 아닌 짧은 글을 비서 목소리로(최대 200자). */
+    public byte[] speakText(String text) {
+        if (text == null || text.isBlank()) {
+            throw ApiException.badRequest("text 가 필요합니다");
+        }
+        if (!speech.configured()) {
+            throw ApiException.notFound("ElevenLabs 키가 없습니다");
+        }
+        String t = text.strip();
+        return speech.synthesize(t.length() > 200 ? t.substring(0, 200) : t, settings.getString("voice.voice_id"),
+                settings.getDouble("voice.speed"));
+    }
+
     // ------------------------------------------------------------------ 관리 화면 (§3.7)
 
     /** 오늘 합계와 대략 비용. 요금은 요금제마다 달라 '대략'(DECISIONS). */

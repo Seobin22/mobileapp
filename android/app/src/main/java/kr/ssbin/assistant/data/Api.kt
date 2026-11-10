@@ -113,6 +113,9 @@ interface AssistantApi {
     @GET("v1/voice/messages/{id}/audio")
     suspend fun messageAudio(@Path("id") id: Long): okhttp3.ResponseBody
 
+    @POST("v1/voice/tts")
+    suspend fun textAudio(@Body body: JsonObject): okhttp3.ResponseBody
+
     // v3.5 기록·기억
     @POST("v1/outcome-cards/{id}")
     suspend fun submitCard(@Path("id") id: Long, @Body body: JsonObject): JsonObject

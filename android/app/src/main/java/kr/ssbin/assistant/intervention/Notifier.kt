@@ -46,6 +46,12 @@ object Notifier {
             .setContentIntent(pending)
         // v4 §1: L1 은 높은 중요도 알림(탭하면 개입 화면), L3·L4 는 풀스크린. 로컬 백업은 L3 로 온다.
         if (entity.level >= 3) builder.setFullScreenIntent(pending, true)
+        // 2026-11-10: 적극 개입 시간대에는 블록 알람도 진동 대신 비서 목소리(알람 음량)로 말한다. 다시 뜰 때마다 다시 말한다.
+        if (WindowGuard.active(context) != null &&
+            Speaker.speak(context, entity.ttsText.ifBlank { entity.screenText.ifBlank { entity.taskTitle + " 시간이에요" } }, null, true)
+        ) {
+            builder.setSilent(true)
+        }
         // 만료 시각이 지나면 intervention.end 를 못 받아도 알림이 스스로 사라진다.
         entity.expireAt?.let {
             val left = java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() - System.currentTimeMillis()
