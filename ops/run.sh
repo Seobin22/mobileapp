@@ -42,6 +42,8 @@ fi
 
 cat > "$WORK/queries.sql" <<'SQL'
 SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst FROM (VALUES 1);
+SELECT 'VS' AS q, id, FORMATDATETIME(started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS en, end_reason FROM voice_sessions ORDER BY id DESC LIMIT 5;
+SELECT 'WU' AS q, FORMATDATETIME(updated_at,'MM-dd HH:mm','en','Asia/Seoul') AS upd, id FROM time_windows;
 SQL
 
 while IFS= read -r q; do
