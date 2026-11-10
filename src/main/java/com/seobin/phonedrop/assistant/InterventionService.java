@@ -857,6 +857,7 @@ public class InterventionService {
         String status = switch (type) {
             case "start" -> start(interventionId, blockId, false);
             case "already_started" -> start(interventionId, blockId, true);
+            case "already_done" -> alreadyDone(interventionId, blockId);
             case "dismiss" -> dismiss(interventionId, blockId);
             case "emergency_unlock" -> emergencyUnlock(interventionId, blockId);
             case "snooze_request" -> snoozeRequest(interventionId, blockId);
@@ -997,6 +998,40 @@ public class InterventionService {
             scheduleBlockJobs(store.block(b.id()).orElseThrow());
         }
         plan.bumpAndSync();
+    }
+
+    /**
+     * 2026-11-10(사용자 요청) [이미 완료함]: 알림 전에 이미 끝냈다. 개입을 끝내고(acked, already_done) 블록을 done 으로,
+     * 실제 시작 = 예정 시작(지금보다 앞이면), 실제 끝 = 지금. 비서가 다음 일을 챙기도록 block_ended(reason=already_done).
+     */
+    private String alreadyDone(Long interventionId, Long blockId) {
+        Optional<Store.Intervention> found = resolve(interventionId, blockId);
+        Long target = blockId != null ? blockId : found.map(Store.Intervention::blockId).orElse(null);
+        if (target == null) {
+            return "ok";
+        }
+        Store.Block b = store.block(target).orElse(null);
+        if (b == null || !List.of("planned", "nudging", "started", "missed").contains(b.status())) {
+            return "ok";
+        }
+        Instant now = clock.now();
+        found.filter(Store.Intervention::active).ifPresent(i -> {
+            end(i, "acked", "already_done", "acked");
+            store.log(i.id(), i.blockId(), i.level(), now, "already_done");
+        });
+        db.update("""
+                        UPDATE blocks SET status = 'done', actual_start = COALESCE(actual_start, LEAST(start_at, ?)),
+                        actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                AssistantDb.ts(now), AssistantDb.ts(now), target);
+        cancelBlockJobs(target);
+        logs.add(target, "ended", "user", "이미 완료함(알림 전에 끝냄)");
+        coverage.onBlockClosed(target);
+        ObjectNode ref = Json.object();
+        ref.put("block_id", target);
+        ref.put("reason", "already_done");
+        turns.enqueue("block_ended", ref, TurnQueue.PRIORITY_DEFAULT);
+        plan.bumpAndSync();
+        return "ok";
     }
 
     /** v4 §2.4: 비상 해제. 확인 없이 바로: suspended(emergency), 블록 missed, block_missed(reason=emergency). */

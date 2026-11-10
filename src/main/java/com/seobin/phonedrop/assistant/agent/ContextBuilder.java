@@ -442,7 +442,10 @@ public class ContextBuilder {
                     + " 작업을 알림 전에 이미 시작했다고 알림(시작하라고 다시 권하지 말고, 체크인 예약 등 동행)"
                     : "block_started: 사용자가 [시작]을 눌러 블록#" + ref.path("block_id").asLong()
                     + " 작업을 시작함(체크인 예약 등 동행)";
-            case "block_ended" -> "fixed_block".equals(ref.path("reason").asString(""))
+            case "block_ended" -> "already_done".equals(ref.path("reason").asString(""))
+                    ? "block_ended: 사용자가 알림 화면에서 [이미 완료함]을 눌렀다 — 블록#" + ref.path("block_id").asLong()
+                    + "을 알림 전에 이미 끝냈다(done). 다시 시키지 말고, 할 일이 다 끝났는지 애매하면 짧게 묻고 다음 일을 챙긴다"
+                    : "fixed_block".equals(ref.path("reason").asString(""))
                     ? "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong()
                     + "이 새 고정 블록의 준비 시간이 되어 부분 완료(partial)로 끝남"
                     : "block_ended: 진행 중이던 블록#" + ref.path("block_id").asLong() + "의 끝 시각이 됨";

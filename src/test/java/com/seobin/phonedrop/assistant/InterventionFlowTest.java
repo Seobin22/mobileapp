@@ -314,4 +314,23 @@ class InterventionFlowTest extends AssistantTestBase {
         createBlock("보고서 초안", "2026-11-02T10:00", 60);
         assertThat(db.jdbc().sql("SELECT COUNT(*) FROM devices").query(Integer.class).single()).isEqualTo(1);
     }
+
+    @Test
+    void alreadyDoneEndsInterventionAndMarksBlockDone() {
+        long[] ids = createBlock("보고서", "2026-11-02T10:00", 60);
+        runUntil("2026-11-02T10:01");
+        Map<String, Object> r = action("already_done", onlyIntervention().id(), ids[1], "d1");
+        assertThat(r.get("status")).isEqualTo("ok");
+        assertThat(onlyIntervention().status()).isEqualTo("acked");
+        assertThat(onlyIntervention().endReason()).isEqualTo("already_done");
+        Store.Block b = block(ids[1]);
+        assertThat(b.status()).isEqualTo("done");
+        assertThat(b.actualStart()).isEqualTo(at("2026-11-02T10:00"));
+        assertThat(b.actualEnd()).isEqualTo(at("2026-11-02T10:01"));
+        assertThat(db.jdbc().sql("SELECT trigger_ref FROM turns WHERE trigger = 'block_ended'").query(String.class).single())
+                .contains("already_done");
+        int pushes = push.ofType("intervention.level").size();
+        runUntil("2026-11-02T10:30");
+        assertThat(push.ofType("intervention.level")).hasSize(pushes);
+    }
 }

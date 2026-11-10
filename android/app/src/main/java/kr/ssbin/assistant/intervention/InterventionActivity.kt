@@ -218,6 +218,16 @@ class InterventionActivity : ComponentActivity() {
                         color = Color.White, textAlign = TextAlign.Center)
                 }
             }
+            // 2026-11-10: 알림 전에 이미 끝냈으면 [이미 완료함]
+            if (!imeVisible) {
+                OutlinedButton(
+                    onClick = { onDonePressed() },
+                    enabled = current != null,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
+                ) {
+                    Text("이미 완료함", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
             // v3.6 §2.3: 적극 개입 시간대에는 [10분만 조용히](그 시간대를 잠깐 기본 동작으로)
             val activeNow = androidx.compose.runtime.remember(current?.id) {
                 androidx.compose.runtime.mutableStateOf(WindowGuard.active(this@InterventionActivity) != null)
@@ -435,6 +445,14 @@ class InterventionActivity : ComponentActivity() {
         if (spokenFor == current.id || lines.isNotEmpty()) return
         spokenFor = current.id
         engine.speak(current.ttsText, TextToSpeech.QUEUE_FLUSH, null, "intervention-${current.id}")
+    }
+
+    private fun onDonePressed() {
+        val current = entity.value ?: return
+        handled = true
+        val app = applicationContext
+        Thread { InterventionController.onUserDone(app, current) }.start()
+        finish()
     }
 
     private fun onStartPressed(already: Boolean) {
