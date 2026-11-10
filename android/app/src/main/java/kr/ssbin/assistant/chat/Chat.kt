@@ -80,10 +80,10 @@ object Chat {
         }
         if (data["silent"] == "true") return
         // v3.6 §2.4: 적극 개입 시간대에 비서가 먼저 건 말은 조건이 맞으면 소리로 읽는다(앱이 다시 확인).
-        if (data["speak"] == "true") {
-            kr.ssbin.assistant.intervention.Speaker.speak(context, data["text"] ?: data["preview"].orEmpty(),
-                data["message_id"]?.toLongOrNull())
-        }
+        // 2026-11-10: 소리로 말하면 진동 푸시는 띄우지 않는다(채팅에는 쌓인다). 말할 수 없을 때(통화 중 등)만 알림.
+        if (data["speak"] == "true" && kr.ssbin.assistant.intervention.Speaker.speak(context,
+                data["text"] ?: data["preview"].orEmpty(), data["message_id"]?.toLongOrNull())
+        ) return
         if (ChatVisibility.visible) return // 채팅 화면을 보고 있으면 알림을 띄우지 않는다
         if (data["channel"] == CHANNEL_CHECKIN) {
             notify(context, "진행 확인", data["preview"].orEmpty(), CHANNEL_CHECKIN, CHECKIN_NOTIFICATION_ID)

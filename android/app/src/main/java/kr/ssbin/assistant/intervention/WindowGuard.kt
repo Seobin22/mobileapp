@@ -93,8 +93,14 @@ object WindowGuard {
         if (audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION ||
             audio.mode == AudioManager.MODE_RINGTONE
         ) return false
-        return audio.ringerMode == AudioManager.RINGER_MODE_NORMAL || headset(audio)
+        // 2026-11-10(사용자 요청): 적극 개입 시간대에는 무음·진동 모드여도 푸시 대신 목소리로 말한다(깨우기 질문처럼 알람 음량).
+        return true
     }
+
+    /** 적극 개입 시간대 말하기는 알람 음량으로(무음·진동 모드에서도 들린다). */
+    val SPEECH_ATTRIBUTES: android.media.AudioAttributes = android.media.AudioAttributes.Builder()
+        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build()
 
     fun headset(audio: AudioManager): Boolean = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
         it.type in setOf(
@@ -114,8 +120,9 @@ object Speaker {
     /**
      * v3.6 §5: 비서 목소리(ElevenLabs, 서버를 거침)를 먼저 쓰고, 안 되면 기기 음성. 음성 대화 중이면 읽지 않는다(그쪽이 말한다).
      */
-    fun speak(context: Context, text: String, messageId: Long? = null) {
-        if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active) return
+    /** 말하면 true(그러면 진동 알림을 띄우지 않는다). */
+    fun speak(context: Context, text: String, messageId: Long? = null): Boolean {
+        if (text.isBlank() || !WindowGuard.canSpeak(context) || kr.ssbin.assistant.voice.VoiceEngine.active) return false
         val app = context.applicationContext
         if (messageId != null) {
             Thread {
@@ -127,9 +134,7 @@ object Speaker {
                         if (!WindowGuard.canSpeak(app)) { f.delete(); return@post }
                         val p = android.media.MediaPlayer()
                         runCatching {
-                            p.setAudioAttributes(android.media.AudioAttributes.Builder()
-                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                            p.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
                             p.setDataSource(f.path)
                             p.setOnCompletionListener { it.release(); f.delete() }
                             p.prepare()
@@ -139,9 +144,10 @@ object Speaker {
                 }.isSuccess
                 if (!ok) deviceSpeak(app, text)
             }.start()
-            return
+            return true
         }
         deviceSpeak(app, text)
+        return true
     }
 
     /** 깨우기 질문: 알람 음량(USAGE_ALARM)으로 기기 음성. 무음 모드에서도 들린다. */
@@ -183,6 +189,7 @@ object Speaker {
             tts = TextToSpeech(app) { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     tts?.language = Locale.KOREAN
+                    tts?.setAudioAttributes(WindowGuard.SPEECH_ATTRIBUTES)
                     pending?.let { tts?.speak(it, TextToSpeech.QUEUE_ADD, null, "proactive-first") }
                 }
                 pending = null
