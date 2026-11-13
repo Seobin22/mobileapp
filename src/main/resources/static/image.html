@@ -3,21 +3,996 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image</title>
+    <title>dati 상품 이미지</title>
+    <script>
+        // 로그인 쿠키는 seobin.page 에만 붙으므로 서브도메인(image.seobin.page)에서 열면 본 주소로 옮긴다.
+        if (location.hostname !== "seobin.page" && location.hostname.endsWith(".seobin.page")) {
+            location.replace("https://seobin.page/image.html" + location.hash);
+        }
+    </script>
     <style>
-        body { margin: 0; font-family: sans-serif; background: #f1f3f5; color: #212529;
-            min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        main { text-align: center; padding: 16px; }
-        h1 { font-size: 1.6rem; margin: 0 0 8px; }
-        .muted { color: #868e96; }
-        a { color: #1c7ed6; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; background: #f4f5f7; color: #222; font-size: 14px; }
+        header { background: #fff; border-bottom: 1px solid #e3e5e8; padding: 10px 16px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 5; }
+        header h1 { font-size: 17px; margin: 0; flex: 1; }
+        header h1 a { color: inherit; text-decoration: none; }
+        main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+        .hidden { display: none !important; }
+        .muted { color: #868e96; font-size: 12px; }
+        .error { color: #c92a2a; }
+        .ok { color: #2b8a3e; }
+        button { font: inherit; padding: 6px 11px; border: 1px solid #ced4da; background: #fff; border-radius: 6px; cursor: pointer; }
+        button:hover { background: #f1f3f5; }
+        button.primary { background: #1c7ed6; border-color: #1c7ed6; color: #fff; }
+        button.primary:hover { background: #1971c2; }
+        button.danger { color: #c92a2a; }
+        button:disabled { opacity: .5; cursor: default; }
+        button.copy { padding: 2px 6px; font-size: 11px; color: #495057; flex: none; }
+        button.copy.done { color: #2b8a3e; border-color: #2b8a3e; }
+        input[type=text], input[type=password], input:not([type]) { font: inherit; padding: 6px 8px; border: 1px solid #ced4da; border-radius: 6px; min-width: 0; }
+        section.box { background: #fff; border: 1px solid #e3e5e8; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+        section.box > h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+        section.box > h2 .count { color: #868e96; font-weight: normal; font-size: 13px; }
+
+        /* 목록 */
+        .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+        .pcard { background: #fff; border: 1px solid #e3e5e8; border-radius: 10px; overflow: hidden; cursor: pointer; }
+        .pcard:hover { border-color: #1c7ed6; }
+        .pcard .thumb { aspect-ratio: 1; background: #e9ecef center/cover no-repeat; display: flex; align-items: center; justify-content: center; color: #adb5bd; font-size: 30px; }
+        .pcard .body { padding: 8px 10px; }
+        .pcard .name { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+        /* 상품 정보 */
+        .field { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+        .field label { color: #495057; }
+        .purchase { display: grid; grid-template-columns: 1fr 260px; gap: 16px; }
+        .receipt { border: 1px dashed #ced4da; border-radius: 8px; padding: 8px; text-align: center; }
+        .receipt img { max-width: 100%; max-height: 260px; display: block; margin: 0 auto 6px; cursor: zoom-in; }
+        #pName { font-family: ui-monospace, Consolas, monospace; }
+        .sizes-wrap { overflow-x: auto; }
+        table.sizes { border-collapse: collapse; min-width: 900px; width: 100%; }
+        table.sizes th { font-weight: 600; font-size: 12px; color: #495057; padding: 4px; text-align: left; white-space: nowrap; }
+        table.sizes td { padding: 3px; }
+        .cell { display: flex; gap: 3px; align-items: center; }
+        .cell input { width: 100%; }
+        .cell input.req-empty { border-color: #fa5252; background: #fff5f5; }
+        .mat { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; }
+        .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+        .chip { padding: 4px 12px; border-radius: 999px; }
+        .chip.on { background: #1c7ed6; border-color: #1c7ed6; color: #fff; }
+        #saveState { font-size: 12px; }
+
+        /* 이미지 칸 */
+        .drop { border: 2px dashed #adb5bd; border-radius: 10px; padding: 18px; text-align: center; color: #868e96; margin-bottom: 10px; }
+        .drop.over { border-color: #1c7ed6; background: #e7f5ff; color: #1c7ed6; }
+        .uploads div { font-size: 12px; margin: 3px 0; }
+        .uploads progress { width: 160px; vertical-align: middle; }
+        .mgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+        .mcard { border: 1px solid #e3e5e8; border-radius: 10px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+        .mcard .pic { height: 220px; background: #f1f3f5; display: flex; align-items: center; justify-content: center; position: relative; cursor: zoom-in; }
+        .mcard .pic img { max-width: 100%; max-height: 100%; }
+        .mcard .pic .tag { position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .mcard .meta { padding: 8px 10px; flex: 1; }
+        .mcard .mname { font-weight: 600; overflow-wrap: anywhere; margin-bottom: 4px; }
+        .mcard .actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 10px 10px; }
+        .mcard .actions button { padding: 4px 8px; font-size: 12px; }
+        table.info { width: 100%; border-collapse: collapse; font-size: 12px; }
+        table.info th { text-align: left; color: #868e96; font-weight: normal; padding: 2px 6px 2px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+        table.info td { padding: 2px 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+        .src { font-size: 12px; color: #1971c2; margin-bottom: 4px; }
+        .export-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+
+        /* 모달 */
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .modal .panel { background: #fff; border-radius: 12px; padding: 14px; max-width: 1000px; width: 100%; max-height: 100%; overflow: auto; }
+        .modal .panel h3 { margin: 0 0 10px; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+        .modal .panel h3 span { flex: 1; overflow-wrap: anywhere; }
+        .cropbox { position: relative; display: inline-block; user-select: none; touch-action: none; }
+        .cropbox img { display: block; max-width: 100%; max-height: 65vh; }
+        .cropsq { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.55); cursor: move; }
+        .cropsq::after { content: ""; position: absolute; inset: 33.3% 0; border-top: 1px dashed rgba(255,255,255,.6); border-bottom: 1px dashed rgba(255,255,255,.6); }
+        .crop-wrap { text-align: center; overflow: hidden; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+        video { max-width: 100%; max-height: 62vh; background: #000; display: block; margin: 0 auto; }
+        .caps { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; }
+        .caps img { height: 70px; border-radius: 4px; }
+        #viewImg { max-width: 100%; max-height: 80vh; display: block; margin: 0 auto; }
+        kbd { border: 1px solid #ced4da; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 11px; background: #f8f9fa; }
+
+        @media (max-width: 720px) {
+            .purchase { grid-template-columns: 1fr; }
+            .mgrid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
+<header>
+    <h1><a href="#">📸 dati 상품 이미지</a></h1>
+    <span class="muted" id="who"></span>
+    <button id="logoutBtn" class="hidden">로그아웃</button>
+</header>
+
 <main>
-    <h1>🖼️ image.seobin.page</h1>
-    <p class="muted">준비 중인 페이지입니다.</p>
-    <p><a href="https://seobin.page/">seobin.page 로 가기</a></p>
+    <!-- 로그인 -->
+    <section class="box hidden" id="loginView" style="max-width:360px;margin:40px auto">
+        <h2>로그인</h2>
+        <form id="loginForm">
+            <p><input id="lu" placeholder="아이디" autocomplete="username" required style="width:100%"></p>
+            <p><input id="lp" type="password" placeholder="비밀번호" autocomplete="current-password" required style="width:100%"></p>
+            <button class="primary" type="submit">로그인</button>
+            <p class="error" id="loginError"></p>
+            <p class="muted">seobin.page 회원 계정으로 로그인합니다. 계정이 없으면 <a href="/account.html">회원가입</a></p>
+        </form>
+    </section>
+
+    <!-- 상품 목록 -->
+    <div id="listView" class="hidden">
+        <div class="toolbar">
+            <button class="primary" id="newProduct">+ 새 상품</button>
+            <span class="muted" id="usage"></span>
+        </div>
+        <div class="grid" id="productGrid"></div>
+        <p class="muted" id="emptyList"></p>
+    </div>
+
+    <!-- 상품 상세 -->
+    <div id="productView" class="hidden">
+        <div class="toolbar">
+            <button id="backBtn">← 목록</button>
+            <b id="pTitle" style="flex:1;white-space:pre-wrap;overflow-wrap:anywhere"></b>
+            <span id="saveState" class="muted"></span>
+            <button class="danger" id="deleteProduct">상품 삭제</button>
+        </div>
+
+        <section class="box">
+            <h2>사입 정보</h2>
+            <div class="purchase">
+                <div>
+                    <div class="field"><label for="pName">사입명</label><input id="pName" spellcheck="false" autocomplete="off" placeholder="장끼 표기 그대로 (예: 커프스T/검정/FREE)"><span></span></div>
+                    <div class="field"><label for="pStore">매장</label><input id="pStore" autocomplete="off"><span></span></div>
+                    <div class="field"><label for="pCost">원가</label><input id="pCost" inputmode="numeric" autocomplete="off" placeholder="사입가(원)"><span></span></div>
+                    <p class="muted">사입명은 입력한 글자·띄어쓰기·기호를 바꾸지 않고 그대로 저장합니다. 장끼 사진과 나란히 보며 대조하세요.</p>
+                </div>
+                <div class="receipt">
+                    <div id="receiptBox"></div>
+                    <input type="file" id="receiptInput" accept="image/*,.heic,.heif" class="hidden">
+                    <div class="row" style="justify-content:center;margin-top:4px">
+                        <button id="receiptUpload">장끼 사진 올리기</button>
+                        <button id="receiptDownload" class="hidden">원본 받기</button>
+                        <button id="receiptDelete" class="danger hidden">삭제</button>
+                    </div>
+                    <div class="muted" id="receiptState"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="box">
+            <h2>사이즈 <span class="count">단위 cm · 총장 필수</span></h2>
+            <div class="sizes-wrap">
+                <table class="sizes">
+                    <thead><tr id="sizeHead"></tr></thead>
+                    <tbody id="sizeBody"></tbody>
+                </table>
+            </div>
+            <div class="row"><button id="addSize">+ 사이즈 행 추가</button></div>
+        </section>
+
+        <section class="box">
+            <h2>소재</h2>
+            <div id="materialBox"></div>
+        </section>
+
+        <section class="box">
+            <h2>원본 <span class="count" id="cntOriginal"></span></h2>
+            <div class="drop" id="drop">
+                사진·영상을 여기에 끌어다 놓거나 <button id="pickFiles">파일 선택</button>
+                <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.mov" class="hidden">
+                <div class="muted" style="margin-top:6px">원본은 올린 그대로 보관합니다(덮어쓰지 않음). 올리면 자동으로 분석합니다.</div>
+            </div>
+            <div class="uploads" id="uploads"></div>
+            <div class="mgrid" id="gridOriginal"></div>
+        </section>
+
+        <section class="box">
+            <h2>커버 <span class="count" id="cntCover"></span> <span class="count">900×900 · JPG · 장당 2MB 이하</span></h2>
+            <div class="mgrid" id="gridCover"></div>
+        </section>
+
+        <section class="box">
+            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">가로 880px · JPG · 장당 10MB 이하</span></h2>
+            <div class="mgrid" id="gridDetail"></div>
+        </section>
+
+        <section class="box">
+            <h2>내보내기</h2>
+            <div class="export-row" id="exportMethods"></div>
+            <div class="export-row hidden" id="exportScopes">
+                <span id="exportLabel" class="muted"></span>
+                <button data-scope="cover">커버만</button>
+                <button data-scope="detail">상세만</button>
+                <button data-scope="all">전체 (커버+상세)</button>
+            </div>
+            <p class="muted">파일명은 사입명의 첫 부분으로 자동으로 붙습니다. 예: 커프스T_cover1.jpg, 커프스T_detail1.jpg</p>
+        </section>
+    </div>
 </main>
+
+<!-- 커버 자르기 -->
+<div class="modal hidden" id="coverModal">
+    <div class="panel">
+        <h3><span id="coverTitle">커버 만들기</span><button data-close>닫기</button></h3>
+        <div class="crop-wrap"><div class="cropbox" id="cropBox"><img id="cropImg" alt=""><div class="cropsq" id="cropSq"></div></div></div>
+        <div class="row">
+            <label>자르기 크기 <input type="range" id="cropSize" min="20" max="100" value="100"></label>
+            <button id="cropCenter">가운데로</button>
+            <span class="muted" id="cropInfo"></span>
+        </div>
+        <div class="row">
+            <button class="primary" id="cropSave">커버로 저장 (900×900)</button>
+            <span class="muted">네모를 드래그해서 자를 위치를 정하세요.</span>
+            <span id="cropState"></span>
+        </div>
+    </div>
+</div>
+
+<!-- 영상 장면 캡처 -->
+<div class="modal hidden" id="videoModal">
+    <div class="panel">
+        <h3><span id="videoTitle"></span><button data-close>닫기</button></h3>
+        <video id="player" controls playsinline preload="metadata"></video>
+        <div id="videoFallback" class="hidden" style="text-align:center;padding:10px">
+            <p>이 브라우저에서 재생할 수 없는 형식입니다(예: HEVC).</p>
+            <button id="makeProxy">미리보기용 영상 만들기</button> <span class="muted" id="proxyState"></span>
+            <p class="muted">미리보기용은 화면에서 장면을 고르는 데만 쓰고, 캡처는 항상 서버의 원본 영상에서 원본 해상도로 합니다.</p>
+        </div>
+        <div class="row">
+            <button id="prevFrame">◀ 1프레임</button>
+            <button id="nextFrame">1프레임 ▶</button>
+            <b id="frameInfo" style="font-variant-numeric:tabular-nums"></b>
+            <button class="primary" id="captureBtn">📸 이 장면 캡처</button>
+            <span id="captureState"></span>
+        </div>
+        <div class="muted" style="margin-top:6px"><kbd>←</kbd>/<kbd>→</kbd> 프레임 이동 · <kbd>C</kbd> 캡처 · <kbd>Space</kbd> 재생/정지. 캡처한 사진은 원본 칸에 추가됩니다.</div>
+        <div class="caps" id="caps"></div>
+    </div>
+</div>
+
+<!-- 크게 보기 -->
+<div class="modal hidden" id="viewModal">
+    <div class="panel">
+        <h3><span id="viewTitle"></span><button data-close>닫기</button></h3>
+        <img id="viewImg" alt="">
+    </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = "/api/image";
+const state = { product: null, saveTimer: null, exportMethod: null };
+
+const SIZE_COLS = [
+    ["label", "사이즈"], ["total", "총장*"], ["shoulder", "어깨단면"], ["chest", "가슴단면"],
+    ["sleeve", "소매길이"], ["sleeveWidth", "소매단면"], ["armhole", "암홀단면"], ["hem", "밑단단면"]];
+const MATERIALS = [
+    ["lining", "안감", ["있음", "없음", "기모"]],
+    ["stretch", "신축성", ["좋음", "보통", "없음"]],
+    ["sheer", "비침", ["없음", "약간", "있음"]],
+    ["touch", "촉감", ["부드러움", "보통", "까실함"]],
+    ["fit", "핏감", ["타이트", "정사이즈", "루즈"]],
+    ["thickness", "두께감", ["도톰", "보통", "얇음"]]];
+const SEASONS = ["봄/가을", "여름", "겨울"];
+const ORIENT = { 1: "정상", 2: "좌우 반전", 3: "180° 회전", 4: "상하 반전", 5: "전치", 6: "90° 시계방향 회전", 7: "횡전치", 8: "90° 반시계방향 회전" };
+
+// ------------------------------------------------------------ 공통
+function h(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+        if (v == null || v === false) continue;
+        if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+        else if (k === "class") el.className = v;
+        else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+    return el;
+}
+
+async function call(method, url, body) {
+    const opt = { method, headers: {} };
+    if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+    const r = await fetch(url, opt);
+    if (r.status === 401) { showLogin(); throw new Error("로그인이 필요합니다."); }
+    const data = r.headers.get("content-type")?.includes("json") ? await r.json() : null;
+    if (!r.ok) throw new Error(data?.error || `오류 (${r.status})`);
+    return data;
+}
+
+function mb(bytes) { return (bytes / 1048576).toFixed(2) + " MB"; }
+function bytesText(b) { return `${mb(b)} (${Number(b).toLocaleString("en-US")} bytes)`; }
+function icon(ok) { return ok == null ? "" : ok ? " ✅" : " ⚠️"; }
+function trimNum(n, d) { return Number(n.toFixed(d)).toString(); }
+function stamp(t) {
+    const ms = Math.round(t * 1000);
+    return `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+}
+function when(iso) { return iso ? new Date(iso).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : ""; }
+
+async function copyText(text, btn) {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+        const ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = text;
+        document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    }
+    if (btn) { btn.classList.add("done"); btn.textContent = "✓"; setTimeout(() => { btn.classList.remove("done"); btn.textContent = "복사"; }, 900); }
+}
+function copyBtn(getValue) {
+    const b = h("button", { class: "copy", type: "button", title: "복사" }, "복사");
+    b.addEventListener("click", () => copyText(getValue() ?? "", b));
+    return b;
+}
+
+function openModal(id) { $(id).classList.remove("hidden"); }
+function closeModal(id) { $(id).classList.add("hidden"); if (id === "videoModal") { $("player").pause(); $("player").removeAttribute("src"); $("player").load(); } }
+document.querySelectorAll(".modal").forEach(m => {
+    m.addEventListener("click", e => { if (e.target === m || e.target.hasAttribute("data-close")) closeModal(m.id); });
+});
+document.addEventListener("keydown", e => {
+    if (e.key === "Escape") document.querySelectorAll(".modal:not(.hidden)").forEach(m => closeModal(m.id));
+});
+
+// ------------------------------------------------------------ 로그인 · 화면 전환
+function show(view) {
+    for (const v of ["loginView", "listView", "productView"]) $(v).classList.toggle("hidden", v !== view);
+}
+function showLogin() { show("loginView"); $("logoutBtn").classList.add("hidden"); $("who").textContent = ""; }
+
+$("loginForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    $("loginError").textContent = "";
+    const r = await fetch("/api/users/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("lu").value, password: $("lp").value }) });
+    if (!r.ok) { $("loginError").textContent = (await r.json().catch(() => ({}))).error || "로그인 실패"; return; }
+    $("lp").value = "";
+    start();
+});
+$("logoutBtn").addEventListener("click", async () => { await fetch("/api/users/logout", { method: "POST" }); showLogin(); });
+
+async function start() {
+    const r = await fetch("/api/users/me", { cache: "no-store" });
+    if (!r.ok) return showLogin();
+    $("who").textContent = (await r.json()).username;
+    $("logoutBtn").classList.remove("hidden");
+    loadExportMethods();
+    route();
+}
+window.addEventListener("hashchange", () => route());
+
+async function route() {
+    const m = location.hash.match(/^#p=(\d+)$/);
+    if (m) await openProduct(Number(m[1]));
+    else await loadList();
+}
+
+// ------------------------------------------------------------ 상품 목록
+async function loadList() {
+    flushSave();
+    state.product = null;
+    show("listView");
+    const data = await call("GET", `${api}/products`);
+    $("usage").textContent = `사용 ${mb(data.usedBytes)} / ${(data.quotaBytes / 1073741824).toFixed(0)} GB`;
+    const grid = $("productGrid");
+    grid.innerHTML = "";
+    $("emptyList").textContent = data.products.length ? "" : "아직 상품이 없습니다. [+ 새 상품]으로 시작하세요.";
+    for (const p of data.products) {
+        const thumb = h("div", { class: "thumb" }, p.thumb ? "" : "👚");
+        if (p.thumb) thumb.style.backgroundImage = `url("${api}/products/${p.id}/media/${p.thumb}/preview?size=400")`;
+        grid.append(h("div", { class: "pcard", onclick: () => location.hash = `#p=${p.id}` }, thumb,
+            h("div", { class: "body" },
+                h("div", { class: "name" }, p.name || "(사입명 없음)"),
+                h("div", { class: "muted" }, [p.store, p.cost && `${p.cost}원`].filter(Boolean).join(" · ") || " "),
+                h("div", { class: "muted" }, `원본 ${p.original} · 커버 ${p.cover} · 상세 ${p.detail} · ${when(p.createdAt)}`))));
+    }
+}
+$("newProduct").addEventListener("click", async () => {
+    const p = await call("POST", `${api}/products`);
+    location.hash = `#p=${p.id}`;
+});
+
+// ------------------------------------------------------------ 상품 상세
+async function openProduct(id) {
+    flushSave();
+    try { state.product = await call("GET", `${api}/products/${id}`); }
+    catch (e) { alert(e.message); location.hash = ""; return; }
+    show("productView");
+    window.scrollTo(0, 0);
+    const p = state.product;
+    $("pName").value = p.purchase.name;
+    $("pStore").value = p.purchase.store;
+    $("pCost").value = p.purchase.cost;
+    $("saveState").textContent = "";
+    updateTitle();
+    renderReceipt();
+    renderSizes();
+    renderMaterial();
+    renderMedia();
+    $("uploads").innerHTML = "";
+}
+
+function updateTitle() {
+    $("pTitle").textContent = state.product.purchase.name || "(사입명 없음)";
+}
+
+// 입력란에 복사 버튼 붙이기
+for (const id of ["pName", "pStore", "pCost"]) {
+    const input = $(id);
+    input.nextElementSibling.replaceWith(copyBtn(() => input.value));
+    input.addEventListener("input", () => {
+        const key = { pName: "name", pStore: "store", pCost: "cost" }[id];
+        state.product.purchase[key] = input.value; // 사입명은 바꾸지 않고 그대로
+        if (id === "pName") updateTitle();
+        scheduleSave();
+    });
+}
+
+function scheduleSave() {
+    $("saveState").textContent = "저장 대기…";
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(save, 600);
+}
+function flushSave() {
+    if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; save(); }
+}
+async function save() {
+    state.saveTimer = null;
+    const p = state.product;
+    if (!p) return;
+    $("saveState").textContent = "저장 중…";
+    try {
+        await call("PUT", `${api}/products/${p.id}`, { purchase: p.purchase, sizes: p.sizes, material: p.material });
+        $("saveState").textContent = "저장됨 ✓";
+    } catch (e) {
+        $("saveState").textContent = "저장 실패: " + e.message;
+    }
+}
+window.addEventListener("beforeunload", () => {
+    if (state.saveTimer && state.product) {
+        const p = state.product;
+        fetch(`${api}/products/${p.id}`, { method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ purchase: p.purchase, sizes: p.sizes, material: p.material }) });
+    }
+});
+
+$("backBtn").addEventListener("click", () => location.hash = "");
+$("deleteProduct").addEventListener("click", async () => {
+    const p = state.product;
+    if (!confirm(`'${p.purchase.name || "(사입명 없음)"}' 상품과 사진·영상 ${p.media.length}개를 모두 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    await call("DELETE", `${api}/products/${p.id}`);
+    state.saveTimer && clearTimeout(state.saveTimer); state.saveTimer = null;
+    location.hash = "";
+});
+
+// ---- 장끼 사진
+function renderReceipt() {
+    const p = state.product;
+    const box = $("receiptBox");
+    box.innerHTML = "";
+    const has = !!p.purchase.receiptFile;
+    if (has) {
+        const url = `${api}/products/${p.id}/receipt?v=${encodeURIComponent(p.updatedAt)}`;
+        box.append(h("img", { src: url, alt: "장끼", onclick: () => viewImage(url, "장끼 사진") }));
+    } else {
+        box.append(h("div", { class: "muted", style: "padding:30px 0" }, "장끼 사진 없음"));
+    }
+    $("receiptDownload").classList.toggle("hidden", !has);
+    $("receiptDelete").classList.toggle("hidden", !has);
+}
+$("receiptUpload").addEventListener("click", () => $("receiptInput").click());
+$("receiptInput").addEventListener("change", async () => {
+    const f = $("receiptInput").files[0];
+    $("receiptInput").value = "";
+    if (!f) return;
+    $("receiptState").textContent = "올리는 중…";
+    try {
+        const res = await uploadFile(f, "receipt", pct => $("receiptState").textContent = `올리는 중… ${pct}%`);
+        Object.assign(state.product.purchase, { receiptFile: res.product.purchase.receiptFile, receiptName: res.product.purchase.receiptName });
+        state.product.updatedAt = res.product.updatedAt;
+        $("receiptState").textContent = "";
+        renderReceipt();
+    } catch (e) { $("receiptState").textContent = e.message; }
+});
+$("receiptDownload").addEventListener("click", () => location.href = `${api}/products/${state.product.id}/receipt?original=true`);
+$("receiptDelete").addEventListener("click", async () => {
+    if (!confirm("장끼 사진을 삭제할까요?")) return;
+    const p = await call("DELETE", `${api}/products/${state.product.id}/receipt`);
+    state.product.purchase.receiptFile = null;
+    state.product.updatedAt = p.updatedAt;
+    renderReceipt();
+});
+
+// ---- 사이즈
+$("sizeHead").append(...SIZE_COLS.map(([, label]) => h("th", {}, label)), h("th", {}, ""));
+function renderSizes() {
+    const body = $("sizeBody");
+    body.innerHTML = "";
+    const p = state.product;
+    if (!p.sizes.length) p.sizes.push(emptySize("FREE"));
+    p.sizes.forEach((row, i) => {
+        const tr = h("tr");
+        for (const [key] of SIZE_COLS) {
+            const input = h("input", { inputmode: key === "label" ? null : "decimal", autocomplete: "off" });
+            input.value = row[key] || "";
+            const markReq = () => input.classList.toggle("req-empty", key === "total" && !input.value.trim());
+            markReq();
+            input.addEventListener("input", () => { row[key] = input.value; markReq(); scheduleSave(); });
+            tr.append(h("td", {}, h("div", { class: "cell" }, input, copyBtn(() => input.value))));
+        }
+        tr.append(h("td", {}, h("button", { class: "danger copy", type: "button", title: "행 삭제", onclick: () => {
+            if (p.sizes.length === 1 && !confirm("마지막 행을 지울까요?")) return;
+            p.sizes.splice(i, 1); renderSizes(); scheduleSave();
+        } }, "삭제")));
+        body.append(tr);
+    });
+}
+function emptySize(label) { return { label: label || "", total: "", shoulder: "", chest: "", sleeve: "", sleeveWidth: "", armhole: "", hem: "" }; }
+$("addSize").addEventListener("click", () => { state.product.sizes.push(emptySize("")); renderSizes(); scheduleSave(); });
+
+// ---- 소재
+function renderMaterial() {
+    const box = $("materialBox");
+    box.innerHTML = "";
+    const m = state.product.material;
+    for (const [key, label, options] of MATERIALS) {
+        const chips = h("div", { class: "chips" });
+        const draw = () => {
+            chips.innerHTML = "";
+            for (const o of options) {
+                chips.append(h("button", { type: "button", class: "chip" + (m[key] === o ? " on" : ""), onclick: () => {
+                    m[key] = m[key] === o ? "" : o; draw(); scheduleSave();
+                } }, o));
+            }
+        };
+        draw();
+        box.append(h("div", { class: "mat" }, h("label", {}, label), chips, copyBtn(() => m[key])));
+    }
+    const chips = h("div", { class: "chips" });
+    const drawSeason = () => {
+        chips.innerHTML = "";
+        for (const s of SEASONS) {
+            const on = m.season.includes(s);
+            chips.append(h("button", { type: "button", class: "chip" + (on ? " on" : ""), onclick: () => {
+                m.season = on ? m.season.filter(x => x !== s) : SEASONS.filter(x => x === s || m.season.includes(x));
+                drawSeason(); scheduleSave();
+            } }, s));
+        }
+    };
+    drawSeason();
+    box.append(h("div", { class: "mat" }, h("label", {}, "계절감"), chips, copyBtn(() => m.season.join(", "))));
+    box.append(h("p", { class: "muted" }, "계절감은 여러 개 고를 수 있습니다. 선택한 보기를 다시 누르면 선택이 풀립니다."));
+}
+
+// ------------------------------------------------------------ 이미지 칸
+function mediaUrl(m, what, extra) {
+    return `${api}/products/${state.product.id}/media/${m.id}/${what}${extra || ""}`;
+}
+
+function renderMedia() {
+    const p = state.product;
+    const by = k => p.media.filter(m => m.kind === k);
+    const fill = (gridId, cntId, list, card) => {
+        const grid = $(gridId);
+        grid.innerHTML = "";
+        $(cntId).textContent = `${list.length}개`;
+        if (!list.length) grid.append(h("div", { class: "muted" }, "아직 없습니다."));
+        list.forEach((m, i) => grid.append(card(m, i)));
+    };
+    fill("gridOriginal", "cntOriginal", by("original"), originalCard);
+    fill("gridCover", "cntCover", by("cover"), derivedCard);
+    fill("gridDetail", "cntDetail", by("detail"), derivedCard);
+}
+
+function picture(m, tag) {
+    const pic = h("div", { class: "pic", title: "크게 보기" });
+    pic.append(h("img", { src: mediaUrl(m, "preview", "?size=400"), alt: "", loading: "lazy",
+        onerror: e => e.target.replaceWith(h("span", { class: "muted" }, "미리보기 없음")) }));
+    if (tag) pic.append(h("span", { class: "tag" }, tag));
+    pic.addEventListener("click", () => m.type === "video" ? openVideo(m) : viewImage(mediaUrl(m, "preview", "?size=1600"), m.name));
+    return pic;
+}
+
+function infoTable(rows) {
+    return h("table", { class: "info" }, rows.filter(Boolean).map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))));
+}
+
+function photoRows(i) {
+    const rows = [];
+    let res = `${i.width} × ${i.height} px`;
+    if (i.orientation >= 5 || i.rawWidth !== i.width) res += ` (저장 ${i.rawWidth} × ${i.rawHeight})`;
+    rows.push(["해상도", res]);
+    rows.push(["비율", `${i.ratioApprox ? "≈ " : ""}${i.ratio} (${i.ratioValue})`]);
+    rows.push(["용량", bytesText(i.bytes)]);
+    rows.push(["형식", i.format]);
+    rows.push(["색상 모드", [i.colorMode || "-", i.bitDepth ? `${i.bitDepth}bit` : null].filter(Boolean).join(", ")]);
+    rows.push(["색상 프로필", i.profile || "없음 (sRGB로 간주)"]);
+    rows.push(["DPI", i.dpiX ? `${trimNum(i.dpiX, 1)} × ${trimNum(i.dpiY ?? i.dpiX, 1)} dpi` : "메타데이터 없음"]);
+    rows.push(["촬영 기기", [i.make, i.model].filter(Boolean).join(" ") || "-"]);
+    rows.push(["촬영 일시", i.takenAt || "-"]);
+    rows.push(["회전", i.orientationPresent ? `${i.orientation} (${ORIENT[i.orientation] || ""})` : "값 없음"]);
+    const c = i.checks || {}, t = i.thresholds || {};
+    if (i.sharpness != null) rows.push(["선명도", `${i.sharpness}${icon(c.sharpness)} `, ]);
+    if (i.brightness != null) rows.push(["평균 밝기", `${i.brightness} / 255${icon(c.brightness)}`]);
+    if (i.pixelError) rows.push(["픽셀 분석", "실패: " + i.pixelError]);
+    if (i.cover) {
+        const cv = i.cover;
+        const cut = cv.axis === "없음" ? "잘림 없음" : cv.cutStart === cv.cutEnd ? `${cv.axis} 각 ${cv.cutStart}px 잘림`
+            : `${cv.axis === "위아래" ? "위" : "왼쪽"} ${cv.cutStart}px, ${cv.axis === "위아래" ? "아래" : "오른쪽"} ${cv.cutEnd}px 잘림`;
+        rows.push(["커버 900×900", `${cut} · ${cv.square}px → 900px ${cv.scale}${icon(c.cover)}`]);
+    }
+    if (i.detail) rows.push(["상세 가로 880", `${i.detail.width} × ${i.detail.height} px${i.width < 880 ? " (확대)" : ""}${icon(c.detail)}`]);
+    const tips = [];
+    if (c.cover === false) tips.push(`커버: 짧은 변 ${t.cover}px 미만`);
+    if (c.detail === false) tips.push(`상세: 가로 ${t.detail}px 미만`);
+    if (c.sharpness === false) tips.push(`선명도 ${t.sharpness} 미만(흐림)`);
+    if (c.brightness === false) tips.push(`밝기 ${t.brightnessMin}~${t.brightnessMax} 밖`);
+    if (tips.length) rows.push(["⚠️ 확인", tips.join(" · ")]);
+    if (i.statsSample) rows.push(["", h("span", { class: "muted" }, `선명도·밝기는 긴 변 1600px로 줄여 측정(${i.statsSample}). 기준: 선명도 ${t.sharpness} 이상, 밝기 ${t.brightnessMin}~${t.brightnessMax}`)]);
+    return rows;
+}
+
+function videoRows(i) {
+    if (i.error) return [["분석", i.error], ["용량", bytesText(i.bytes)]];
+    const c = i.checks || {};
+    const rows = [];
+    let res = `${i.width} × ${i.height} px`;
+    if (i.rotation) res += ` (회전 ${i.rotation}°, 화면 ${i.displayWidth} × ${i.displayHeight})`;
+    rows.push(["해상도", res]);
+    rows.push(["세로 영상", i.portrait ? "예" : "아니오"]);
+    rows.push(["길이", `${i.duration.toFixed(2)}초`]);
+    rows.push(["프레임레이트", `${trimNum(i.fps, 2)} fps (${i.fpsText})`]);
+    rows.push(["총 프레임 수", `${Number(i.frames).toLocaleString("en-US")}${i.framesEstimated ? " (길이×fps 추정)" : ""}`]);
+    rows.push(["용량", bytesText(i.bytes)]);
+    rows.push(["코덱", `${i.videoCodec || "-"} / ${i.audioCodec || "오디오 없음"}`]);
+    rows.push(["비트레이트", i.bitrate ? `${trimNum(i.bitrate / 1e6, 1)} Mbps` : "-"]);
+    if (i.hdr) rows.push(["HDR", `${i.hdr} (캡처 시 SDR로 변환)`]);
+    rows.push(["캡처 시", `커버${icon(c.cover)} 상세${icon(c.detail)}`]);
+    if (i.container) rows.push(["컨테이너", i.container]);
+    return rows;
+}
+
+function originalCard(m) {
+    const card = h("div", { class: "mcard" });
+    const isVideo = m.type === "video";
+    card.append(picture(m, isVideo ? "🎬 영상" : m.source ? "📸 캡처" : null));
+    const meta = h("div", { class: "meta" }, h("div", { class: "mname" }, m.name));
+    if (m.source?.time != null) meta.append(h("div", { class: "src" }, `출처: ${m.source.fromName} @ ${stamp(m.source.time)}${m.info.toneMapped ? " (HDR→SDR)" : ""}`));
+    meta.append(infoTable(isVideo ? videoRows(m.info) : photoRows(m.info)));
+    card.append(meta);
+    const actions = h("div", { class: "actions" });
+    if (isVideo) {
+        actions.append(h("button", { class: "primary", onclick: () => openVideo(m) }, "▶ 장면 캡처"));
+    } else {
+        actions.append(h("button", { class: "primary", onclick: () => openCover(m) }, "커버로 만들기"));
+        const det = h("button", { class: "primary" }, "상세로 만들기");
+        det.addEventListener("click", async () => {
+            det.disabled = true; det.textContent = "만드는 중…";
+            try { addMediaLocal(await call("POST", mediaUrl(m, "detail"))); }
+            catch (e) { alert(e.message); }
+            det.disabled = false; det.textContent = "상세로 만들기";
+        });
+        actions.append(det);
+    }
+    actions.append(h("button", { onclick: () => location.href = mediaUrl(m, "file", "?download=true") }, "다운로드"));
+    actions.append(h("button", { class: "danger", onclick: () => deleteMedia(m) }, "삭제"));
+    card.append(actions);
+    return card;
+}
+
+function derivedCard(m, index) {
+    const card = h("div", { class: "mcard" });
+    card.append(picture(m, `${m.kind === "cover" ? "커버" : "상세"} ${index + 1}`));
+    const i = m.info;
+    const limit = m.kind === "cover" ? 2 : 10;
+    card.append(h("div", { class: "meta" },
+        h("div", { class: "mname" }, m.name),
+        m.source ? h("div", { class: "src" }, `원본: ${m.source.fromName}`) : null,
+        infoTable([
+            ["크기", `${i.width} × ${i.height} px`],
+            ["용량", `${bytesText(i.bytes)}${icon(i.bytes <= limit * 1048576)}`],
+            ["형식", `JPG · 품질 ${i.quality}%`],
+            m.source?.crop ? ["자른 영역", (([x, y, s]) => `x ${x}, y ${y}, ${s}×${s}px`)(m.source.crop.split(","))] : null,
+        ])));
+    card.append(h("div", { class: "actions" },
+        h("button", { onclick: () => location.href = mediaUrl(m, "file", "?download=true") }, "다운로드"),
+        h("button", { class: "danger", onclick: () => deleteMedia(m) }, "삭제")));
+    return card;
+}
+
+function addMediaLocal(m) {
+    state.product.media.push(m);
+    renderMedia();
+}
+
+async function deleteMedia(m) {
+    const what = m.kind === "original" ? "원본" : m.kind === "cover" ? "커버" : "상세";
+    if (!confirm(`${what} '${m.name}' 을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    try {
+        await call("DELETE", mediaUrl(m, "").replace(/\/$/, ""));
+        state.product.media = state.product.media.filter(x => x.id !== m.id);
+        renderMedia();
+    } catch (e) { alert(e.message); }
+}
+
+function viewImage(url, title) {
+    $("viewTitle").textContent = title;
+    $("viewImg").src = url;
+    openModal("viewModal");
+}
+
+// ------------------------------------------------------------ 업로드 (8MB 조각)
+const CHUNK = 8 * 1024 * 1024;
+let uploadChain = Promise.resolve();
+
+function randomId() { return [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, "0")).join(""); }
+
+async function uploadFile(file, target, onProgress) {
+    const id = randomId();
+    const pid = state.product.id;
+    let offset = 0, res = null;
+    if (file.size === 0) throw new Error("빈 파일입니다.");
+    while (offset < file.size) {
+        const end = Math.min(offset + CHUNK, file.size);
+        const url = `${api}/products/${pid}/upload/${id}?name=${encodeURIComponent(file.name)}&offset=${offset}&total=${file.size}&target=${target}`;
+        let tries = 0;
+        for (;;) {
+            try {
+                const r = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: file.slice(offset, end) });
+                const data = await r.json().catch(() => ({}));
+                if (r.status === 401) { showLogin(); throw new Error("로그인이 필요합니다."); }
+                if (!r.ok) { const err = new Error(data.error || `오류 (${r.status})`); err.fatal = r.status < 500 || r.status === 507; throw err; }
+                res = data;
+                break;
+            } catch (e) {
+                if (e.fatal || ++tries >= 3) throw e;
+                await new Promise(ok => setTimeout(ok, 1500 * tries));
+            }
+        }
+        offset = end;
+        onProgress(Math.round(offset / file.size * 100));
+    }
+    return res;
+}
+
+function enqueueUploads(files) {
+    const pid = state.product.id;
+    for (const f of files) {
+        const bar = h("progress", { max: 100, value: 0 });
+        const label = h("span", {}, " 대기 중");
+        const line = h("div", {}, `${f.name} (${mb(f.size)}) `, bar, label);
+        $("uploads").append(line);
+        uploadChain = uploadChain.then(async () => {
+            if (!state.product || state.product.id !== pid) { label.textContent = " 취소됨(다른 상품으로 이동)"; return; }
+            label.textContent = " 올리는 중";
+            try {
+                const res = await uploadFile(f, "original", pct => {
+                    bar.value = pct;
+                    label.textContent = pct < 100 ? ` ${pct}%` : " 분석 중…";
+                });
+                if (state.product?.id === pid) addMediaLocal(res.media);
+                line.remove();
+            } catch (e) {
+                label.textContent = " 실패: " + e.message;
+                label.className = "error";
+            }
+        });
+    }
+}
+$("pickFiles").addEventListener("click", e => { e.preventDefault(); $("fileInput").click(); });
+$("fileInput").addEventListener("change", () => { enqueueUploads([...$("fileInput").files]); $("fileInput").value = ""; });
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); enqueueUploads([...e.dataTransfer.files]); });
+
+// ------------------------------------------------------------ 커버 자르기
+const crop = { media: null, x: 0, y: 0, size: 0 }; // 원본 화면 방향 px
+
+function openCover(m) {
+    crop.media = m;
+    const W = m.info.width, H = m.info.height;
+    crop.size = Math.min(W, H);
+    crop.x = Math.round((W - crop.size) / 2);
+    crop.y = Math.round((H - crop.size) / 2);
+    $("cropSize").value = 100;
+    $("coverTitle").textContent = `커버 만들기 — ${m.name}`;
+    $("cropState").textContent = "";
+    const img = $("cropImg");
+    img.onload = drawCrop;
+    img.src = mediaUrl(m, "preview", "?size=1600");
+    openModal("coverModal");
+}
+
+function drawCrop() {
+    const m = crop.media, img = $("cropImg");
+    const k = img.clientWidth / m.info.width; // 원본 px → 화면 px
+    const sq = $("cropSq");
+    sq.style.left = crop.x * k + "px";
+    sq.style.top = crop.y * k + "px";
+    sq.style.width = sq.style.height = crop.size * k + "px";
+    $("cropInfo").textContent = `x ${crop.x}, y ${crop.y}, ${crop.size}×${crop.size}px → 900×900${crop.size < 900 ? " (확대 ⚠️)" : ""}`;
+}
+function clampCrop() {
+    const W = crop.media.info.width, H = crop.media.info.height;
+    crop.x = Math.round(Math.max(0, Math.min(crop.x, W - crop.size)));
+    crop.y = Math.round(Math.max(0, Math.min(crop.y, H - crop.size)));
+}
+window.addEventListener("resize", () => { if (!$("coverModal").classList.contains("hidden")) drawCrop(); });
+$("cropSize").addEventListener("input", () => {
+    const W = crop.media.info.width, H = crop.media.info.height;
+    const cx = crop.x + crop.size / 2, cy = crop.y + crop.size / 2;
+    crop.size = Math.max(1, Math.round(Math.min(W, H) * $("cropSize").value / 100));
+    crop.x = cx - crop.size / 2; crop.y = cy - crop.size / 2;
+    clampCrop(); drawCrop();
+});
+$("cropCenter").addEventListener("click", () => {
+    crop.x = (crop.media.info.width - crop.size) / 2; crop.y = (crop.media.info.height - crop.size) / 2;
+    clampCrop(); drawCrop();
+});
+(() => {
+    const sq = $("cropSq");
+    let drag = null;
+    sq.addEventListener("pointerdown", e => {
+        drag = { px: e.clientX, py: e.clientY, x: crop.x, y: crop.y };
+        sq.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+    sq.addEventListener("pointermove", e => {
+        if (!drag) return;
+        const k = $("cropImg").clientWidth / crop.media.info.width;
+        crop.x = drag.x + (e.clientX - drag.px) / k;
+        crop.y = drag.y + (e.clientY - drag.py) / k;
+        clampCrop(); drawCrop();
+    });
+    const end = () => drag = null;
+    sq.addEventListener("pointerup", end);
+    sq.addEventListener("pointercancel", end);
+})();
+$("cropSave").addEventListener("click", async () => {
+    const btn = $("cropSave");
+    btn.disabled = true;
+    $("cropState").textContent = "만드는 중…";
+    try {
+        const m = await call("POST", mediaUrl(crop.media, "cover"), { x: crop.x, y: crop.y, size: crop.size });
+        addMediaLocal(m);
+        closeModal("coverModal");
+    } catch (e) { $("cropState").textContent = e.message; }
+    btn.disabled = false;
+});
+
+// ------------------------------------------------------------ 영상 장면 캡처
+const vid = { media: null, fps: 30, frames: 0, usingProxy: false, pollTimer: null };
+const player = $("player");
+
+function openVideo(m) {
+    vid.media = m;
+    vid.fps = m.info.fps || 30;
+    vid.frames = m.info.frames || 0;
+    vid.usingProxy = false;
+    $("videoTitle").textContent = m.name;
+    $("caps").innerHTML = "";
+    $("captureState").textContent = "";
+    $("videoFallback").classList.add("hidden");
+    player.classList.remove("hidden");
+    player.src = m.proxy === "ready" && m.info.codecRaw === "hevc" ? (vid.usingProxy = true, mediaUrl(m, "proxy")) : mediaUrl(m, "file");
+    openModal("videoModal");
+    updateFrameInfo();
+}
+
+player.addEventListener("error", () => {
+    if (!player.getAttribute("src")) return;
+    const m = vid.media;
+    if (!vid.usingProxy && m.proxy === "ready") { vid.usingProxy = true; player.src = mediaUrl(m, "proxy"); return; }
+    player.classList.add("hidden");
+    $("videoFallback").classList.remove("hidden");
+    $("proxyState").textContent = m.proxy === "making" ? "만드는 중…" : m.proxy === "failed" ? "이전 변환 실패. 다시 시도할 수 있습니다." : "";
+    if (m.proxy === "making") pollProxy();
+});
+
+$("makeProxy").addEventListener("click", async () => {
+    try {
+        const m = await call("POST", mediaUrl(vid.media, "proxy"));
+        Object.assign(vid.media, m);
+        $("proxyState").textContent = "만드는 중… (영상 길이에 따라 몇 분 걸릴 수 있습니다)";
+        pollProxy();
+    } catch (e) { $("proxyState").textContent = e.message; }
+});
+
+function pollProxy() {
+    clearTimeout(vid.pollTimer);
+    vid.pollTimer = setTimeout(async () => {
+        if ($("videoModal").classList.contains("hidden")) return;
+        const p = await call("GET", `${api}/products/${state.product.id}`);
+        const m = p.media.find(x => x.id === vid.media.id);
+        if (!m) return;
+        vid.media.proxy = m.proxy;
+        const local = state.product.media.find(x => x.id === m.id);
+        if (local) local.proxy = m.proxy;
+        if (m.proxy === "ready") {
+            $("videoFallback").classList.add("hidden");
+            player.classList.remove("hidden");
+            vid.usingProxy = true;
+            player.src = mediaUrl(m, "proxy");
+        } else if (m.proxy === "failed") {
+            $("proxyState").textContent = "변환 실패. 다시 시도해 주세요.";
+        } else pollProxy();
+    }, 3000);
+}
+
+function currentFrame() { return Math.max(0, Math.floor(player.currentTime * vid.fps + 1e-4)); }
+function updateFrameInfo() {
+    const n = currentFrame();
+    $("frameInfo").textContent = `프레임 ${n + 1}${vid.frames ? " / " + vid.frames : ""} · ${stamp(n / vid.fps)}`;
+}
+player.addEventListener("timeupdate", updateFrameInfo);
+player.addEventListener("seeked", updateFrameInfo);
+
+function step(delta) {
+    player.pause();
+    let n = currentFrame() + delta;
+    const last = vid.frames ? vid.frames - 1 : Math.floor((player.duration || 0) * vid.fps) - 1;
+    n = Math.max(0, Math.min(n, Math.max(0, last)));
+    player.currentTime = (n + 0.5) / vid.fps; // 프레임 가운데로 이동해야 그 프레임이 확실히 보인다.
+}
+$("prevFrame").addEventListener("click", () => step(-1));
+$("nextFrame").addEventListener("click", () => step(1));
+
+document.addEventListener("keydown", e => {
+    if ($("videoModal").classList.contains("hidden")) return;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); step(e.key === "ArrowLeft" ? -1 : 1); }
+    else if (e.key === "c" || e.key === "C" || e.key === "ㅊ") { e.preventDefault(); capture(); }
+    else if (e.key === " " && e.target !== player) { e.preventDefault(); player.paused ? player.play() : player.pause(); }
+}, true);
+
+let capturing = 0;
+async function capture() {
+    const m = vid.media;
+    const n = currentFrame();
+    const time = n / vid.fps; // 브라우저에 보이는 프레임의 시작 시각
+    capturing++;
+    $("captureState").textContent = `캡처 중… (${capturing})`;
+    try {
+        const shot = await call("POST", mediaUrl(m, "capture"), { time });
+        addMediaLocal(shot);
+        $("caps").append(h("img", { src: mediaUrl(shot, "preview", "?size=400"), title: `${stamp(time)}`, alt: "" }));
+        $("captureState").textContent = `${$("caps").children.length}장 캡처됨 (원본 칸에 추가)`;
+    } catch (e) {
+        $("captureState").textContent = "캡처 실패: " + e.message;
+    } finally {
+        capturing--;
+    }
+}
+$("captureBtn").addEventListener("click", capture);
+
+// ------------------------------------------------------------ 내보내기 (방식은 서버 목록으로 버튼 생성)
+async function loadExportMethods() {
+    const methods = await call("GET", `${api}/export-methods`);
+    const row = $("exportMethods");
+    row.innerHTML = "";
+    for (const em of methods) {
+        row.append(h("button", { "data-method": em.id, onclick: e => {
+            state.exportMethod = em;
+            row.querySelectorAll("button").forEach(b => b.classList.toggle("primary", b === e.currentTarget));
+            $("exportLabel").textContent = `${em.label}:`;
+            $("exportScopes").classList.remove("hidden");
+        } }, em.label));
+    }
+}
+$("exportScopes").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    const p = state.product, scope = b.dataset.scope;
+    const n = p.media.filter(m => scope === "all" ? m.kind !== "original" : m.kind === scope).length;
+    if (!n) { alert("내보낼 이미지가 없습니다."); return; }
+    location.href = `${api}/products/${p.id}/export/${state.exportMethod.id}?scope=${scope}`;
+}));
+
+start();
+</script>
 </body>
 </html>

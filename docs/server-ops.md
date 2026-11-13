@@ -11,7 +11,9 @@
 | DNS | `seobin.page`, 와일드카드 `*.seobin.page` 모두 서버 IP로 연결됨 (사용자가 등록) |
 | 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, `admin.seobin.page`, `image.seobin.page`(2026-11-13 추가), 만료 2027-01-31(2026-11-02 재발급) |
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`·`check.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
-| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지)<br>`image.seobin.page` → 준비 중 안내 페이지 `static/image.html` (2026-11-13, 기능은 아직 없음) |
+| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지)<br>`image.seobin.page` → dati 상품 이미지 관리. 로그인 쿠키 때문에 `seobin.page/image.html` 로 자동 이동한다 (2026-11-13) |
+| dati 상품 이미지 관리 | 화면 `seobin.page/image.html`, API `/api/image/`, 패키지 `image/`. 회원 로그인 필요. 데이터 `/root/data/image/<회원 id>/<상품 id>/` (`product.json`, `files/` 원본·커버·상세, `cache/` 미리보기·HEIC 작업용 JPG·영상 미리보기, `tmp/` 업로드 중 조각). 회원당 10GB, 서버 디스크 여유 2GB 미만이면 업로드 거부. 업로드는 8MB 조각(서버 한도 16MB/조각, 파일당 2GB). 무거운 처리(디코딩·ffmpeg)는 한 번에 하나씩. 백업 없음 |
+| 미디어 도구 | 2026-11-13 apt 설치: `ffmpeg`/`ffprobe` 6.1.1(zscale·tonemap·libx264 포함, 영상 분석·장면 캡처·미리보기 변환), `exiftool` 12.76(HEIC 메타데이터), `heif-convert` 1.17.6(HEIC→JPG). 서버: CPU 1개, RAM 961MB, 스왑 없음 |
 | `admin.seobin.page` | 관리자 페이지 `static/admin.html`, API `/api/admin/` (2026-11-02). 아이디·비밀번호 로그인(세션 쿠키 Secure·SameSite=Strict, 30분). 텍스트 기록 날짜별 보기·개별/날짜 단위 삭제, 아이디·비밀번호 변경. 로그인 5번 연속 실패 시 5분 잠금 |
 | 관리자 계정 | `/root/data/admin/account` (아이디 + PBKDF2 해시). 처음 시작할 때 아이디 `admin` 과 무작위 비밀번호를 만들어 `/root/data/admin/initial_password`(600)에 적는다. 관리자 페이지에서 바꾸면 그 파일은 지워진다. 비밀번호를 잊으면 `account` 파일을 지우고 앱 재시작 → 새 initial_password |
 | 텍스트 전송 데이터 | H2 파일 `/root/data/texts/texts.mv.db` (실행 비서 DB와 별도, 백업 없음). `GET /texts?date=YYYY-MM-DD`(없으면 오늘, 한국 시간, 메인에서 지운 것 제외), `POST /texts`, `DELETE /texts/{id}`·`DELETE /texts?date=`(누구나, **숨김만**: `deleted_at` 기록). 관리자 페이지는 숨긴 것까지 모두 보이고(점선 표시), 관리자 삭제만 영구 삭제 |
@@ -73,6 +75,8 @@
 | 2026-11-01 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page` 후 nginx reload | 성공 (run 41279402390) |
 | 2026-11-02 | 위와 같은 명령에 `-d admin.seobin.page` 추가 | 성공 (run 41392538706) |
 | 2026-11-13 | 위와 같은 명령에 `-d image.seobin.page` 추가 | 성공 (run 43387620186) |
+| 2026-11-13 | 읽기 전용 조사: 도구 없음, nginx `client_max_body_size 500M`, 디스크 20G 여유 | 성공 |
+| 2026-11-13 | `apt-get install --no-install-recommends ffmpeg libimage-exiftool-perl libheif-examples` | 성공 (run 43392826274) |
 | 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
