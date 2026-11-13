@@ -19,6 +19,7 @@ import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
@@ -51,11 +52,12 @@ import jakarta.servlet.http.HttpServletResponse;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.CONTENT_TOO_LARGE;
+import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.INSUFFICIENT_STORAGE;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 /**
- * dati 상품 이미지 관리 (seobin.page/image.html, image.seobin.page).
+ * 이미지 (seobin.page/image.html, image.seobin.page).
  * 회원 로그인 필요. 데이터는 data/image/&lt;회원 id&gt;/ 아래에 상품 단위로 저장한다.
  */
 @RestController
@@ -91,19 +93,34 @@ public class ImageController {
     private final ProductStore store;
     private final MediaService media;
     private final List<ExportMethod> exportMethods;
+    /** 이 기능을 쓸 수 있는 회원 아이디. 비어 있으면 아무도 못 쓴다. */
+    private final Set<String> allowedUsers;
 
-    public ImageController(UserSession session, ProductStore store, MediaService media, List<ExportMethod> exportMethods) {
+    public ImageController(UserSession session, ProductStore store, MediaService media, List<ExportMethod> exportMethods,
+                           @Value("${image.allowed-users:}") String allowedUsers) {
         this.session = session;
         this.store = store;
         this.media = media;
         this.exportMethods = exportMethods.stream().sorted(Comparator.comparingInt(ExportMethod::order)).toList();
+        this.allowedUsers = Stream.of(allowedUsers.split(","))
+                .map(s -> s.strip().toLowerCase(Locale.ROOT)).filter(s -> !s.isEmpty())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    /** 로그인(401)과 사용 권한(403)을 확인한다. 권한은 application.properties 의 image.allowed-users 로 준다. */
+    private User allowed(HttpServletRequest request) {
+        User user = session.require(request);
+        if (!allowedUsers.contains(user.username().toLowerCase(Locale.ROOT))) {
+            throw new ResponseStatusException(FORBIDDEN, "이 계정은 이미지 기능을 쓸 권한이 없습니다.");
+        }
+        return user;
     }
 
     // ================================================================ 상품
 
     @GetMapping("/products")
     public Map<String, Object> list(HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         List<Map<String, Object>> items = new ArrayList<>();
         for (Product p : store.list(user.id())) {
             Map<String, Object> s = new LinkedHashMap<>();
@@ -126,18 +143,18 @@ public class ImageController {
 
     @PostMapping("/products")
     public Product create(HttpServletRequest request) throws IOException {
-        return store.create(session.require(request).id());
+        return store.create(allowed(request).id());
     }
 
     @GetMapping("/products/{pid}")
     public Product get(@PathVariable long pid, HttpServletRequest request) {
-        return store.get(session.require(request).id(), pid);
+        return store.get(allowed(request).id(), pid);
     }
 
     /** 사입·사이즈·소재 정보 저장. 사입명 등 글자는 받은 그대로 저장한다(trim 하지 않음). */
     @PutMapping("/products/{pid}")
     public Product update(@PathVariable long pid, @RequestBody ProductEdit edit, HttpServletRequest request) {
-        User user = session.require(request);
+        User user = allowed(request);
         return store.update(user.id(), pid, p -> {
             if (edit.purchase() != null) {
                 p.purchase.name = limit(edit.purchase().name, 200);
@@ -185,7 +202,7 @@ public class ImageController {
 
     @DeleteMapping("/products/{pid}")
     public Map<String, Object> delete(@PathVariable long pid, HttpServletRequest request) throws IOException {
-        store.delete(session.require(request).id(), pid);
+        store.delete(allowed(request).id(), pid);
         return Map.of("deleted", pid);
     }
 
@@ -200,7 +217,7 @@ public class ImageController {
                                       @RequestParam String name, @RequestParam long offset, @RequestParam long total,
                                       @RequestParam(defaultValue = "original") String target,
                                       HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         store.get(user.id(), pid);
         if (!uploadId.matches("[a-zA-Z0-9]{8,40}")) {
             throw new ResponseStatusException(BAD_REQUEST, "잘못된 업로드 id");
@@ -301,7 +318,7 @@ public class ImageController {
     public ResponseEntity<Resource> receipt(@PathVariable long pid,
                                             @RequestParam(defaultValue = "false") boolean original,
                                             HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Product p = store.get(user.id(), pid);
         if (p.purchase.receiptFile == null) {
             throw new ResponseStatusException(NOT_FOUND, "장끼 사진이 없습니다.");
@@ -314,7 +331,7 @@ public class ImageController {
 
     @DeleteMapping("/products/{pid}/receipt")
     public Product deleteReceipt(@PathVariable long pid, HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Product p = store.get(user.id(), pid);
         if (p.purchase.receiptFile != null) {
             Files.deleteIfExists(store.dir(user.id(), pid).resolve(p.purchase.receiptFile));
@@ -333,7 +350,7 @@ public class ImageController {
     public ResponseEntity<Resource> mediaFile(@PathVariable long pid, @PathVariable String mid,
                                               @RequestParam(defaultValue = "false") boolean download,
                                               HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media m = find(store.get(user.id(), pid), mid);
         return file(store.filesDir(user.id(), pid).resolve(m.file), m.name, download);
     }
@@ -342,7 +359,7 @@ public class ImageController {
     public ResponseEntity<Resource> preview(@PathVariable long pid, @PathVariable String mid,
                                             @RequestParam(defaultValue = "400") int size,
                                             HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media m = find(store.get(user.id(), pid), mid);
         int s = size > 400 ? 1600 : 400;
         Path p = store.cacheDir(user.id(), pid).resolve(m.id + "_" + s + ".jpg");
@@ -355,7 +372,7 @@ public class ImageController {
     @GetMapping("/products/{pid}/media/{mid}/proxy")
     public ResponseEntity<Resource> proxyFile(@PathVariable long pid, @PathVariable String mid,
                                               HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media m = find(store.get(user.id(), pid), mid);
         Path p = store.cacheDir(user.id(), pid).resolve(m.id + "_proxy.mp4");
         if (!Files.isRegularFile(p)) {
@@ -366,7 +383,7 @@ public class ImageController {
 
     @PostMapping("/products/{pid}/media/{mid}/proxy")
     public Media makeProxy(@PathVariable long pid, @PathVariable String mid, HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media m = find(store.get(user.id(), pid), mid);
         if (!"video".equals(m.type)) {
             throw new ResponseStatusException(BAD_REQUEST, "영상이 아닙니다.");
@@ -386,7 +403,7 @@ public class ImageController {
     @PostMapping("/products/{pid}/media/{mid}/cover")
     public Media cover(@PathVariable long pid, @PathVariable String mid, @RequestBody CoverRequest body,
                        HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media original = find(store.get(user.id(), pid), mid);
         requireOriginal(original);
         return addMedia(user.id(), pid, media.makeCover(user.id(), pid, original, body.x(), body.y(), body.size()));
@@ -394,7 +411,7 @@ public class ImageController {
 
     @PostMapping("/products/{pid}/media/{mid}/detail")
     public Media detail(@PathVariable long pid, @PathVariable String mid, HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media original = find(store.get(user.id(), pid), mid);
         requireOriginal(original);
         return addMedia(user.id(), pid, media.makeDetail(user.id(), pid, original));
@@ -403,7 +420,7 @@ public class ImageController {
     @PostMapping("/products/{pid}/media/{mid}/capture")
     public Media capture(@PathVariable long pid, @PathVariable String mid, @RequestBody CaptureRequest body,
                          HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media video = find(store.get(user.id(), pid), mid);
         return addMedia(user.id(), pid, media.capture(user.id(), pid, video, body.time()));
     }
@@ -411,7 +428,7 @@ public class ImageController {
     @DeleteMapping("/products/{pid}/media/{mid}")
     public Map<String, Object> deleteMedia(@PathVariable long pid, @PathVariable String mid,
                                            HttpServletRequest request) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         Media m = store.update(user.id(), pid, p -> {
             Media x = find(p, mid);
             p.media.remove(x);
@@ -429,7 +446,8 @@ public class ImageController {
     // ================================================================ 내보내기
 
     @GetMapping("/export-methods")
-    public List<Map<String, Object>> exportMethods() {
+    public List<Map<String, Object>> exportMethods(HttpServletRequest request) {
+        allowed(request);
         return exportMethods.stream().map(e -> Map.<String, Object>of("id", e.id(), "label", e.label())).toList();
     }
 
@@ -437,7 +455,7 @@ public class ImageController {
     public void export(@PathVariable long pid, @PathVariable String method,
                        @RequestParam(defaultValue = "all") String scope,
                        HttpServletRequest request, HttpServletResponse response) throws IOException {
-        User user = session.require(request);
+        User user = allowed(request);
         ExportMethod exporter = exportMethods.stream().filter(e -> e.id().equals(method)).findFirst()
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "없는 내보내기 방식입니다."));
         if (!Set.of("cover", "detail", "all").contains(scope)) {

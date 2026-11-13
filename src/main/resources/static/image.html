@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>dati 상품 이미지</title>
+    <title>이미지</title>
     <script>
         // 로그인 쿠키는 seobin.page 에만 붙으므로 서브도메인(image.seobin.page)에서 열면 본 주소로 옮긴다.
         if (location.hostname !== "seobin.page" && location.hostname.endsWith(".seobin.page")) {
@@ -108,7 +108,7 @@
 </head>
 <body>
 <header>
-    <h1><a href="#">📸 dati 상품 이미지</a></h1>
+    <h1><a href="#">📸 이미지</a></h1>
     <span class="muted" id="who"></span>
     <button id="logoutBtn" class="hidden">로그아웃</button>
 </header>
@@ -124,6 +124,12 @@
             <p class="error" id="loginError"></p>
             <p class="muted">seobin.page 회원 계정으로 로그인합니다. 계정이 없으면 <a href="/account.html">회원가입</a></p>
         </form>
+    </section>
+
+    <!-- 권한 없음 -->
+    <section class="box hidden" id="deniedView" style="max-width:420px;margin:40px auto;text-align:center">
+        <h2 style="justify-content:center">권한이 없습니다</h2>
+        <p>이 계정은 이미지 기능을 쓸 수 없습니다. 다른 계정으로 로그인하세요.</p>
     </section>
 
     <!-- 상품 목록 -->
@@ -302,6 +308,7 @@ async function call(method, url, body) {
     if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
     const r = await fetch(url, opt);
     if (r.status === 401) { showLogin(); throw new Error("로그인이 필요합니다."); }
+    if (r.status === 403) { show("deniedView"); throw new Error("권한이 없습니다."); }
     const data = r.headers.get("content-type")?.includes("json") ? await r.json() : null;
     if (!r.ok) throw new Error(data?.error || `오류 (${r.status})`);
     return data;
@@ -342,7 +349,7 @@ document.addEventListener("keydown", e => {
 
 // ------------------------------------------------------------ 로그인 · 화면 전환
 function show(view) {
-    for (const v of ["loginView", "listView", "productView"]) $(v).classList.toggle("hidden", v !== view);
+    for (const v of ["loginView", "deniedView", "listView", "productView"]) $(v).classList.toggle("hidden", v !== view);
 }
 function showLogin() { show("loginView"); $("logoutBtn").classList.add("hidden"); $("who").textContent = ""; }
 
