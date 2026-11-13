@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 이미지 관리 기능의 ffmpeg 명령 검증(읽기 전용, /tmp 에서만 작업): 앱과 같은 ffprobe·캡처·HDR 변환·미리보기 변환·HEIC 변환 명령을 시험 영상으로 실행한다.
+# 주의: 이 스크립트는 ssh 표준입력으로 전달되므로 ffmpeg 가 나머지 스크립트를 먹지 않게 전체를 함수로 감싸 </dev/null 로 실행한다.
+main() {
 set -uo pipefail
-W=/tmp/imgcheck; rm -rf "$W"; mkdir -p "$W"; cd "$W"; trap 'rm -rf "$W"' EXIT
+W=/tmp/imgcheck; rm -rf "$W"; mkdir -p "$W"; cd "$W"
 TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
 {
   # 1) 세로(회전 메타데이터) H.264 29.97fps 영상
@@ -45,3 +47,6 @@ awk -v max=3000 '
     if (length(buf) + length(line) + 3 > max) { print "::notice title=img" n "::" buf; n++; buf = "" }
     buf = buf line "%0A" }
   END { if (buf != "") print "::notice title=img" n "::" buf }' out.txt
+}
+main < /dev/null
+rm -rf /tmp/imgcheck
