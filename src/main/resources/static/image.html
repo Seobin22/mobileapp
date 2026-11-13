@@ -264,11 +264,10 @@
             <h2>동영상</h2>
             <div class="row" style="margin-top:0">
                 <label>장당 <input id="slSeconds" type="number" min="0.2" max="60" step="0.1" value="2" style="width:70px"> 초</label>
-                <label><input type="checkbox" id="slShrink"> 긴 변 1920px로 줄이기</label>
                 <button class="primary" id="slMake">고른 사진으로 동영상 만들기</button>
                 <span id="slState"></span>
             </div>
-            <p class="muted">MP4(H.264, 소리 없음). 화면 크기는 첫 사진의 원본 크기입니다(최대 1300만 화소). 줄이기를 켜면 긴 변 1920px로 만듭니다. 크기가 다른 사진은 자르거나 늘리지 않고 가운데에 그대로 이어 붙입니다(남는 곳은 검은색). 원본 크기가 4K보다 크면 일부 휴대폰·SNS에서 재생이 안 될 수 있으니, 그럴 땐 줄이기를 켜세요.</p>
+            <p class="muted">MP4(H.264, 소리 없음). 화면 크기는 첫 사진 비율(긴 변 최대 1920px)이고, 크기가 다른 사진은 자르거나 늘리지 않고 가운데에 그대로 이어 붙입니다(남는 곳은 검은색).</p>
             <div class="mgrid" id="slVideos"></div>
         </section>
     </div>
@@ -852,7 +851,6 @@ const crop = { media: null, mode: "cover", x: 0, y: 0, w: 0, h: 0 }; // 원본 �
 function loadPref(key) { try { return localStorage.getItem("image." + key) === "1"; } catch { return false; } }
 function savePref(key, on) { try { localStorage.setItem("image." + key, on ? "1" : "0"); } catch { /* 저장 못 해도 됨 */ } }
 $("cropShrink").addEventListener("change", () => { savePref("shrink." + crop.mode, $("cropShrink").checked); drawCrop(); });
-$("slShrink").addEventListener("change", () => savePref("shrink.slides", $("slShrink").checked));
 
 function openCrop(m, mode) {
     crop.media = m;
@@ -1095,7 +1093,6 @@ async function openSlides() {
     catch (e) { return; }
     show("slidesView");
     sl.order = [];
-    $("slShrink").checked = loadPref("shrink.slides");
     $("slUploads").innerHTML = "";
     $("slState").textContent = "";
     renderSlides();
@@ -1175,7 +1172,7 @@ $("slMake").addEventListener("click", async () => {
     const btn = $("slMake");
     btn.disabled = true;
     try {
-        const v = await call("POST", `${api}/products/${state.product.id}/slideshow`, { ids: sl.order, seconds, shrink: $("slShrink").checked });
+        const v = await call("POST", `${api}/products/${state.product.id}/slideshow`, { ids: sl.order, seconds });
         state.product.media.push(v);
         $("slState").textContent = "만드는 중… 완료되면 아래에 나타납니다.";
         renderSlides();

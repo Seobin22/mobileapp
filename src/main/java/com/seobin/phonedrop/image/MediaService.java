@@ -575,9 +575,6 @@ public class MediaService {
 
     // ================================================================ 슬라이드 동영상
 
-    /** 원본 크기 슬라이드의 최대 화면 픽셀 수(서버 메모리 보호). 아이폰 1200만 화소(4032×3024)까지. */
-    static final long SLIDE_MAX_PIXELS = 13_000_000L;
-
     public void requireFfmpeg() {
         tools.require("ffmpeg");
     }
@@ -586,8 +583,7 @@ public class MediaService {
      * 고른 사진들을 순서대로 이어 붙인 슬라이드 MP4 를 뒤에서 만든다.
      * 화면 크기는 첫 사진 비율(긴 변 최대 1920px). 다른 크기의 사진은 자르거나 늘리지 않고 가운데에 두고 남는 곳은 검은색.
      */
-    public void startSlideshow(long userId, long productId, List<Media> photos, double seconds, boolean shrink,
-                               String outId) {
+    public void startSlideshow(long userId, long productId, List<Media> photos, double seconds, String outId) {
         proxyWorker.submit(() -> {
             String state = "failed";
             String error = null;
@@ -598,12 +594,7 @@ public class MediaService {
             try {
                 work = Files.createDirectories(store.tmpDir(userId, productId).resolve("slides-" + outId));
                 ImageOps.Size first = pixelSource(userId, productId, photos.get(0)).display();
-                // 기본은 첫 사진 원본 크기. 줄이기를 고르면 긴 변 1920px.
-                double k = shrink ? Math.min(1.0, 1920.0 / Math.max(first.width(), first.height())) : 1.0;
-                if ((long) first.width() * first.height() * k * k > SLIDE_MAX_PIXELS) {
-                    throw new IOException("첫 사진이 너무 커서(최대 " + SLIDE_MAX_PIXELS / 10_000
-                            + "만 화소) 원본 크기로 만들 수 없습니다. 줄이기를 켜 주세요.");
-                }
+                double k = Math.min(1.0, 1920.0 / Math.max(first.width(), first.height()));
                 int w = even(first.width() * k);
                 int h = even(first.height() * k);
                 StringBuilder list = new StringBuilder();
@@ -622,15 +613,12 @@ public class MediaService {
                     }
                 }
                 Files.writeString(work.resolve("list.txt"), list);
-                // 400만 화소가 넘는 화면은 ultrafast 로 인코딩한다. veryfast 로 3024×4032 를 인코딩하면 약 540MB 를 써서
-                // 메모리 1GB 서버에서 OOM 으로 죽는다(2026-11-13 시험). ultrafast 는 약 300MB, 대신 파일이 조금 크다.
-                String preset = (long) w * h > 4_000_000L ? "ultrafast" : "veryfast";
                 Path tmp = work.resolve("out.mp4");
                 List<String> cmd = new ArrayList<>();
                 tools.find("nice").ifPresent(n -> cmd.addAll(List.of(n, "-n", "10")));
                 cmd.addAll(List.of(tools.require("ffmpeg"), "-nostdin", "-hide_banner", "-v", "error", "-y",
                         "-f", "concat", "-safe", "0", "-i", work.resolve("list.txt").toString(),
-                        "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-preset", preset, "-crf", "20",
+                        "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                         "-tune", "stillimage", "-threads", "1", "-movflags", "+faststart", "-an", tmp.toString()));
                 ExternalTools.Result r = tools.run(cmd, Duration.ofMinutes(30));
                 if (r.exit() != 0 || !Files.isRegularFile(tmp)) {

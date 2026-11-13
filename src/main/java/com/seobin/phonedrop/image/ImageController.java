@@ -451,8 +451,7 @@ public class ImageController {
 
     // ================================================================ 슬라이드 동영상
 
-    /** shrink=true 면 긴 변 1920px 로 줄인다(기본은 첫 사진 원본 크기). */
-    public record SlideshowRequest(List<String> ids, double seconds, Boolean shrink) {
+    public record SlideshowRequest(List<String> ids, double seconds) {
     }
 
     /** 동영상 만들기 작업 공간(회원당 하나, 상품 목록에는 안 나옴). */
@@ -497,11 +496,10 @@ public class ImageController {
             m.status = "making";
             m.info.put("count", photos.size());
             m.info.put("seconds", body.seconds());
-            m.info.put("shrink", Boolean.TRUE.equals(body.shrink()));
             x.media.add(m);
             return m;
         });
-        media.startSlideshow(user.id(), pid, photos, body.seconds(), Boolean.TRUE.equals(body.shrink()), out.id);
+        media.startSlideshow(user.id(), pid, photos, body.seconds(), out.id);
         return out;
     }
 
