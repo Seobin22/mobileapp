@@ -84,10 +84,11 @@ public class ImageController {
     }
 
     /** 상세 자르기 영역(원본 화면 방향 px). 잘라낸 픽셀 그대로 저장한다. */
-    public record DetailRequest(int x, int y, int w, int h) {
+    public record DetailRequest(int x, int y, int w, int h, Boolean shrink) {
     }
 
-    public record CoverRequest(int x, int y, int size) {
+    /** shrink=true 면 900×900 으로 줄인다(기본은 자른 픽셀 그대로). */
+    public record CoverRequest(int x, int y, int size, Boolean shrink) {
     }
 
     public record CaptureRequest(double time) {
@@ -410,7 +411,7 @@ public class ImageController {
         User user = allowed(request);
         Media original = find(store.get(user.id(), pid), mid);
         requireOriginal(original);
-        return addMedia(user.id(), pid, media.makeCover(user.id(), pid, original, body.x(), body.y(), body.size()));
+        return addMedia(user.id(), pid, media.makeCover(user.id(), pid, original, body.x(), body.y(), body.size(), Boolean.TRUE.equals(body.shrink())));
     }
 
     @PostMapping("/products/{pid}/media/{mid}/detail")
@@ -419,7 +420,7 @@ public class ImageController {
         User user = allowed(request);
         Media original = find(store.get(user.id(), pid), mid);
         requireOriginal(original);
-        return addMedia(user.id(), pid, media.makeDetail(user.id(), pid, original, body.x(), body.y(), body.w(), body.h()));
+        return addMedia(user.id(), pid, media.makeDetail(user.id(), pid, original, body.x(), body.y(), body.w(), body.h(), Boolean.TRUE.equals(body.shrink())));
     }
 
     @PostMapping("/products/{pid}/media/{mid}/capture")
@@ -450,7 +451,8 @@ public class ImageController {
 
     // ================================================================ 슬라이드 동영상
 
-    public record SlideshowRequest(List<String> ids, double seconds) {
+    /** shrink=true 면 긴 변 1920px 로 줄인다(기본은 첫 사진 원본 크기). */
+    public record SlideshowRequest(List<String> ids, double seconds, Boolean shrink) {
     }
 
     /** 동영상 만들기 작업 공간(회원당 하나, 상품 목록에는 안 나옴). */
@@ -495,10 +497,11 @@ public class ImageController {
             m.status = "making";
             m.info.put("count", photos.size());
             m.info.put("seconds", body.seconds());
+            m.info.put("shrink", Boolean.TRUE.equals(body.shrink()));
             x.media.add(m);
             return m;
         });
-        media.startSlideshow(user.id(), pid, photos, body.seconds(), out.id);
+        media.startSlideshow(user.id(), pid, photos, body.seconds(), Boolean.TRUE.equals(body.shrink()), out.id);
         return out;
     }
 

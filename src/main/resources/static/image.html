@@ -216,12 +216,12 @@
         </section>
 
         <section class="box">
-            <h2>커버 <span class="count" id="cntCover"></span> <span class="count">900×900 · JPG · 장당 2MB 이하</span></h2>
+            <h2>커버 <span class="count" id="cntCover"></span> <span class="count">정사각형 자르기 · 기본은 원본 픽셀 그대로(900×900 줄이기는 선택) · JPG · 장당 2MB 이하</span></h2>
             <div class="mgrid" id="gridCover"></div>
         </section>
 
         <section class="box">
-            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">원본에서 자르기만(늘리거나 줄이지 않음) · JPG · 장당 10MB 이하</span></h2>
+            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">자르기 · 기본은 원본 픽셀 그대로(가로 880px 줄이기는 선택) · JPG · 장당 10MB 이하</span></h2>
             <div class="mgrid" id="gridDetail"></div>
         </section>
 
@@ -264,10 +264,11 @@
             <h2>동영상</h2>
             <div class="row" style="margin-top:0">
                 <label>장당 <input id="slSeconds" type="number" min="0.2" max="60" step="0.1" value="2" style="width:70px"> 초</label>
+                <label><input type="checkbox" id="slShrink"> 긴 변 1920px로 줄이기</label>
                 <button class="primary" id="slMake">고른 사진으로 동영상 만들기</button>
                 <span id="slState"></span>
             </div>
-            <p class="muted">MP4(H.264, 소리 없음). 화면 크기는 첫 사진 비율(긴 변 최대 1920px)이고, 크기가 다른 사진은 자르거나 늘리지 않고 가운데에 그대로 이어 붙입니다(남는 곳은 검은색).</p>
+            <p class="muted">MP4(H.264, 소리 없음). 화면 크기는 첫 사진의 원본 크기입니다(최대 1300만 화소). 줄이기를 켜면 긴 변 1920px로 만듭니다. 크기가 다른 사진은 자르거나 늘리지 않고 가운데에 그대로 이어 붙입니다(남는 곳은 검은색). 원본 크기가 4K보다 크면 일부 휴대폰·SNS에서 재생이 안 될 수 있으니, 그럴 땐 줄이기를 켜세요.</p>
             <div class="mgrid" id="slVideos"></div>
         </section>
     </div>
@@ -281,6 +282,7 @@
         <div class="row">
             <label id="cropSizeLabel">자르기 크기 <input type="range" id="cropSize" min="20" max="100" value="100"></label>
             <button id="cropCenter">가운데로</button>
+            <label><input type="checkbox" id="cropShrink"> <span id="cropShrinkText">줄이기</span></label>
             <span class="muted" id="cropInfo"></span>
         </div>
         <div class="row">
@@ -846,6 +848,12 @@ drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("
 // cover: 정사각형(크기 슬라이더) → 900×900 / detail: 자유 사각형(모서리로 크기 조절) → 자른 픽셀 그대로 저장
 const crop = { media: null, mode: "cover", x: 0, y: 0, w: 0, h: 0 }; // 원본 화면 방향 px
 
+// 줄이기 선택은 브라우저에 기억해 둔다(기본: 줄이지 않음).
+function loadPref(key) { try { return localStorage.getItem("image." + key) === "1"; } catch { return false; } }
+function savePref(key, on) { try { localStorage.setItem("image." + key, on ? "1" : "0"); } catch { /* 저장 못 해도 됨 */ } }
+$("cropShrink").addEventListener("change", () => { savePref("shrink." + crop.mode, $("cropShrink").checked); drawCrop(); });
+$("slShrink").addEventListener("change", () => savePref("shrink.slides", $("slShrink").checked));
+
 function openCrop(m, mode) {
     crop.media = m;
     crop.mode = mode;
@@ -862,9 +870,11 @@ function openCrop(m, mode) {
     $("cropSizeLabel").classList.toggle("hidden", !cover);
     $("cropCenter").textContent = cover ? "가운데로" : "전체로";
     $("cropSq").classList.toggle("free", !cover);
-    $("cropSave").textContent = cover ? "커버로 저장 (900×900)" : "상세로 저장 (원본 해상도 그대로)";
-    $("cropHelp").textContent = cover ? "네모를 드래그해서 자를 위치를 정하세요."
-        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 자른 부분은 늘리거나 줄이지 않고 원본 픽셀 그대로 저장합니다.";
+    $("cropSave").textContent = cover ? "커버로 저장" : "상세로 저장";
+    $("cropShrinkText").textContent = cover ? "900×900으로 줄이기" : "가로 880px로 줄이기";
+    $("cropShrink").checked = loadPref("shrink." + mode);
+    $("cropHelp").textContent = cover ? "네모를 드래그해서 자를 위치를 정하세요. 줄이기를 끄면 자른 픽셀 그대로 저장합니다."
+        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 줄이기를 끄면 자른 픽셀 그대로 저장합니다.";
     $("coverTitle").textContent = `${cover ? "커버" : "상세"} 만들기 — ${m.name}`;
     $("cropState").textContent = "";
     const img = $("cropImg");
@@ -883,8 +893,8 @@ function drawCrop() {
     sq.style.height = crop.h * k + "px";
     const where = `x ${crop.x}, y ${crop.y}, ${crop.w}×${crop.h}px`;
     $("cropInfo").textContent = crop.mode === "cover"
-        ? `${where} → 900×900${crop.w < 900 ? " (확대 ⚠️)" : ""}`
-        : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`;
+        ? ($("cropShrink").checked ? `${where} → 900×900으로 줄임${crop.w < 900 ? " (확대 ⚠️)" : ""}` : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`)
+        : ($("cropShrink").checked ? `${where} → 가로 880 × ${Math.round(crop.h * 880 / crop.w)}px로 줄임` : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`);
 }
 function clampCrop() {
     const W = crop.media.info.width, H = crop.media.info.height;
@@ -942,7 +952,8 @@ $("cropSave").addEventListener("click", async () => {
     btn.disabled = true;
     $("cropState").textContent = "만드는 중…";
     try {
-        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w } : { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+        const shrink = $("cropShrink").checked;
+        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w, shrink } : { x: crop.x, y: crop.y, w: crop.w, h: crop.h, shrink };
         const m = await call("POST", mediaUrl(crop.media, crop.mode), body);
         addMediaLocal(m);
         closeModal("coverModal");
@@ -1084,6 +1095,7 @@ async function openSlides() {
     catch (e) { return; }
     show("slidesView");
     sl.order = [];
+    $("slShrink").checked = loadPref("shrink.slides");
     $("slUploads").innerHTML = "";
     $("slState").textContent = "";
     renderSlides();
@@ -1163,7 +1175,7 @@ $("slMake").addEventListener("click", async () => {
     const btn = $("slMake");
     btn.disabled = true;
     try {
-        const v = await call("POST", `${api}/products/${state.product.id}/slideshow`, { ids: sl.order, seconds });
+        const v = await call("POST", `${api}/products/${state.product.id}/slideshow`, { ids: sl.order, seconds, shrink: $("slShrink").checked });
         state.product.media.push(v);
         $("slState").textContent = "만드는 중… 완료되면 아래에 나타납니다.";
         renderSlides();
