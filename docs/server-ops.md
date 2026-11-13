@@ -1,7 +1,7 @@
 # 서버·도메인 운영 노트
 
 다른 채팅(세션)에서 이어서 작업할 수 있도록, 서버·도메인·인증서 관련해 지금까지 확인하고 바꾼 내용을 정리한다.
-마지막 갱신: 2026-11-02
+마지막 갱신: 2026-11-13
 
 ## 현재 상태 요약
 
@@ -9,9 +9,9 @@
 |---|---|
 | 서버 | DigitalOcean droplet `phonedrop`, IP `139.59.99.165`, Ubuntu 24.04, nginx 1.24 → Spring 앱(8080) |
 | DNS | `seobin.page`, 와일드카드 `*.seobin.page` 모두 서버 IP로 연결됨 (사용자가 등록) |
-| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, `admin.seobin.page`, 만료 2027-01-31(2026-11-02 재발급) |
+| 인증서 | Let's Encrypt, lineage 이름 `seobin.page`, 포함 도메인 `seobin.page`, `test.seobin.page`, `check.seobin.page`, `admin.seobin.page`, `image.seobin.page`(2026-11-13 추가), 만료 2027-01-31(2026-11-02 재발급) |
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`·`check.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
-| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지) |
+| 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지)<br>`image.seobin.page` → 준비 중 안내 페이지 `static/image.html` (2026-11-13, 기능은 아직 없음) |
 | `admin.seobin.page` | 관리자 페이지 `static/admin.html`, API `/api/admin/` (2026-11-02). 아이디·비밀번호 로그인(세션 쿠키 Secure·SameSite=Strict, 30분). 텍스트 기록 날짜별 보기·개별/날짜 단위 삭제, 아이디·비밀번호 변경. 로그인 5번 연속 실패 시 5분 잠금 |
 | 관리자 계정 | `/root/data/admin/account` (아이디 + PBKDF2 해시). 처음 시작할 때 아이디 `admin` 과 무작위 비밀번호를 만들어 `/root/data/admin/initial_password`(600)에 적는다. 관리자 페이지에서 바꾸면 그 파일은 지워진다. 비밀번호를 잊으면 `account` 파일을 지우고 앱 재시작 → 새 initial_password |
 | 텍스트 전송 데이터 | H2 파일 `/root/data/texts/texts.mv.db` (실행 비서 DB와 별도, 백업 없음). `GET /texts?date=YYYY-MM-DD`(없으면 오늘, 한국 시간, 메인에서 지운 것 제외), `POST /texts`, `DELETE /texts/{id}`·`DELETE /texts?date=`(누구나, **숨김만**: `deleted_at` 기록). 관리자 페이지는 숨긴 것까지 모두 보이고(점선 표시), 관리자 삭제만 영구 삭제 |
@@ -72,6 +72,7 @@
 | 2026-10-28 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page` 후 nginx reload | 성공 (run 40637108002) |
 | 2026-11-01 | `certbot certonly --nginx --expand --cert-name seobin.page -d seobin.page -d test.seobin.page -d check.seobin.page` 후 nginx reload | 성공 (run 41279402390) |
 | 2026-11-02 | 위와 같은 명령에 `-d admin.seobin.page` 추가 | 성공 (run 41392538706) |
+| 2026-11-13 | 위와 같은 명령에 `-d image.seobin.page` 추가 | 성공 (run 43387620186) |
 | 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
