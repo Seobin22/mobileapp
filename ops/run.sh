@@ -1,25 +1,18 @@
 #!/usr/bin/env bash
-# HEIC 디코더 플러그인 확인·설치(libheif-plugin-libde265: heif-convert 읽기, libheif-plugin-x265: 시험용 HEIC 만들기) 후 /tmp 에서 HEIC 변환 시험.
+# 슬라이드 동영상 명령 검증(읽기 전용, /tmp 에서만): 앱과 같은 concat + libx264 명령으로 사진 3장 → MP4, 길이·크기 확인.
 # ssh 표준입력으로 전달되므로 전체를 함수로 감싸 </dev/null 로 실행한다.
 main() {
 set -uo pipefail
-export DEBIAN_FRONTEND=noninteractive
-W=/tmp/heiccheck; rm -rf "$W"; mkdir -p "$W"; cd "$W"
+W=/tmp/slidecheck; rm -rf "$W"; mkdir -p "$W"; cd "$W"
 {
-  echo "before: $(dpkg -l 'libheif-plugin-*' 2>/dev/null | awk '/^ii/{print $2}' | tr '\n' ' ')"
-  apt-get install -y -q --no-install-recommends libheif-plugin-libde265 libheif-plugin-x265 >/dev/null 2>&1 && echo "install ok" || echo "install FAILED"
-  echo "after: $(dpkg -l 'libheif-plugin-*' 2>/dev/null | awk '/^ii/{print $2}' | tr '\n' ' ')"
-  ffmpeg -nostdin -hide_banner -v error -f lavfi -i testsrc2=size=1200x1600 -frames:v 1 src.png
-  heif-enc -q 80 -o t.heic src.png 2>&1 | tail -2; ls -la t.heic 2>&1
-  heif-convert -q 95 t.heic t.jpg 2>&1 | tail -2; ffprobe -v error -show_entries stream=width,height -of csv=p=0 t.jpg 2>&1 | sed 's/^/heic->jpg /'
-  exiftool -j -n -ImageWidth -ImageHeight -BitDepthLuma -ColorSpaceData -ProfileDescription -Orientation t.heic 2>&1 | tr -d '\n '
-  echo
+  for i in 1 2 3; do ffmpeg -nostdin -hide_banner -v error -f lavfi -i testsrc2=size=1440x1920 -frames:v 1 -q:v 2 f000$i.jpg; done
+  printf "file 'f0001.jpg'\nduration 2.000\nfile 'f0002.jpg'\nduration 2.000\nfile 'f0003.jpg'\nduration 2.000\nfile 'f0003.jpg'\n" > list.txt
+  /usr/bin/time -f "encode %es %MKB" nice -n 10 ffmpeg -nostdin -hide_banner -v error -y -f concat -safe 0 -i "$W/list.txt" \
+    -vf fps=30,format=yuv420p -c:v libx264 -preset veryfast -crf 20 -tune stillimage -threads 1 -movflags +faststart -an out.mp4 \
+    && echo "ok $(stat -c %s out.mp4) bytes"
+  ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,pix_fmt,nb_frames -of compact out.mp4
 } > out.txt 2>&1
-awk -v max=3000 '
-  { line = $0; gsub(/\r/, "", line); gsub(/%/, "%25", line)
-    if (length(buf) + length(line) + 3 > max) { print "::notice title=img" n "::" buf; n++; buf = "" }
-    buf = buf line "%0A" }
-  END { if (buf != "") print "::notice title=img" n "::" buf }' out.txt
+awk '{ line=$0; gsub(/%/, "%25", line); buf = buf line "%0A" } END { print "::notice title=slide::" buf }' out.txt
 cd /; rm -rf "$W"
 }
 main < /dev/null
