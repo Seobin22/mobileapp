@@ -41,11 +41,10 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst, (SELECT value FROM settings WHERE key='active.paused_until') AS paused FROM (VALUES 1);
-SELECT 'D' AS q, id, app_version, FORMATDATETIME(last_heartbeat,'MM-dd HH:mm','en','Asia/Seoul') AS hb FROM devices ORDER BY last_heartbeat DESC LIMIT 1;
-SELECT 'W_RUNS' AS q, window_id, FORMATDATETIME(occ_start,'MM-dd HH:mm','en','Asia/Seoul') AS occ, alarm_count, FORMATDATETIME(acked_at,'HH:mm','en','Asia/Seoul') AS acked, llm_count, FORMATDATETIME(ended_at,'MM-dd HH:mm','en','Asia/Seoul') AS ended FROM time_window_runs ORDER BY id DESC LIMIT 2;
-SELECT 'M' AS q, m.id, m.kind, m.silent, FORMATDATETIME(m.created_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS at FROM messages m WHERE m.role='assistant' AND m.created_at >= DATEADD('MINUTE', -60, CURRENT_TIMESTAMP) ORDER BY m.id;
-SELECT 'B' AS q, b.id, b.kind, b.status, FORMATDATETIME(b.start_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(b.end_at,'HH:mm','en','Asia/Seoul') AS en, b.lead_minutes AS lead FROM blocks b WHERE b.status <> 'cancelled' AND b.end_at >= DATEADD('MINUTE', -60, CURRENT_TIMESTAMP) AND b.start_at < DATEADD('HOUR', 2, CURRENT_TIMESTAMP) ORDER BY b.start_at;
+SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst, (SELECT value FROM settings WHERE key='llm.provider') AS provider, (SELECT value FROM settings WHERE key='llm.model') AS model, (SELECT value FROM settings WHERE key='voice.model') AS vmodel FROM (VALUES 1);
+SELECT 'TS' AS q, trigger, status, COUNT(*) AS n, FORMATDATETIME(MAX(started_at),'MM-dd HH:mm','en','Asia/Seoul') AS last FROM turns WHERE started_at >= DATEADD('HOUR', -48, CURRENT_TIMESTAMP) GROUP BY trigger, status ORDER BY last DESC;
+SELECT 'TE' AS q, id, trigger, status, FORMATDATETIME(started_at,'MM-dd HH:mm','en','Asia/Seoul') AS at, LEFT(REGEXP_REPLACE(COALESCE(error,''), '[가-힣]+', '*'), 220) AS err FROM turns WHERE started_at >= DATEADD('HOUR', -48, CURRENT_TIMESTAMP) AND status IN ('failed','queued','partial') ORDER BY id DESC LIMIT 25;
+SELECT 'D' AS q, app_version, FORMATDATETIME(last_heartbeat,'MM-dd HH:mm','en','Asia/Seoul') AS hb FROM devices ORDER BY last_heartbeat DESC LIMIT 1;
 SQL
 
 while IFS= read -r q; do
@@ -53,10 +52,7 @@ while IFS= read -r q; do
   "$JAVA" -cp "$H2" org.h2.tools.Shell -url "$URL" -user sa -password "" -sql "$q" >> "$WORK/out.txt" 2>&1 || echo "QUERY FAILED" >> "$WORK/out.txt"
 done < "$WORK/queries.sql"
 
-# 앱이 비서 목소리를 받으러 왔는지(경로·시각·응답 코드만)와 ElevenLabs 응답 코드
-{ echo "AUDIO_REQ (last 4h, KST hour:min status)"; for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do [ -f "$f" ] && grep -h "voice/messages/[0-9]*/audio" "$f"; done | awk '{print $4, $9}' | tail -40; } >> "$WORK/out.txt" 2>/dev/null || true
-{ echo "VOICE_TURN_REQ"; for f in /var/log/nginx/access.log; do [ -f "$f" ] && grep -h "voice/sessions/[0-9]*/turn" "$f"; done | awk '{print $4, $9}' | tail -10; } >> "$WORK/out.txt" 2>/dev/null || true
-{ echo "ELEVEN"; journalctl -u phonedrop --since "-8h" --no-pager 2>/dev/null | grep -oE "ElevenLabs [0-9]{3}|ElevenLabs 연결 실패" | sort | uniq -c; } >> "$WORK/out.txt" || true
+{ echo "LLM_LOG"; journalctl -u phonedrop --since "-48h" --no-pager 2>/dev/null | grep -E "LLM failure|NotConfigured|turn [0-9]+ skipped" | sed -E 's/[가-힣]+/*/g' | cut -c1-260 | tail -15; } >> "$WORK/out.txt" || true
 
 # 3000자씩 ::notice 주석으로 내보낸다(공개 annotations API 로 읽을 수 있다).
 awk -v max=3000 '
