@@ -39,6 +39,18 @@ public class AgentRunner {
     static final int MAX_LLM_RETRIES = 3;
     static final String OVER_LIMIT = "오늘 처리 한도를 넘었어요. 내일 아침에 이어서 볼게요.";
     static final String LLM_DOWN = "지금 처리가 안 돼요, 곧 다시 볼게요";
+    /** 2026-11-13: AI 제공자 크레딧·잔액 부족(402 등). 다시 시도해도 안 되므로 재시도하지 않고 정확히 알린다. */
+    static final String CREDIT_LOW = "AI 사용 크레딧이 부족해서 지금은 답할 수 없어요. 충전하거나 설정에서 다른 AI 연결로 바꿔 주세요.";
+
+    /** 크레딧·잔액 부족 오류인가(FactChat 402 code 6010, Anthropic credit balance 등). */
+    static boolean creditProblem(String message) {
+        if (message == null) {
+            return false;
+        }
+        String m = message.toLowerCase(java.util.Locale.ROOT);
+        return m.contains(" 402") || m.startsWith("402") || m.contains("402:") || m.contains("credit")
+                || m.contains("insufficient") || m.contains("balance") || m.contains("\"code\":6010");
+    }
     /** 사용자에게 말하는 도구. 이것만 단독으로 부르면 turn 을 끝낸다. */
     static final Set<String> MESSAGE_TOOLS = Set.of("send_message", "ask_user");
     static final String STAGE_THINKING = "생각하는 중…";
@@ -292,10 +304,11 @@ public class AgentRunner {
             return "failed";
         } catch (LlmClient.LlmException e) {
             log.warn("turn {} LLM failure (attempt {}): {}", turnId, attempts + 1, e.getMessage());
-            boolean retry = fromUser && attempts + 1 < MAX_LLM_RETRIES;
+            boolean credit = creditProblem(e.getMessage());
+            boolean retry = fromUser && !credit && attempts + 1 < MAX_LLM_RETRIES;
             tx.exec(() -> {
                 if (fromUser && attempts == 0) {
-                    chat.sendAssistant(LLM_DOWN, "reply", "normal", null, null);
+                    chat.sendAssistant(credit ? CREDIT_LOW : LLM_DOWN, "reply", "normal", null, null);
                 }
                 endTurn(turnId, retry ? "queued" : "failed", stats, e.getMessage());
             });

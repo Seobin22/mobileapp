@@ -242,6 +242,20 @@ class AgentFlowTest extends AssistantTestBase {
     }
 
     @Test
+    void s8b_creditShortageSaysSoAndDoesNotRetry() {
+        // 2026-11-13 운영: FactChat 크레딧이 떨어져 "곧 다시 볼게요"만 반복됐다
+        llm.thenDo(() -> {
+            throw new LlmClient.LlmException("Claude 호출 실패: 402: {\"detail\":{\"code\":6010,\"message\":\"Remaining credit is less than this request's estimated cost\"}}", null);
+        });
+        Map<String, Object> r = say("안녕");
+        runAgent();
+        assertThat(assistantMessages()).singleElement().asString().contains("크레딧이 부족");
+        assertThat(turnStatus((Long) r.get("turn_id"))).isEqualTo("failed");
+        assertThat(db.jdbc().sql("SELECT COUNT(*) FROM jobs WHERE type = 'turn' AND status = 'scheduled'").query(Integer.class).single())
+                .isZero();
+    }
+
+    @Test
     void s9_longTurnDoesNotDelayIntervention() throws Exception {
         createBlock("보고서", "2026-11-02T09:02", 30);
         CountDownLatch inLlm = new CountDownLatch(1);
