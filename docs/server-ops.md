@@ -13,7 +13,7 @@
 | nginx | HTTPS(443)는 모든 Host를 앱으로 넘긴다. HTTP(80)로 `test.seobin.page`·`check.seobin.page`에 접속하면 nginx 404 (HTTPS로만 사용) |
 | 서브도메인 | `test.seobin.page` → 실행 비서 관리 화면 (2026-10-29부터, 이전엔 현재 시간 페이지)<br>`check.seobin.page` → 파일 아카이브: GitHub Actions 결과물(Artifact) 날짜별 목록 `static/check.html`, API `/api/check/artifacts` (2026-11-01, 처음엔 연결 확인 페이지)<br>`image.seobin.page` → dati 상품 이미지 관리. 로그인 쿠키 때문에 `seobin.page/image.html` 로 자동 이동한다 (2026-11-13) |
 | dati 상품 이미지 관리 | 화면 `seobin.page/image.html`, API `/api/image/`, 패키지 `image/`. 회원 로그인 필요. 데이터 `/root/data/image/<회원 id>/<상품 id>/` (`product.json`, `files/` 원본·커버·상세, `cache/` 미리보기·HEIC 작업용 JPG·영상 미리보기, `tmp/` 업로드 중 조각). 회원당 10GB, 서버 디스크 여유 2GB 미만이면 업로드 거부. 업로드는 8MB 조각(서버 한도 16MB/조각, 파일당 2GB). 무거운 처리(디코딩·ffmpeg)는 한 번에 하나씩. 백업 없음 |
-| 미디어 도구 | 2026-11-13 apt 설치: `ffmpeg`/`ffprobe` 6.1.1(zscale·tonemap·libx264 포함, 영상 분석·장면 캡처·미리보기 변환), `exiftool` 12.76(HEIC 메타데이터), `heif-convert` 1.17.6(HEIC→JPG). 서버: CPU 1개, RAM 961MB, 스왑 없음 |
+| 미디어 도구 | 2026-11-13 apt 설치: `ffmpeg`/`ffprobe` 6.1.1(zscale·tonemap·libx264 포함, 영상 분석·장면 캡처·미리보기 변환), `exiftool` 12.76(HEIC 메타데이터), `heif-convert` 1.17.6(HEIC→JPG, 디코더 `libheif-plugin-libde265` 필요 — no-recommends 설치 때 빠져 따로 설치, 시험용 `libheif-plugin-x265`). 서버: CPU 1개, RAM 961MB, 스왑 없음 |
 | `admin.seobin.page` | 관리자 페이지 `static/admin.html`, API `/api/admin/` (2026-11-02). 아이디·비밀번호 로그인(세션 쿠키 Secure·SameSite=Strict, 30분). 텍스트 기록 날짜별 보기·개별/날짜 단위 삭제, 아이디·비밀번호 변경. 로그인 5번 연속 실패 시 5분 잠금 |
 | 관리자 계정 | `/root/data/admin/account` (아이디 + PBKDF2 해시). 처음 시작할 때 아이디 `admin` 과 무작위 비밀번호를 만들어 `/root/data/admin/initial_password`(600)에 적는다. 관리자 페이지에서 바꾸면 그 파일은 지워진다. 비밀번호를 잊으면 `account` 파일을 지우고 앱 재시작 → 새 initial_password |
 | 텍스트 전송 데이터 | H2 파일 `/root/data/texts/texts.mv.db` (실행 비서 DB와 별도, 백업 없음). `GET /texts?date=YYYY-MM-DD`(없으면 오늘, 한국 시간, 메인에서 지운 것 제외), `POST /texts`, `DELETE /texts/{id}`·`DELETE /texts?date=`(누구나, **숨김만**: `deleted_at` 기록). 관리자 페이지는 숨긴 것까지 모두 보이고(점선 표시), 관리자 삭제만 영구 삭제 |
@@ -63,7 +63,8 @@
   ```
 - 제약
   - 단계별 성공/실패만 볼 수 있다. **명령 출력(로그)은 로그인이 필요해 볼 수 없다**(API 403). 실패 원인은 사용자에게 Actions 화면 로그를 요청한다.
-  - 대화형 명령 불가(입력 대기하는 명령은 멈춘다). 예: DNS TXT를 수동 입력하는 와일드카드 인증서 발급.
+  - 대화형 명령 불가(입력 대기하는 명령은 멈춘다).
+  - **run.sh 는 `ssh ... 'bash -s' < ops/run.sh` 로 표준입력에 실려 간다.** ffmpeg 처럼 표준입력을 읽는 명령이 나머지 스크립트를 먹어 버리므로, 그런 명령을 쓸 때는 전체를 `main() { ... }` 로 감싸고 `main < /dev/null` 로 실행한다(또는 `ffmpeg -nostdin`). 예: DNS TXT를 수동 입력하는 와일드카드 인증서 발급.
   - 공개 저장소라 커밋한 명령이 공개된다. 서버 출력이나 비밀값을 저장소에 커밋하지 않는다.
   - `ops`에 push 권한이 있으면 서버 root 명령 실행이 가능하다는 점을 유의.
 
@@ -77,6 +78,8 @@
 | 2026-11-13 | 위와 같은 명령에 `-d image.seobin.page` 추가 | 성공 (run 43387620186) |
 | 2026-11-13 | 읽기 전용 조사: 도구 없음, nginx `client_max_body_size 500M`, 디스크 20G 여유 | 성공 |
 | 2026-11-13 | `apt-get install --no-install-recommends ffmpeg libimage-exiftool-perl libheif-examples` | 성공 (run 43392826274) |
+| 2026-11-13 | /tmp 에서 앱과 같은 ffmpeg 명령 시험: 회전 감지, 프레임 정확도(4곳 일치), HLG 톤매핑 캡처, 미리보기 변환(3초 영상 6.6초·약 200MB) | 성공 (run 43394955162) |
+| 2026-11-13 | `libheif-plugin-libde265`, `libheif-plugin-x265` 설치 후 HEIC→JPG 시험 | 성공 (run 43395207945) |
 | 2026-10-29 | Secret `FIREBASE_SERVICE_ACCOUNT` 를 `/root/data/assistant/firebase.json`(600)에 설치, firebase drop-in 추가 후 재시작(실패 시 자동 원복) | 성공 (run 40839120430) |
 
 ## 남은 일
