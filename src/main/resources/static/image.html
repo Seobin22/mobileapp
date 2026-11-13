@@ -221,7 +221,7 @@
         </section>
 
         <section class="box">
-            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">자르기 · 기본은 원본 픽셀 그대로(가로 880px 줄이기는 선택) · JPG · 장당 10MB 이하</span></h2>
+            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">자르기 · 원본 픽셀 그대로(가로 880px 고정 자르기 선택 가능) · JPG · 장당 10MB 이하</span></h2>
             <div class="mgrid" id="gridDetail"></div>
         </section>
 
@@ -847,10 +847,23 @@ drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("
 // cover: 정사각형(크기 슬라이더) → 900×900 / detail: 자유 사각형(모서리로 크기 조절) → 자른 픽셀 그대로 저장
 const crop = { media: null, mode: "cover", x: 0, y: 0, w: 0, h: 0 }; // 원본 화면 방향 px
 
-// 줄이기 선택은 브라우저에 기억해 둔다(기본: 줄이지 않음).
+// 체크박스: 커버 = 900×900으로 줄이기 / 상세 = 가로 880px로 자르기(네모 가로를 원본 880px로 고정, 줄이지 않음).
+// 선택은 브라우저에 기억해 둔다(기본: 꺼짐).
+const DETAIL_FIX_W = 880;
 function loadPref(key) { try { return localStorage.getItem("image." + key) === "1"; } catch { return false; } }
 function savePref(key, on) { try { localStorage.setItem("image." + key, on ? "1" : "0"); } catch { /* 저장 못 해도 됨 */ } }
-$("cropShrink").addEventListener("change", () => { savePref("shrink." + crop.mode, $("cropShrink").checked); drawCrop(); });
+function prefKey() { return crop.mode === "cover" ? "shrink.cover" : "fix880.detail"; }
+function fixedWidth() { return crop.mode === "detail" && $("cropShrink").checked; }
+/** 상세 가로 고정: 네모 가운데를 유지한 채 가로를 880px(원본이 더 좁으면 원본 가로)로 맞춘다. */
+function applyFixedWidth() {
+    if (!fixedWidth()) return;
+    const W = crop.media.info.width;
+    const cx = crop.x + crop.w / 2;
+    crop.w = Math.min(DETAIL_FIX_W, W);
+    crop.x = cx - crop.w / 2;
+    clampCrop();
+}
+$("cropShrink").addEventListener("change", () => { savePref(prefKey(), $("cropShrink").checked); applyFixedWidth(); drawCrop(); });
 
 function openCrop(m, mode) {
     crop.media = m;
@@ -869,10 +882,14 @@ function openCrop(m, mode) {
     $("cropCenter").textContent = cover ? "가운데로" : "전체로";
     $("cropSq").classList.toggle("free", !cover);
     $("cropSave").textContent = cover ? "커버로 저장" : "상세로 저장";
-    $("cropShrinkText").textContent = cover ? "900×900으로 줄이기" : "가로 880px로 줄이기";
-    $("cropShrink").checked = loadPref("shrink." + mode);
+    const narrow = !cover && W < DETAIL_FIX_W;
+    $("cropShrinkText").textContent = cover ? "900×900으로 줄이기"
+        : narrow ? `가로 880px로 자르기 (원본 가로 ${W}px라 불가)` : "가로 880px로 자르기 (높이만 조절)";
+    $("cropShrink").disabled = narrow;
+    $("cropShrink").checked = !narrow && loadPref(prefKey());
+    applyFixedWidth();
     $("cropHelp").textContent = cover ? "네모를 드래그해서 자를 위치를 정하세요. 줄이기를 끄면 자른 픽셀 그대로 저장합니다."
-        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 줄이기를 끄면 자른 픽셀 그대로 저장합니다.";
+        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 상세는 항상 자른 픽셀 그대로 저장합니다(줄이지 않음).";
     $("coverTitle").textContent = `${cover ? "커버" : "상세"} 만들기 — ${m.name}`;
     $("cropState").textContent = "";
     const img = $("cropImg");
@@ -892,7 +909,7 @@ function drawCrop() {
     const where = `x ${crop.x}, y ${crop.y}, ${crop.w}×${crop.h}px`;
     $("cropInfo").textContent = crop.mode === "cover"
         ? ($("cropShrink").checked ? `${where} → 900×900으로 줄임${crop.w < 900 ? " (확대 ⚠️)" : ""}` : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`)
-        : ($("cropShrink").checked ? `${where} → 가로 880 × ${Math.round(crop.h * 880 / crop.w)}px로 줄임` : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`);
+        : `${where} → 그대로 ${crop.w}×${crop.h}px 저장${fixedWidth() ? " (가로 고정)" : ""}`;
 }
 function clampCrop() {
     const W = crop.media.info.width, H = crop.media.info.height;
@@ -912,7 +929,7 @@ $("cropSize").addEventListener("input", () => {
 $("cropCenter").addEventListener("click", () => {
     const W = crop.media.info.width, H = crop.media.info.height;
     if (crop.mode === "cover") { crop.x = (W - crop.w) / 2; crop.y = (H - crop.h) / 2; }
-    else { crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; }
+    else { crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; applyFixedWidth(); }
     clampCrop(); drawCrop();
 });
 (() => {
@@ -933,8 +950,9 @@ $("cropCenter").addEventListener("click", () => {
             crop.x = drag.x + dx; crop.y = drag.y + dy;
         } else {
             let left = drag.x, top = drag.y, right = drag.x + drag.w, bottom = drag.y + drag.h;
-            if (drag.handle.includes("w")) left = Math.max(0, Math.min(left + dx, right - min));
-            if (drag.handle.includes("e")) right = Math.min(W, Math.max(right + dx, left + min));
+            const lockW = fixedWidth(); // 가로 고정이면 위아래만 조절
+            if (!lockW && drag.handle.includes("w")) left = Math.max(0, Math.min(left + dx, right - min));
+            if (!lockW && drag.handle.includes("e")) right = Math.min(W, Math.max(right + dx, left + min));
             if (drag.handle.includes("n")) top = Math.max(0, Math.min(top + dy, bottom - min));
             if (drag.handle.includes("s")) bottom = Math.min(H, Math.max(bottom + dy, top + min));
             crop.x = left; crop.y = top; crop.w = right - left; crop.h = bottom - top;
@@ -950,8 +968,9 @@ $("cropSave").addEventListener("click", async () => {
     btn.disabled = true;
     $("cropState").textContent = "만드는 중…";
     try {
-        const shrink = $("cropShrink").checked;
-        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w, shrink } : { x: crop.x, y: crop.y, w: crop.w, h: crop.h, shrink };
+        // 커버만 줄이기 선택 가능. 상세는 항상 자른 픽셀 그대로.
+        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w, shrink: $("cropShrink").checked }
+            : { x: crop.x, y: crop.y, w: crop.w, h: crop.h, shrink: false };
         const m = await call("POST", mediaUrl(crop.media, crop.mode), body);
         addMediaLocal(m);
         closeModal("coverModal");
