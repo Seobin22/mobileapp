@@ -747,17 +747,31 @@ public class MediaService {
         }, fx + "," + fy + "," + fs);
     }
 
-    /** 원본을 가로 880px(세로는 비율 유지) JPG(10MB 이하)로 만든다. 자르지 않는다. */
-    public Media makeDetail(long userId, long productId, Media original) throws IOException {
+    /** 상세 한 장의 최대 픽셀 수(서버 메모리 보호). 4800만 화소 사진 전체도 들어간다. */
+    static final long DETAIL_MAX_PIXELS = 50_000_000L;
+
+    /**
+     * 원본의 사각형 영역(화면 방향 좌표)을 잘라 상세 JPG(10MB 이하)로 만든다.
+     * 늘리거나 줄이지 않는다: 자른 영역의 원본 픽셀 그대로(해상도 유지). 용량은 JPG 품질로만 맞춘다.
+     */
+    public Media makeDetail(long userId, long productId, Media original, int x, int y, int w, int h) throws IOException {
         PixelSource src = pixelSource(userId, productId, original);
         ImageOps.Size disp = src.display();
-        int th = Math.max(1, (int) Math.round(disp.height() * (double) DETAIL_WIDTH / disp.width()));
-        boolean swap = src.orientation() >= 5;
+        x = Math.max(0, Math.min(x, disp.width() - 1));
+        y = Math.max(0, Math.min(y, disp.height() - 1));
+        w = Math.min(w, disp.width() - x);
+        h = Math.min(h, disp.height() - y);
+        if (w < 1 || h < 1) {
+            throw new ResponseStatusException(BAD_REQUEST, "자르기 영역이 잘못되었습니다.");
+        }
+        if ((long) w * h > DETAIL_MAX_PIXELS) {
+            throw new ResponseStatusException(BAD_REQUEST, "영역이 너무 큽니다(최대 5000만 화소). 조금 더 잘라 주세요.");
+        }
+        Rectangle raw = ImageOps.toRaw(x, y, w, h, src.width(), src.height(), src.orientation());
         return derive(userId, productId, original, "detail", () -> {
-            BufferedImage img = ImageOps.read(src.file(), null, ImageOps.subsampleFor(disp.width(), DETAIL_WIDTH));
-            img = ImageOps.resize(img, swap ? th : DETAIL_WIDTH, swap ? DETAIL_WIDTH : th);
-            return ImageOps.jpegWithin(ImageOps.orient(img, src.orientation()), DETAIL_MAX_BYTES);
-        }, null);
+            BufferedImage img = ImageOps.orient(ImageOps.read(src.file(), raw, 1), src.orientation());
+            return ImageOps.jpegWithin(img, DETAIL_MAX_BYTES);
+        }, x + "," + y + "," + w + "," + h);
     }
 
     private Media derive(long userId, long productId, Media original, String kind,
@@ -770,11 +784,13 @@ public class MediaService {
         Made made = tools.heavy(() -> {
             ImageOps.Encoded e = work.run();
             Files.write(out, e.bytes());
-            BufferedImage img = ImageOps.read(out, null, 1);
+            ImageOps.Size dims = ImageOps.rawSize(out);
+            BufferedImage img = ImageOps.read(out, null,
+                    ImageOps.subsampleFor(Math.max(dims.width(), dims.height()), 1600));
             for (int size : PREVIEW_SIZES) {
                 writePreview(img, cache.resolve(id + "_" + size + ".jpg"), size);
             }
-            return new Made(e, img.getWidth(), img.getHeight());
+            return new Made(e, dims.width(), dims.height());
         });
         ImageOps.Encoded enc = made.enc();
         Media m = new Media();

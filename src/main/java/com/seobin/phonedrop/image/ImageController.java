@@ -83,6 +83,10 @@ public class ImageController {
     public record ProductEdit(Purchase purchase, List<SizeRow> sizes, Material material) {
     }
 
+    /** 상세 자르기 영역(원본 화면 방향 px). 잘라낸 픽셀 그대로 저장한다. */
+    public record DetailRequest(int x, int y, int w, int h) {
+    }
+
     public record CoverRequest(int x, int y, int size) {
     }
 
@@ -410,11 +414,12 @@ public class ImageController {
     }
 
     @PostMapping("/products/{pid}/media/{mid}/detail")
-    public Media detail(@PathVariable long pid, @PathVariable String mid, HttpServletRequest request) throws IOException {
+    public Media detail(@PathVariable long pid, @PathVariable String mid, @RequestBody DetailRequest body,
+                        HttpServletRequest request) throws IOException {
         User user = allowed(request);
         Media original = find(store.get(user.id(), pid), mid);
         requireOriginal(original);
-        return addMedia(user.id(), pid, media.makeDetail(user.id(), pid, original));
+        return addMedia(user.id(), pid, media.makeDetail(user.id(), pid, original, body.x(), body.y(), body.w(), body.h()));
     }
 
     @PostMapping("/products/{pid}/media/{mid}/capture")

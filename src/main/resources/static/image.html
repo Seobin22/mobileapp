@@ -99,6 +99,12 @@
         .cropbox { position: relative; display: inline-block; user-select: none; touch-action: none; }
         .cropbox img { display: block; max-width: 100%; max-height: 65vh; }
         .cropsq { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.55); cursor: move; }
+        .cropsq .hdl { position: absolute; width: 16px; height: 16px; background: #fff; border: 2px solid #1c7ed6; border-radius: 3px; display: none; z-index: 1; }
+        .cropsq.free .hdl { display: block; }
+        .cropsq .hdl[data-h=nw] { left: -9px; top: -9px; cursor: nwse-resize; }
+        .cropsq .hdl[data-h=ne] { right: -9px; top: -9px; cursor: nesw-resize; }
+        .cropsq .hdl[data-h=sw] { left: -9px; bottom: -9px; cursor: nesw-resize; }
+        .cropsq .hdl[data-h=se] { right: -9px; bottom: -9px; cursor: nwse-resize; }
         .cropsq::after { content: ""; position: absolute; inset: 33.3% 0; border-top: 1px dashed rgba(255,255,255,.6); border-bottom: 1px dashed rgba(255,255,255,.6); }
         .crop-wrap { text-align: center; overflow: hidden; }
         .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
@@ -215,7 +221,7 @@
         </section>
 
         <section class="box">
-            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">가로 880px · JPG · 장당 10MB 이하</span></h2>
+            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">원본에서 자르기만(늘리거나 줄이지 않음) · JPG · 장당 10MB 이하</span></h2>
             <div class="mgrid" id="gridDetail"></div>
         </section>
 
@@ -271,15 +277,15 @@
 <div class="modal hidden" id="coverModal">
     <div class="panel">
         <h3><span id="coverTitle">커버 만들기</span><button data-close>닫기</button></h3>
-        <div class="crop-wrap"><div class="cropbox" id="cropBox"><img id="cropImg" alt=""><div class="cropsq" id="cropSq"></div></div></div>
+        <div class="crop-wrap"><div class="cropbox" id="cropBox"><img id="cropImg" alt=""><div class="cropsq" id="cropSq"><i class="hdl" data-h="nw"></i><i class="hdl" data-h="ne"></i><i class="hdl" data-h="sw"></i><i class="hdl" data-h="se"></i></div></div></div>
         <div class="row">
-            <label>자르기 크기 <input type="range" id="cropSize" min="20" max="100" value="100"></label>
+            <label id="cropSizeLabel">자르기 크기 <input type="range" id="cropSize" min="20" max="100" value="100"></label>
             <button id="cropCenter">가운데로</button>
             <span class="muted" id="cropInfo"></span>
         </div>
         <div class="row">
             <button class="primary" id="cropSave">커버로 저장 (900×900)</button>
-            <span class="muted">네모를 드래그해서 자를 위치를 정하세요.</span>
+            <span class="muted" id="cropHelp">네모를 드래그해서 자를 위치를 정하세요.</span>
             <span id="cropState"></span>
         </div>
     </div>
@@ -678,7 +684,7 @@ function photoRows(i) {
             : `${cv.axis === "위아래" ? "위" : "왼쪽"} ${cv.cutStart}px, ${cv.axis === "위아래" ? "아래" : "오른쪽"} ${cv.cutEnd}px 잘림`;
         rows.push(["커버 900×900", `${cut} · ${cv.square}px → 900px ${cv.scale}${icon(c.cover)}`]);
     }
-    if (i.detail) rows.push(["상세 가로 880", `${i.detail.width} × ${i.detail.height} px${i.width < 880 ? " (확대)" : ""}${icon(c.detail)}`]);
+    rows.push(["상세", `자르기만 · 원본 해상도 그대로 (최대 ${i.width} × ${i.height} px)${icon(c.detail)}`]);
     const tips = [];
     if (c.cover === false) tips.push(`커버: 짧은 변 ${t.cover}px 미만`);
     if (c.detail === false) tips.push(`상세: 가로 ${t.detail}px 미만`);
@@ -721,15 +727,8 @@ function originalCard(m) {
     if (isVideo) {
         actions.append(h("button", { class: "primary", onclick: () => openVideo(m) }, "▶ 장면 캡처"));
     } else {
-        actions.append(h("button", { class: "primary", onclick: () => openCover(m) }, "커버로 만들기"));
-        const det = h("button", { class: "primary" }, "상세로 만들기");
-        det.addEventListener("click", async () => {
-            det.disabled = true; det.textContent = "만드는 중…";
-            try { addMediaLocal(await call("POST", mediaUrl(m, "detail"))); }
-            catch (e) { alert(e.message); }
-            det.disabled = false; det.textContent = "상세로 만들기";
-        });
-        actions.append(det);
+        actions.append(h("button", { class: "primary", onclick: () => openCrop(m, "cover") }, "커버로 만들기"));
+        actions.append(h("button", { class: "primary", onclick: () => openCrop(m, "detail") }, "상세로 만들기"));
     }
     actions.append(h("button", { onclick: () => location.href = mediaUrl(m, "file", "?download=true") }, "다운로드"));
     actions.append(h("button", { class: "danger", onclick: () => deleteMedia(m) }, "삭제"));
@@ -749,7 +748,7 @@ function derivedCard(m, index) {
             ["크기", `${i.width} × ${i.height} px`],
             ["용량", `${bytesText(i.bytes)}${icon(i.bytes <= limit * 1048576)}`],
             ["형식", `JPG · 품질 ${i.quality}%`],
-            m.source?.crop ? ["자른 영역", (([x, y, s]) => `x ${x}, y ${y}, ${s}×${s}px`)(m.source.crop.split(","))] : null,
+            m.source?.crop ? ["자른 영역", (([x, y, w, hh]) => `x ${x}, y ${y}, ${w}×${hh ?? w}px`)(m.source.crop.split(","))] : null,
         ])));
     card.append(h("div", { class: "actions" },
         h("button", { onclick: () => location.href = mediaUrl(m, "file", "?download=true") }, "다운로드"),
@@ -844,16 +843,29 @@ drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); enqueueUploads([...e.dataTransfer.files]); });
 
 // ------------------------------------------------------------ 커버 자르기
-const crop = { media: null, x: 0, y: 0, size: 0 }; // 원본 화면 방향 px
+// cover: 정사각형(크기 슬라이더) → 900×900 / detail: 자유 사각형(모서리로 크기 조절) → 자른 픽셀 그대로 저장
+const crop = { media: null, mode: "cover", x: 0, y: 0, w: 0, h: 0 }; // 원본 화면 방향 px
 
-function openCover(m) {
+function openCrop(m, mode) {
     crop.media = m;
+    crop.mode = mode;
     const W = m.info.width, H = m.info.height;
-    crop.size = Math.min(W, H);
-    crop.x = Math.round((W - crop.size) / 2);
-    crop.y = Math.round((H - crop.size) / 2);
+    if (mode === "cover") {
+        crop.w = crop.h = Math.min(W, H);
+        crop.x = Math.round((W - crop.w) / 2);
+        crop.y = Math.round((H - crop.h) / 2);
+    } else {
+        crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; // 처음엔 전체(자르지 않음)
+    }
+    const cover = mode === "cover";
     $("cropSize").value = 100;
-    $("coverTitle").textContent = `커버 만들기 — ${m.name}`;
+    $("cropSizeLabel").classList.toggle("hidden", !cover);
+    $("cropCenter").textContent = cover ? "가운데로" : "전체로";
+    $("cropSq").classList.toggle("free", !cover);
+    $("cropSave").textContent = cover ? "커버로 저장 (900×900)" : "상세로 저장 (원본 해상도 그대로)";
+    $("cropHelp").textContent = cover ? "네모를 드래그해서 자를 위치를 정하세요."
+        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 자른 부분은 늘리거나 줄이지 않고 원본 픽셀 그대로 저장합니다.";
+    $("coverTitle").textContent = `${cover ? "커버" : "상세"} 만들기 — ${m.name}`;
     $("cropState").textContent = "";
     const img = $("cropImg");
     img.onload = drawCrop;
@@ -867,39 +879,58 @@ function drawCrop() {
     const sq = $("cropSq");
     sq.style.left = crop.x * k + "px";
     sq.style.top = crop.y * k + "px";
-    sq.style.width = sq.style.height = crop.size * k + "px";
-    $("cropInfo").textContent = `x ${crop.x}, y ${crop.y}, ${crop.size}×${crop.size}px → 900×900${crop.size < 900 ? " (확대 ⚠️)" : ""}`;
+    sq.style.width = crop.w * k + "px";
+    sq.style.height = crop.h * k + "px";
+    const where = `x ${crop.x}, y ${crop.y}, ${crop.w}×${crop.h}px`;
+    $("cropInfo").textContent = crop.mode === "cover"
+        ? `${where} → 900×900${crop.w < 900 ? " (확대 ⚠️)" : ""}`
+        : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`;
 }
 function clampCrop() {
     const W = crop.media.info.width, H = crop.media.info.height;
-    crop.x = Math.round(Math.max(0, Math.min(crop.x, W - crop.size)));
-    crop.y = Math.round(Math.max(0, Math.min(crop.y, H - crop.size)));
+    crop.w = Math.round(Math.max(1, Math.min(crop.w, W)));
+    crop.h = Math.round(Math.max(1, Math.min(crop.h, H)));
+    crop.x = Math.round(Math.max(0, Math.min(crop.x, W - crop.w)));
+    crop.y = Math.round(Math.max(0, Math.min(crop.y, H - crop.h)));
 }
 window.addEventListener("resize", () => { if (!$("coverModal").classList.contains("hidden")) drawCrop(); });
 $("cropSize").addEventListener("input", () => {
     const W = crop.media.info.width, H = crop.media.info.height;
-    const cx = crop.x + crop.size / 2, cy = crop.y + crop.size / 2;
-    crop.size = Math.max(1, Math.round(Math.min(W, H) * $("cropSize").value / 100));
-    crop.x = cx - crop.size / 2; crop.y = cy - crop.size / 2;
+    const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2;
+    crop.w = crop.h = Math.max(1, Math.round(Math.min(W, H) * $("cropSize").value / 100));
+    crop.x = cx - crop.w / 2; crop.y = cy - crop.h / 2;
     clampCrop(); drawCrop();
 });
 $("cropCenter").addEventListener("click", () => {
-    crop.x = (crop.media.info.width - crop.size) / 2; crop.y = (crop.media.info.height - crop.size) / 2;
+    const W = crop.media.info.width, H = crop.media.info.height;
+    if (crop.mode === "cover") { crop.x = (W - crop.w) / 2; crop.y = (H - crop.h) / 2; }
+    else { crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; }
     clampCrop(); drawCrop();
 });
 (() => {
     const sq = $("cropSq");
     let drag = null;
     sq.addEventListener("pointerdown", e => {
-        drag = { px: e.clientX, py: e.clientY, x: crop.x, y: crop.y };
+        const handle = e.target.classList.contains("hdl") ? e.target.dataset.h : null;
+        drag = { px: e.clientX, py: e.clientY, x: crop.x, y: crop.y, w: crop.w, h: crop.h, handle };
         sq.setPointerCapture(e.pointerId);
         e.preventDefault();
     });
     sq.addEventListener("pointermove", e => {
         if (!drag) return;
         const k = $("cropImg").clientWidth / crop.media.info.width;
-        crop.x = drag.x + (e.clientX - drag.px) / k;
-        crop.y = drag.y + (e.clientY - drag.py) / k;
+        const dx = (e.clientX - drag.px) / k, dy = (e.clientY - drag.py) / k;
+        const W = crop.media.info.width, H = crop.media.info.height, min = 20;
+        if (!drag.handle) {
+            crop.x = drag.x + dx; crop.y = drag.y + dy;
+        } else {
+            let left = drag.x, top = drag.y, right = drag.x + drag.w, bottom = drag.y + drag.h;
+            if (drag.handle.includes("w")) left = Math.max(0, Math.min(left + dx, right - min));
+            if (drag.handle.includes("e")) right = Math.min(W, Math.max(right + dx, left + min));
+            if (drag.handle.includes("n")) top = Math.max(0, Math.min(top + dy, bottom - min));
+            if (drag.handle.includes("s")) bottom = Math.min(H, Math.max(bottom + dy, top + min));
+            crop.x = left; crop.y = top; crop.w = right - left; crop.h = bottom - top;
+        }
         clampCrop(); drawCrop();
     });
     const end = () => drag = null;
@@ -911,7 +942,8 @@ $("cropSave").addEventListener("click", async () => {
     btn.disabled = true;
     $("cropState").textContent = "만드는 중…";
     try {
-        const m = await call("POST", mediaUrl(crop.media, "cover"), { x: crop.x, y: crop.y, size: crop.size });
+        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w } : { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+        const m = await call("POST", mediaUrl(crop.media, crop.mode), body);
         addMediaLocal(m);
         closeModal("coverModal");
     } catch (e) { $("cropState").textContent = e.message; }

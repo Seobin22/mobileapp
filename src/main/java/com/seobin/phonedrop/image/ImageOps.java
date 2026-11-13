@@ -4,6 +4,8 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
+import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -62,7 +64,7 @@ public final class ImageOps {
                 }
                 int s = Math.max(1, subsample);
                 param.setSourceSubsampling(s, s, 0, 0);
-                return toRgb(reader.read(0, param));
+                return flatten(reader.read(0, param));
             } catch (javax.imageio.IIOException e) {
                 throw new IOException("이 사진의 픽셀을 읽을 수 없습니다(지원하지 않는 색 형식일 수 있음): " + e.getMessage(), e);
             } finally {
@@ -120,32 +122,30 @@ public final class ImageOps {
         if (o <= 1 || o > 8) {
             return src;
         }
-        int w = src.getWidth();
-        int h = src.getHeight();
+        double w = src.getWidth();
+        double h = src.getHeight();
+        // raw (x,y) → 화면 (X,Y). 90° 단위 회전·뒤집기라 픽셀을 옮기기만 한다(보간 없음, 해상도 그대로).
+        AffineTransform t = switch (o) {
+            case 2 -> new AffineTransform(-1, 0, 0, 1, w, 0);
+            case 3 -> new AffineTransform(-1, 0, 0, -1, w, h);
+            case 4 -> new AffineTransform(1, 0, 0, -1, 0, h);
+            case 5 -> new AffineTransform(0, 1, 1, 0, 0, 0);
+            case 6 -> new AffineTransform(0, 1, -1, 0, h, 0);
+            case 7 -> new AffineTransform(0, -1, -1, 0, h, w);
+            default -> new AffineTransform(0, -1, 1, 0, 0, w); // 8
+        };
         boolean swap = o >= 5;
-        int ow = swap ? h : w;
-        int oh = swap ? w : h;
-        int[] in = src.getRGB(0, 0, w, h, null, 0, w);
-        int[] out = new int[ow * oh];
-        for (int y = 0; y < oh; y++) {
-            for (int x = 0; x < ow; x++) {
-                int sx;
-                int sy;
-                switch (o) {
-                    case 2 -> { sx = w - 1 - x; sy = y; }
-                    case 3 -> { sx = w - 1 - x; sy = h - 1 - y; }
-                    case 4 -> { sx = x; sy = h - 1 - y; }
-                    case 5 -> { sx = y; sy = x; }
-                    case 6 -> { sx = y; sy = h - 1 - x; }
-                    case 7 -> { sx = w - 1 - y; sy = h - 1 - x; }
-                    default -> { sx = w - 1 - y; sy = x; } // 8
-                }
-                out[y * ow + x] = in[sy * w + sx];
-            }
-        }
-        BufferedImage dst = new BufferedImage(ow, oh, BufferedImage.TYPE_INT_RGB);
-        dst.setRGB(0, 0, ow, oh, out, 0, ow);
+        int type = src.getType() == BufferedImage.TYPE_3BYTE_BGR ? BufferedImage.TYPE_3BYTE_BGR : BufferedImage.TYPE_INT_RGB;
+        BufferedImage dst = new BufferedImage(swap ? src.getHeight() : src.getWidth(),
+                swap ? src.getWidth() : src.getHeight(), type);
+        new AffineTransformOp(t, AffineTransformOp.TYPE_NEAREST_NEIGHBOR).filter(flatten(src), dst);
         return dst;
+    }
+
+    /** 투명·특수 색 형식만 흰 배경 RGB 로 바꾸고, 일반 RGB(JPEG 의 3바이트 형식 포함)는 그대로 둔다(메모리 절약). */
+    static BufferedImage flatten(BufferedImage src) {
+        int t = src.getType();
+        return t == BufferedImage.TYPE_INT_RGB || t == BufferedImage.TYPE_3BYTE_BGR ? src : toRgb(src);
     }
 
     /** 고품질 리사이즈: 절반씩 줄이다가 마지막에 bicubic. 확대도 bicubic. */
@@ -183,7 +183,7 @@ public final class ImageOps {
             ImageWriteParam param = writer.getDefaultWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
             param.setCompressionQuality(quality);
-            writer.write(null, new IIOImage(toRgb(img), null, null), param);
+            writer.write(null, new IIOImage(flatten(img), null, null), param);
         } finally {
             writer.dispose();
         }
