@@ -216,12 +216,12 @@
         </section>
 
         <section class="box">
-            <h2>커버 <span class="count" id="cntCover"></span> <span class="count">정사각형 자르기 · 기본은 원본 픽셀 그대로(900×900 줄이기는 선택) · JPG · 장당 2MB 이하</span></h2>
+            <h2>커버 <span class="count" id="cntCover"></span> <span class="count">900×900으로 자르기(원본 픽셀 그대로, 줄이기는 선택) · JPG · 장당 2MB 이하</span></h2>
             <div class="mgrid" id="gridCover"></div>
         </section>
 
         <section class="box">
-            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">자르기 · 원본 픽셀 그대로(가로 880px 고정 자르기 선택 가능) · JPG · 장당 10MB 이하</span></h2>
+            <h2>상세 <span class="count" id="cntDetail"></span> <span class="count">가로 880px로 자르기(원본 픽셀 그대로, 줄이기는 선택) · JPG · 장당 10MB 이하</span></h2>
             <div class="mgrid" id="gridDetail"></div>
         </section>
 
@@ -847,49 +847,73 @@ drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("
 // cover: 정사각형(크기 슬라이더) → 900×900 / detail: 자유 사각형(모서리로 크기 조절) → 자른 픽셀 그대로 저장
 const crop = { media: null, mode: "cover", x: 0, y: 0, w: 0, h: 0 }; // 원본 화면 방향 px
 
-// 체크박스: 커버 = 900×900으로 줄이기 / 상세 = 가로 880px로 자르기(네모 가로를 원본 880px로 고정, 줄이지 않음).
+// 기본은 "자르기만"(줄이지 않음, 원본 픽셀 그대로):
+//   커버 = 네모를 원본 900×900px 로 고정하고 위치만 옮긴다 → 900×900 그대로 저장
+//   상세 = 네모 가로를 원본 880px 로 고정하고 위치·높이만 조절 → 880×높이 그대로 저장
+// "예전처럼 줄이기"를 켜면: 커버 = 네모 크기 자유(슬라이더) → 900×900 으로 줄임, 상세 = 자유롭게 자른 뒤 가로 880px 로 줄임.
+// 원본이 900px(커버, 짧은 변)·880px(상세, 가로)보다 작으면 자르기만으로는 못 만들어서 줄이기(확대)만 쓴다.
 // 선택은 브라우저에 기억해 둔다(기본: 꺼짐).
-const DETAIL_FIX_W = 880;
+const COVER_FIX = 900, DETAIL_FIX_W = 880;
 function loadPref(key) { try { return localStorage.getItem("image." + key) === "1"; } catch { return false; } }
 function savePref(key, on) { try { localStorage.setItem("image." + key, on ? "1" : "0"); } catch { /* 저장 못 해도 됨 */ } }
-function prefKey() { return crop.mode === "cover" ? "shrink.cover" : "fix880.detail"; }
-function fixedWidth() { return crop.mode === "detail" && $("cropShrink").checked; }
-/** 상세 가로 고정: 네모 가운데를 유지한 채 가로를 880px(원본이 더 좁으면 원본 가로)로 맞춘다. */
-function applyFixedWidth() {
-    if (!fixedWidth()) return;
-    const W = crop.media.info.width;
-    const cx = crop.x + crop.w / 2;
-    crop.w = Math.min(DETAIL_FIX_W, W);
-    crop.x = cx - crop.w / 2;
+function shrinkOn() { return $("cropShrink").checked; }
+function tooSmall(m, mode) {
+    return mode === "cover" ? Math.min(m.info.width, m.info.height) < COVER_FIX : m.info.width < DETAIL_FIX_W;
+}
+/** 자르기만 모드: 네모 가운데를 유지한 채 정해진 크기로 맞춘다. */
+function applyFixed() {
+    if (shrinkOn()) return;
+    const W = crop.media.info.width, H = crop.media.info.height;
+    const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2;
+    if (crop.mode === "cover") {
+        crop.w = crop.h = Math.min(COVER_FIX, W, H);
+        crop.x = cx - crop.w / 2; crop.y = cy - crop.h / 2;
+    } else {
+        crop.w = Math.min(DETAIL_FIX_W, W);
+        crop.x = cx - crop.w / 2;
+    }
     clampCrop();
 }
-$("cropShrink").addEventListener("change", () => { savePref(prefKey(), $("cropShrink").checked); applyFixedWidth(); drawCrop(); });
+function updateCropControls() {
+    const cover = crop.mode === "cover", shrink = shrinkOn();
+    $("cropSizeLabel").classList.toggle("hidden", !(cover && shrink)); // 슬라이더는 커버 줄이기일 때만
+    $("cropSq").classList.toggle("free", !cover);                      // 모서리 손잡이는 상세만
+    $("cropHelp").textContent = cover
+        ? (shrink ? "네모를 드래그해 옮기고 크기는 슬라이더로 정하세요. 자른 부분을 900×900으로 줄여 저장합니다."
+                  : "900×900 네모를 드래그해 위치를 정하세요. 줄이지 않고 원본 픽셀 그대로 저장합니다.")
+        : (shrink ? "네모를 드래그해 옮기고 모서리로 크기를 정하세요. 자른 부분을 가로 880px로 줄여 저장합니다."
+                  : "가로 880px 네모를 드래그해 옮기고, 모서리로 높이를 정하세요. 줄이지 않고 원본 픽셀 그대로 저장합니다.");
+}
+$("cropShrink").addEventListener("change", () => {
+    savePref("shrink." + crop.mode, shrinkOn());
+    if (shrinkOn() && crop.mode === "cover") {
+        $("cropSize").value = Math.round(crop.w / Math.min(crop.media.info.width, crop.media.info.height) * 100);
+    }
+    applyFixed(); updateCropControls(); drawCrop();
+});
 
 function openCrop(m, mode) {
     crop.media = m;
     crop.mode = mode;
     const W = m.info.width, H = m.info.height;
-    if (mode === "cover") {
-        crop.w = crop.h = Math.min(W, H);
+    const cover = mode === "cover";
+    const small = tooSmall(m, mode);
+    $("cropShrink").checked = small || loadPref("shrink." + mode);
+    $("cropShrink").disabled = small;
+    $("cropShrinkText").textContent = (cover ? "예전처럼 줄이기 (크기 조절 → 900×900)" : "예전처럼 줄이기 (자유 자르기 → 가로 880px)")
+        + (small ? (cover ? ` · 원본 짧은 변 ${Math.min(W, H)}px라 줄이기(확대)만 가능` : ` · 원본 가로 ${W}px라 줄이기(확대)만 가능`) : "");
+    if (cover) {
+        crop.w = crop.h = shrinkOn() ? Math.min(W, H) : Math.min(COVER_FIX, W, H);
         crop.x = Math.round((W - crop.w) / 2);
         crop.y = Math.round((H - crop.h) / 2);
+        $("cropSize").value = Math.round(crop.w / Math.min(W, H) * 100);
     } else {
-        crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; // 처음엔 전체(자르지 않음)
+        crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; // 처음엔 전체(자르기만이면 가로 880 가운데)
     }
-    const cover = mode === "cover";
-    $("cropSize").value = 100;
-    $("cropSizeLabel").classList.toggle("hidden", !cover);
-    $("cropCenter").textContent = cover ? "가운데로" : "전체로";
-    $("cropSq").classList.toggle("free", !cover);
+    applyFixed();
+    updateCropControls();
+    $("cropCenter").textContent = cover ? "가운데로" : "전체 높이로";
     $("cropSave").textContent = cover ? "커버로 저장" : "상세로 저장";
-    const narrow = !cover && W < DETAIL_FIX_W;
-    $("cropShrinkText").textContent = cover ? "900×900으로 줄이기"
-        : narrow ? `가로 880px로 자르기 (원본 가로 ${W}px라 불가)` : "가로 880px로 자르기 (높이만 조절)";
-    $("cropShrink").disabled = narrow;
-    $("cropShrink").checked = !narrow && loadPref(prefKey());
-    applyFixedWidth();
-    $("cropHelp").textContent = cover ? "네모를 드래그해서 자를 위치를 정하세요. 줄이기를 끄면 자른 픽셀 그대로 저장합니다."
-        : "네모를 드래그해 옮기고, 모서리를 끌어 크기를 정하세요. 상세는 항상 자른 픽셀 그대로 저장합니다(줄이지 않음).";
     $("coverTitle").textContent = `${cover ? "커버" : "상세"} 만들기 — ${m.name}`;
     $("cropState").textContent = "";
     const img = $("cropImg");
@@ -907,9 +931,13 @@ function drawCrop() {
     sq.style.width = crop.w * k + "px";
     sq.style.height = crop.h * k + "px";
     const where = `x ${crop.x}, y ${crop.y}, ${crop.w}×${crop.h}px`;
-    $("cropInfo").textContent = crop.mode === "cover"
-        ? ($("cropShrink").checked ? `${where} → 900×900으로 줄임${crop.w < 900 ? " (확대 ⚠️)" : ""}` : `${where} → 그대로 ${crop.w}×${crop.h}px 저장`)
-        : `${where} → 그대로 ${crop.w}×${crop.h}px 저장${fixedWidth() ? " (가로 고정)" : ""}`;
+    const keep = `${where} → 그대로 ${crop.w}×${crop.h}px 저장`;
+    if (crop.mode === "cover") {
+        $("cropInfo").textContent = shrinkOn() ? `${where} → 900×900으로 ${crop.w < COVER_FIX ? "확대 ⚠️" : "줄임"}` : keep;
+    } else {
+        const th = Math.round(crop.h * DETAIL_FIX_W / crop.w);
+        $("cropInfo").textContent = shrinkOn() ? `${where} → 880×${th}px로 ${crop.w < DETAIL_FIX_W ? "확대 ⚠️" : "줄임"}` : keep;
+    }
 }
 function clampCrop() {
     const W = crop.media.info.width, H = crop.media.info.height;
@@ -919,7 +947,7 @@ function clampCrop() {
     crop.y = Math.round(Math.max(0, Math.min(crop.y, H - crop.h)));
 }
 window.addEventListener("resize", () => { if (!$("coverModal").classList.contains("hidden")) drawCrop(); });
-$("cropSize").addEventListener("input", () => {
+$("cropSize").addEventListener("input", () => { // 커버 줄이기 모드에서만 보인다
     const W = crop.media.info.width, H = crop.media.info.height;
     const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2;
     crop.w = crop.h = Math.max(1, Math.round(Math.min(W, H) * $("cropSize").value / 100));
@@ -929,7 +957,8 @@ $("cropSize").addEventListener("input", () => {
 $("cropCenter").addEventListener("click", () => {
     const W = crop.media.info.width, H = crop.media.info.height;
     if (crop.mode === "cover") { crop.x = (W - crop.w) / 2; crop.y = (H - crop.h) / 2; }
-    else { crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; applyFixedWidth(); }
+    else if (shrinkOn()) { crop.x = 0; crop.y = 0; crop.w = W; crop.h = H; }
+    else { crop.x = (W - crop.w) / 2; crop.y = 0; crop.h = H; }
     clampCrop(); drawCrop();
 });
 (() => {
@@ -950,7 +979,7 @@ $("cropCenter").addEventListener("click", () => {
             crop.x = drag.x + dx; crop.y = drag.y + dy;
         } else {
             let left = drag.x, top = drag.y, right = drag.x + drag.w, bottom = drag.y + drag.h;
-            const lockW = fixedWidth(); // 가로 고정이면 위아래만 조절
+            const lockW = crop.mode === "detail" && !shrinkOn(); // 상세 자르기만: 가로 880 고정, 위아래만
             if (!lockW && drag.handle.includes("w")) left = Math.max(0, Math.min(left + dx, right - min));
             if (!lockW && drag.handle.includes("e")) right = Math.min(W, Math.max(right + dx, left + min));
             if (drag.handle.includes("n")) top = Math.max(0, Math.min(top + dy, bottom - min));
@@ -968,9 +997,9 @@ $("cropSave").addEventListener("click", async () => {
     btn.disabled = true;
     $("cropState").textContent = "만드는 중…";
     try {
-        // 커버만 줄이기 선택 가능. 상세는 항상 자른 픽셀 그대로.
-        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w, shrink: $("cropShrink").checked }
-            : { x: crop.x, y: crop.y, w: crop.w, h: crop.h, shrink: false };
+        const shrink = shrinkOn();
+        const body = crop.mode === "cover" ? { x: crop.x, y: crop.y, size: crop.w, shrink }
+            : { x: crop.x, y: crop.y, w: crop.w, h: crop.h, shrink };
         const m = await call("POST", mediaUrl(crop.media, crop.mode), body);
         addMediaLocal(m);
         closeModal("coverModal");
