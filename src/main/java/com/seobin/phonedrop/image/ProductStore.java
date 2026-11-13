@@ -82,12 +82,40 @@ public class ProductStore {
             for (Path p : s.toList()) {
                 Path f = p.resolve("product.json");
                 if (Files.isRegularFile(f)) {
-                    out.add(read(f));
+                    Product product = read(f);
+                    if (product.type == null) {
+                        out.add(product);
+                    }
                 }
             }
         }
         out.sort(Comparator.comparing((Product p) -> p.createdAt).reversed());
         return out;
+    }
+
+    /** 동영상 만들기 작업 공간(회원당 하나). 없으면 만든다. */
+    public Product slides(long userId) throws IOException {
+        synchronized (lock(userId, -1)) {
+            Path dir = userDir(userId);
+            if (Files.isDirectory(dir)) {
+                try (Stream<Path> s = Files.list(dir)) {
+                    for (Path p : s.toList()) {
+                        Path f = p.resolve("product.json");
+                        if (Files.isRegularFile(f)) {
+                            Product product = read(f);
+                            if ("slides".equals(product.type)) {
+                                return product;
+                            }
+                        }
+                    }
+                }
+            }
+            Product created = create(userId);
+            return update(userId, created.id, p -> {
+                p.type = "slides";
+                return p;
+            });
+        }
     }
 
     public Product create(long userId) throws IOException {

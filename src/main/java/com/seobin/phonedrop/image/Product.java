@@ -12,6 +12,8 @@ import java.util.Map;
 public class Product {
 
     public long id;
+    /** null = 일반 상품, "slides" = 동영상 만들기 작업 공간(상품 목록에 안 나옴, 회원당 하나). */
+    public String type;
     public String createdAt;
     public String updatedAt;
     public Purchase purchase = new Purchase();
@@ -75,6 +77,9 @@ public class Product {
         public Source source;
         /** 영상 미리보기용 변환 상태: null | making | ready | failed */
         public String proxy;
+        /** 만든 슬라이드 동영상(kind=slideshow) 상태: making | ready | failed */
+        public String status;
+        public String error;
     }
 
     public static class Source {

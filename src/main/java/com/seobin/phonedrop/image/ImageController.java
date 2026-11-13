@@ -443,6 +443,60 @@ public class ImageController {
         return Map.of("deleted", mid);
     }
 
+    // ================================================================ 슬라이드 동영상
+
+    public record SlideshowRequest(List<String> ids, double seconds) {
+    }
+
+    /** 동영상 만들기 작업 공간(회원당 하나, 상품 목록에는 안 나옴). */
+    @GetMapping("/slides")
+    public Product slides(HttpServletRequest request) throws IOException {
+        return store.slides(allowed(request).id());
+    }
+
+    /** 고른 사진(ids 순서대로)을 장당 seconds 초씩 보여주는 슬라이드 MP4 를 만든다. 뒤에서 만들고 status 로 알려준다. */
+    @PostMapping("/products/{pid}/slideshow")
+    public Media slideshow(@PathVariable long pid, @RequestBody SlideshowRequest body,
+                           HttpServletRequest request) throws IOException {
+        User user = allowed(request);
+        if (body.ids() == null || body.ids().isEmpty() || body.ids().size() > 300) {
+            throw new ResponseStatusException(BAD_REQUEST, "사진을 1~300장 골라 주세요.");
+        }
+        if (!(body.seconds() >= 0.2 && body.seconds() <= 60)) {
+            throw new ResponseStatusException(BAD_REQUEST, "장당 시간은 0.2~60초로 정해 주세요.");
+        }
+        Product p = store.get(user.id(), pid);
+        List<Media> photos = new ArrayList<>();
+        for (String id : body.ids()) {
+            Media m = find(p, id);
+            if (!"photo".equals(m.type) || !"original".equals(m.kind)) {
+                throw new ResponseStatusException(BAD_REQUEST, "사진만 고를 수 있습니다: " + m.name);
+            }
+            photos.add(m);
+        }
+        media.requireFfmpeg();
+        if (store.usableDiskBytes() < MIN_FREE_DISK) {
+            throw new ResponseStatusException(INSUFFICIENT_STORAGE, "서버 디스크 공간이 부족합니다.");
+        }
+        Media out = store.update(user.id(), pid, x -> {
+            Media m = new Media();
+            m.id = "m" + (++x.seq);
+            m.kind = "slideshow";
+            m.type = "video";
+            m.file = m.id + ".mp4";
+            m.createdAt = ProductStore.now();
+            m.name = "슬라이드_" + java.time.LocalDateTime.now(ProductStore.KST)
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".mp4";
+            m.status = "making";
+            m.info.put("count", photos.size());
+            m.info.put("seconds", body.seconds());
+            x.media.add(m);
+            return m;
+        });
+        media.startSlideshow(user.id(), pid, photos, body.seconds(), out.id);
+        return out;
+    }
+
     // ================================================================ 내보내기
 
     @GetMapping("/export-methods")

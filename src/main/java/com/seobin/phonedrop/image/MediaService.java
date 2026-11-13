@@ -573,6 +573,144 @@ public class MediaService {
         });
     }
 
+    // ================================================================ 슬라이드 동영상
+
+    public void requireFfmpeg() {
+        tools.require("ffmpeg");
+    }
+
+    /**
+     * 고른 사진들을 순서대로 이어 붙인 슬라이드 MP4 를 뒤에서 만든다.
+     * 화면 크기는 첫 사진 비율(긴 변 최대 1920px). 다른 크기의 사진은 자르거나 늘리지 않고 가운데에 두고 남는 곳은 검은색.
+     */
+    public void startSlideshow(long userId, long productId, List<Media> photos, double seconds, String outId) {
+        proxyWorker.submit(() -> {
+            String state = "failed";
+            String error = null;
+            Map<String, Object> info = new LinkedHashMap<>();
+            long size = 0;
+            Path work = null;
+            Path out = null;
+            try {
+                work = Files.createDirectories(store.tmpDir(userId, productId).resolve("slides-" + outId));
+                ImageOps.Size first = pixelSource(userId, productId, photos.get(0)).display();
+                double k = Math.min(1.0, 1920.0 / Math.max(first.width(), first.height()));
+                int w = even(first.width() * k);
+                int h = even(first.height() * k);
+                StringBuilder list = new StringBuilder();
+                String sec = String.format(Locale.ROOT, "%.3f", seconds);
+                for (int i = 0; i < photos.size(); i++) {
+                    PixelSource src = pixelSource(userId, productId, photos.get(i));
+                    String name = String.format(Locale.ROOT, "f%04d.jpg", i + 1);
+                    Path frame = work.resolve(name);
+                    tools.heavy(() -> {
+                        Files.write(frame, ImageOps.jpeg(slideFrame(src, w, h), 0.92f));
+                        return null;
+                    });
+                    list.append("file '").append(name).append("'\nduration ").append(sec).append('\n');
+                    if (i == photos.size() - 1) {
+                        list.append("file '").append(name).append("'\n"); // concat 은 마지막 장을 한 번 더 적어야 길이가 맞다
+                    }
+                }
+                Files.writeString(work.resolve("list.txt"), list);
+                Path tmp = work.resolve("out.mp4");
+                List<String> cmd = new ArrayList<>();
+                tools.find("nice").ifPresent(n -> cmd.addAll(List.of(n, "-n", "10")));
+                cmd.addAll(List.of(tools.require("ffmpeg"), "-nostdin", "-hide_banner", "-v", "error", "-y",
+                        "-f", "concat", "-safe", "0", "-i", work.resolve("list.txt").toString(),
+                        "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                        "-tune", "stillimage", "-threads", "1", "-movflags", "+faststart", "-an", tmp.toString()));
+                ExternalTools.Result r = tools.run(cmd, Duration.ofMinutes(30));
+                if (r.exit() != 0 || !Files.isRegularFile(tmp)) {
+                    throw new IOException("동영상 인코딩 실패: " + r.stderrTail());
+                }
+                out = store.filesDir(userId, productId).resolve(outId + ".mp4");
+                Files.move(tmp, out, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                Path cache = store.cacheDir(userId, productId);
+                BufferedImage firstFrame = ImageOps.read(work.resolve("f0001.jpg"), null, 1);
+                for (int s : PREVIEW_SIZES) {
+                    writePreview(firstFrame, cache.resolve(outId + "_" + s + ".jpg"), s);
+                }
+                size = Files.size(out);
+                info.put("width", w);
+                info.put("height", h);
+                info.put("count", photos.size());
+                info.put("seconds", seconds);
+                info.put("duration", Math.round(seconds * photos.size() * 1000) / 1000.0);
+                info.put("bytes", size);
+                state = "ready";
+            } catch (Exception e) {
+                log.warn("슬라이드 동영상 만들기 실패", e);
+                error = e.getMessage() == null ? e.toString() : e.getMessage();
+            } finally {
+                deleteTree(work);
+            }
+            String finalState = state;
+            String finalError = error;
+            long finalSize = size;
+            boolean kept;
+            try {
+                kept = store.update(userId, productId, p -> {
+                    for (Media x : p.media) {
+                        if (x.id.equals(outId)) {
+                            x.status = finalState;
+                            x.error = finalError;
+                            x.size = finalSize;
+                            x.info.putAll(info);
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+            } catch (RuntimeException e) {
+                kept = false;
+            }
+            if (!kept && out != null) { // 만드는 사이에 지웠으면 결과 파일도 지운다
+                try {
+                    Files.deleteIfExists(out);
+                } catch (IOException ignored) {
+                    // 무시
+                }
+            }
+        });
+    }
+
+    /** 사진 한 장을 w×h 검은 화면 가운데에 놓는다. 화면보다 크면 비율대로 줄이고, 작으면 그대로 둔다. */
+    private static BufferedImage slideFrame(PixelSource src, int w, int h) throws IOException {
+        ImageOps.Size disp = src.display();
+        double k = Math.min(1.0, Math.min((double) w / disp.width(), (double) h / disp.height()));
+        int tw = Math.max(1, (int) Math.round(disp.width() * k));
+        int th = Math.max(1, (int) Math.round(disp.height() * k));
+        BufferedImage img = ImageOps.read(src.file(), null,
+                ImageOps.subsampleFor(Math.max(disp.width(), disp.height()), Math.max(tw, th)));
+        boolean swap = src.orientation() >= 5;
+        img = ImageOps.orient(ImageOps.resize(img, swap ? th : tw, swap ? tw : th), src.orientation());
+        BufferedImage canvas = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = canvas.createGraphics();
+        g.setColor(java.awt.Color.BLACK);
+        g.fillRect(0, 0, w, h);
+        g.drawImage(img, (w - img.getWidth()) / 2, (h - img.getHeight()) / 2, null);
+        g.dispose();
+        return canvas;
+    }
+
+    private static int even(double v) {
+        return Math.max(2, (int) Math.round(v / 2) * 2);
+    }
+
+    private static void deleteTree(Path dir) {
+        if (dir == null || !Files.exists(dir)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> s = Files.walk(dir)) {
+            for (Path p : s.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(p);
+            }
+        } catch (IOException ignored) {
+            // 임시 폴더 정리 실패는 무시
+        }
+    }
+
     // ================================================================ 커버 · 상세
 
     PixelSource pixelSource(long userId, long productId, Media m) throws IOException {

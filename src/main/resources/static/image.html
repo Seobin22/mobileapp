@@ -67,6 +67,14 @@
         .drop { border: 2px dashed #adb5bd; border-radius: 10px; padding: 18px; text-align: center; color: #868e96; margin-bottom: 10px; }
         .drop.over { border-color: #1c7ed6; background: #e7f5ff; color: #1c7ed6; }
         .uploads div { font-size: 12px; margin: 3px 0; }
+        .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+        .tile { position: relative; border: 2px solid transparent; border-radius: 8px; overflow: hidden; cursor: pointer; background: #f1f3f5; }
+        .tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+        .tile .tname { font-size: 11px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #495057; }
+        .tile.sel { border-color: #1c7ed6; }
+        .tile .num { position: absolute; top: 4px; left: 4px; background: #1c7ed6; color: #fff; border-radius: 999px; min-width: 22px; height: 22px; font-size: 12px; display: flex; align-items: center; justify-content: center; padding: 0 5px; }
+        .tile .zoom { position: absolute; top: 4px; right: 4px; padding: 0 5px; font-size: 11px; background: rgba(255,255,255,.85); }
+        .mcard video { max-height: 260px; width: 100%; }
         .uploads progress { width: 160px; vertical-align: middle; }
         .mgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
         .mcard { border: 1px solid #e3e5e8; border-radius: 10px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
@@ -136,6 +144,7 @@
     <div id="listView" class="hidden">
         <div class="toolbar">
             <button class="primary" id="newProduct">+ 새 상품</button>
+            <button id="openSlides" onclick="location.hash='#slides'">🎞 동영상 만들기</button>
             <span class="muted" id="usage"></span>
         </div>
         <div class="grid" id="productGrid"></div>
@@ -220,6 +229,40 @@
                 <button data-scope="all">전체 (커버+상세)</button>
             </div>
             <p class="muted">파일명은 사입명의 첫 부분으로 자동으로 붙습니다. 예: 커프스T_cover1.jpg, 커프스T_detail1.jpg</p>
+        </section>
+    </div>
+
+    <!-- 동영상 만들기 (사진 → 슬라이드 동영상) -->
+    <div id="slidesView" class="hidden">
+        <div class="toolbar">
+            <button onclick="location.hash=''">← 목록</button>
+            <b style="flex:1">🎞 동영상 만들기</b>
+        </div>
+        <section class="box">
+            <h2>사진 <span class="count" id="slCount"></span></h2>
+            <div class="drop" id="slDrop">
+                사진을 여기에 끌어다 놓거나 <button id="slPick">사진 선택</button>
+                <input type="file" id="slInput" multiple accept="image/*,.heic,.heif" class="hidden">
+                <div class="muted" style="margin-top:6px">사진을 눌러 고르면 고른 순서대로 번호가 붙고, 그 순서로 동영상이 됩니다.</div>
+            </div>
+            <div class="uploads" id="slUploads"></div>
+            <div class="row" style="margin:0 0 10px">
+                <button id="slAll">올린 순서대로 전체 선택</button>
+                <button id="slNone">선택 해제</button>
+                <button id="slDelete" class="danger">고른 사진 삭제</button>
+                <span class="muted" id="slSelInfo"></span>
+            </div>
+            <div class="tiles" id="slGrid"></div>
+        </section>
+        <section class="box">
+            <h2>동영상</h2>
+            <div class="row" style="margin-top:0">
+                <label>장당 <input id="slSeconds" type="number" min="0.2" max="60" step="0.1" value="2" style="width:70px"> 초</label>
+                <button class="primary" id="slMake">고른 사진으로 동영상 만들기</button>
+                <span id="slState"></span>
+            </div>
+            <p class="muted">MP4(H.264, 소리 없음). 화면 크기는 첫 사진 비율(긴 변 최대 1920px)이고, 크기가 다른 사진은 자르거나 늘리지 않고 가운데에 그대로 이어 붙입니다(남는 곳은 검은색).</p>
+            <div class="mgrid" id="slVideos"></div>
         </section>
     </div>
 </main>
@@ -349,7 +392,7 @@ document.addEventListener("keydown", e => {
 
 // ------------------------------------------------------------ 로그인 · 화면 전환
 function show(view) {
-    for (const v of ["loginView", "deniedView", "listView", "productView"]) $(v).classList.toggle("hidden", v !== view);
+    for (const v of ["loginView", "deniedView", "listView", "productView", "slidesView"]) $(v).classList.toggle("hidden", v !== view);
 }
 function showLogin() { show("loginView"); $("logoutBtn").classList.add("hidden"); $("who").textContent = ""; }
 
@@ -376,7 +419,8 @@ window.addEventListener("hashchange", () => route());
 
 async function route() {
     const m = location.hash.match(/^#p=(\d+)$/);
-    if (m) await openProduct(Number(m[1]));
+    if (location.hash === "#slides") await openSlides();
+    else if (m) await openProduct(Number(m[1]));
     else await loadList();
 }
 
@@ -715,11 +759,11 @@ function derivedCard(m, index) {
 
 function addMediaLocal(m) {
     state.product.media.push(m);
-    renderMedia();
+    state.product.type === "slides" ? renderSlides() : renderMedia();
 }
 
 async function deleteMedia(m) {
-    const what = m.kind === "original" ? "원본" : m.kind === "cover" ? "커버" : "상세";
+    const what = m.kind === "original" ? "사진" : m.kind === "cover" ? "커버" : m.kind === "slideshow" ? "동영상" : "상세";
     if (!confirm(`${what} '${m.name}' 을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
     try {
         await call("DELETE", mediaUrl(m, "").replace(/\/$/, ""));
@@ -768,13 +812,13 @@ async function uploadFile(file, target, onProgress) {
     return res;
 }
 
-function enqueueUploads(files) {
+function enqueueUploads(files, listEl = $("uploads")) {
     const pid = state.product.id;
     for (const f of files) {
         const bar = h("progress", { max: 100, value: 0 });
         const label = h("span", {}, " 대기 중");
         const line = h("div", {}, `${f.name} (${mb(f.size)}) `, bar, label);
-        $("uploads").append(line);
+        listEl.append(line);
         uploadChain = uploadChain.then(async () => {
             if (!state.product || state.product.id !== pid) { label.textContent = " 취소됨(다른 상품으로 이동)"; return; }
             label.textContent = " 올리는 중";
@@ -998,6 +1042,133 @@ $("exportScopes").querySelectorAll("button").forEach(b => b.addEventListener("cl
     if (!n) { alert("내보낼 이미지가 없습니다."); return; }
     location.href = `${api}/products/${p.id}/export/${state.exportMethod.id}?scope=${scope}`;
 }));
+
+// ------------------------------------------------------------ 동영상 만들기 (사진 → 슬라이드)
+const sl = { order: [], pollTimer: null };
+
+async function openSlides() {
+    flushSave();
+    try { state.product = await call("GET", `${api}/slides`); }
+    catch (e) { return; }
+    show("slidesView");
+    sl.order = [];
+    $("slUploads").innerHTML = "";
+    $("slState").textContent = "";
+    renderSlides();
+    pollSlides();
+}
+
+function slPhotos() { return state.product.media.filter(m => m.kind === "original" && m.type === "photo"); }
+
+function renderSlides() {
+    const photos = slPhotos();
+    const ids = new Set(photos.map(m => m.id));
+    sl.order = sl.order.filter(id => ids.has(id));
+    $("slCount").textContent = `${photos.length}장`;
+    const grid = $("slGrid");
+    grid.innerHTML = "";
+    if (!photos.length) grid.append(h("div", { class: "muted" }, "아직 올린 사진이 없습니다."));
+    for (const m of photos) {
+        const n = sl.order.indexOf(m.id) + 1;
+        const tile = h("div", { class: "tile" + (n ? " sel" : ""), title: m.name, onclick: () => {
+            const i = sl.order.indexOf(m.id);
+            i >= 0 ? sl.order.splice(i, 1) : sl.order.push(m.id);
+            renderSlides();
+        } },
+            h("img", { src: mediaUrl(m, "preview", "?size=400"), alt: "", loading: "lazy" }),
+            h("div", { class: "tname" }, m.name));
+        if (n) tile.append(h("span", { class: "num" }, n));
+        tile.append(h("button", { class: "zoom", type: "button", title: "크게 보기", onclick: e => {
+            e.stopPropagation(); viewImage(mediaUrl(m, "preview", "?size=1600"), m.name);
+        } }, "🔍"));
+        grid.append(tile);
+    }
+    const secs = Number($("slSeconds").value) || 0;
+    $("slSelInfo").textContent = sl.order.length ? `${sl.order.length}장 선택 · 약 ${trimNum(sl.order.length * secs, 1)}초` : "사진을 눌러 고르세요";
+
+    const box = $("slVideos");
+    box.innerHTML = "";
+    const videos = state.product.media.filter(m => m.kind === "slideshow").reverse();
+    if (!videos.length) box.append(h("div", { class: "muted" }, "아직 만든 동영상이 없습니다."));
+    for (const v of videos) {
+        const card = h("div", { class: "mcard" });
+        const i = v.info || {};
+        if (v.status === "ready") card.append(h("video", { src: mediaUrl(v, "file"), controls: true, preload: "metadata", playsinline: true }));
+        else card.append(h("div", { class: "pic", style: "cursor:default" }, v.status === "making" ? "만드는 중… ⏳" : "실패 ⚠️"));
+        card.append(h("div", { class: "meta" }, h("div", { class: "mname" }, v.name), infoTable([
+            ["사진", `${i.count}장 · 장당 ${i.seconds}초`],
+            i.duration != null ? ["길이", `${i.duration}초`] : null,
+            i.width ? ["크기", `${i.width} × ${i.height} px`] : null,
+            v.status === "ready" ? ["용량", bytesText(v.size)] : null,
+            v.status === "failed" ? ["오류", v.error || "알 수 없음"] : null,
+            ["만든 시각", when(v.createdAt)],
+        ])));
+        const actions = h("div", { class: "actions" });
+        if (v.status === "ready") actions.append(h("button", { class: "primary", onclick: () => location.href = mediaUrl(v, "file", "?download=true") }, "다운로드"));
+        actions.append(h("button", { class: "danger", onclick: () => deleteMedia(v).then(renderSlides) }, "삭제"));
+        card.append(actions);
+        box.append(card);
+    }
+}
+
+$("slSeconds").addEventListener("input", () => renderSlides());
+$("slAll").addEventListener("click", () => { sl.order = slPhotos().map(m => m.id); renderSlides(); });
+$("slNone").addEventListener("click", () => { sl.order = []; renderSlides(); });
+$("slDelete").addEventListener("click", async () => {
+    if (!sl.order.length) return alert("삭제할 사진을 먼저 고르세요.");
+    if (!confirm(`고른 사진 ${sl.order.length}장을 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    for (const id of [...sl.order]) {
+        try {
+            await call("DELETE", `${api}/products/${state.product.id}/media/${id}`);
+            state.product.media = state.product.media.filter(x => x.id !== id);
+        } catch (e) { alert(e.message); break; }
+    }
+    renderSlides();
+});
+$("slMake").addEventListener("click", async () => {
+    if (!sl.order.length) return alert("동영상으로 만들 사진을 먼저 고르세요.");
+    const seconds = Number($("slSeconds").value);
+    const btn = $("slMake");
+    btn.disabled = true;
+    try {
+        const v = await call("POST", `${api}/products/${state.product.id}/slideshow`, { ids: sl.order, seconds });
+        state.product.media.push(v);
+        $("slState").textContent = "만드는 중… 완료되면 아래에 나타납니다.";
+        renderSlides();
+        pollSlides();
+    } catch (e) { $("slState").textContent = e.message; }
+    btn.disabled = false;
+});
+$("slPick").addEventListener("click", e => { e.preventDefault(); $("slInput").click(); });
+$("slInput").addEventListener("change", () => { enqueueUploads([...$("slInput").files], $("slUploads")); $("slInput").value = ""; });
+(() => {
+    const d = $("slDrop");
+    d.addEventListener("dragover", e => { e.preventDefault(); d.classList.add("over"); });
+    d.addEventListener("dragleave", () => d.classList.remove("over"));
+    d.addEventListener("drop", e => { e.preventDefault(); d.classList.remove("over"); enqueueUploads([...e.dataTransfer.files], $("slUploads")); });
+})();
+
+function pollSlides() {
+    clearTimeout(sl.pollTimer);
+    const p = state.product;
+    if (!p || p.type !== "slides" || !p.media.some(m => m.kind === "slideshow" && m.status === "making")) return;
+    sl.pollTimer = setTimeout(async () => {
+        if (state.product !== p) return;
+        try {
+            const fresh = await call("GET", `${api}/products/${p.id}`);
+            let changed = false;
+            for (const m of p.media) {
+                const f = fresh.media.find(x => x.id === m.id);
+                if (f && m.kind === "slideshow" && f.status !== m.status) { Object.assign(m, f); changed = true; }
+            }
+            if (changed) {
+                renderSlides();
+                if (!p.media.some(m => m.kind === "slideshow" && m.status === "making")) $("slState").textContent = "";
+            }
+        } catch { /* 다음에 다시 */ }
+        pollSlides();
+    }, 3000);
+}
 
 start();
 </script>
