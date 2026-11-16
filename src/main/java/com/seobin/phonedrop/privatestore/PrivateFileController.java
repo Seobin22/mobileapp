@@ -20,6 +20,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import java.util.zip.Deflater;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
@@ -41,6 +44,7 @@ import com.seobin.phonedrop.user.UserSession;
 import com.seobin.phonedrop.user.UserStore.User;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONTENT_TOO_LARGE;
@@ -189,6 +193,33 @@ public class PrivateFileController {
         return send(existingFile(existingBundle(userDir(session.require(request)), bundle), name));
     }
 
+    /**
+     * 묶음 전체를 zip 하나로. 저장은 낱개 그대로 두고, 받을 때만 그 자리에서 압축해 흘려보낸다(메모리·디스크에 쌓지 않음).
+     * 사진·영상은 이미 압축돼 있어 빠른 압축(1단계)만 쓴다.
+     */
+    @GetMapping("/bundles/zip")
+    public void downloadBundleZip(@RequestParam("bundle") String bundle, HttpServletRequest request,
+                                  HttpServletResponse response) throws IOException {
+        Path b = existingBundle(userDir(session.require(request)), bundle);
+        List<Path> files = visible(b).filter(Files::isRegularFile)
+                .sorted(Comparator.comparing(p -> p.getFileName().toString())).toList();
+
+        response.setContentType("application/zip");
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, attachment(b.getFileName() + ".zip"));
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "private, no-store");
+        try (ZipOutputStream zip = new ZipOutputStream(response.getOutputStream(), StandardCharsets.UTF_8)) {
+            zip.setLevel(Deflater.BEST_SPEED);
+            for (Path file : files) {
+                ZipEntry entry = new ZipEntry(file.getFileName().toString());
+                entry.setLastModifiedTime(Files.getLastModifiedTime(file));
+                zip.putNextEntry(entry);
+                Files.copy(file, zip);
+                zip.closeEntry();
+            }
+        }
+    }
+
     @DeleteMapping("/bundles")
     public String deleteBundle(@RequestParam("bundle") String bundle, HttpServletRequest request) throws IOException {
         Path b = existingBundle(userDir(session.require(request)), bundle);
@@ -205,13 +236,10 @@ public class PrivateFileController {
     }
 
     private static ResponseEntity<Resource> send(Path file) throws IOException {
-        String fileName = file.getFileName().toString();
-        String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .contentLength(Files.size(file))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + asciiFallback(fileName)
-                        + "\"; filename*=UTF-8''" + encoded)
+                .header(HttpHeaders.CONTENT_DISPOSITION, attachment(file.getFileName().toString()))
                 .header("X-Content-Type-Options", "nosniff")
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(new FileSystemResource(file));
@@ -248,6 +276,12 @@ public class PrivateFileController {
             candidate = stem + " (" + i + ")" + ext;
         }
         return candidate;
+    }
+
+    /** 한글 이름이 깨지지 않는 다운로드 헤더. */
+    private static String attachment(String fileName) {
+        String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+        return "attachment; filename=\"" + asciiFallback(fileName) + "\"; filename*=UTF-8''" + encoded;
     }
 
     /** filename* 를 모르는 브라우저용 이름: 한글 등은 _ 로 바꾸고 확장자는 남긴다. */

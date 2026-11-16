@@ -121,6 +121,25 @@ class PrivateStoreTest {
         assertThat(status(() -> drive.downloadFromBundle("여행", "../a.txt", alice))).isEqualTo("400");
         assertThat(status(() -> drive.download("여행", alice))).isEqualTo("404");
 
+        // ZIP 으로도 받을 수 있다(저장은 낱개 그대로).
+        org.springframework.mock.web.MockHttpServletResponse zipped = new org.springframework.mock.web.MockHttpServletResponse();
+        drive.downloadBundleZip("여행", alice, zipped);
+        assertThat(zipped.getContentType()).isEqualTo("application/zip");
+        assertThat(zipped.getHeader("Content-Disposition")).contains("filename*=UTF-8''%EC%97%AC%ED%96%89.zip");
+        Map<String, String> entries = new java.util.TreeMap<>();
+        try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(zipped.getContentAsByteArray()), StandardCharsets.UTF_8)) {
+            for (java.util.zip.ZipEntry e; (e = in.getNextEntry()) != null; ) {
+                entries.put(e.getName(), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(entries).containsExactlyEntriesOf(new java.util.TreeMap<>(Map.of("a (2).txt", "C", "a.txt", "A", "사진.jpg", "B")));
+        assertThat(files(drive.list(alice))).isEmpty();
+        assertThat(status(() -> drive.downloadBundleZip("여행", bob, new org.springframework.mock.web.MockHttpServletResponse())))
+                .isEqualTo("404");
+        assertThat(status(() -> drive.downloadBundleZip("../x", alice, new org.springframework.mock.web.MockHttpServletResponse())))
+                .isEqualTo("400");
+
         // 같은 이름으로 다시 묶으면 덮어쓰지 않고 새 묶음을 만든다.
         drive.upload(three, true, "여행", alice);
         assertThat(bundles(drive.list(alice))).extracting(PrivateFileController.BundleInfo::name)

@@ -22,7 +22,8 @@
         .actions { flex: none; }
         .actions button { margin: 2px 0 2px 4px; }
         .bundle { display: block; }
-        .bundle > .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .bundle > .row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+        .bundle > .row > .actions { flex: 0 1 auto; }
         .bundle ul { margin: 6px 0 0 16px; }
         .bundle li { padding: 6px 0; }
     </style>
@@ -206,11 +207,16 @@
                     + "브라우저가 '여러 파일 다운로드'를 물으면 허용해 주세요.", true);
                 all.disabled = false;
             });
+            // 낱개 다운로드(위)는 그대로 두고, 한 파일로 받고 싶을 때 쓰는 zip.
+            const zip = button("ZIP으로 다운받기", () => {
+                startDownload("/api/private/bundles/zip?bundle=" + encodeURIComponent(b.name));
+                showResult(`${b.name}: ZIP 다운로드를 시작했습니다. 파일이 크면 시작까지 조금 걸릴 수 있어요.`, true);
+            });
             const toggle = button("펼치기", () => {
                 const open = inner.classList.toggle("hidden");
                 toggle.textContent = open ? "펼치기" : "접기";
             });
-            actions.append(all, toggle, button("삭제", () => remove(
+            actions.append(all, zip, toggle, button("삭제", () => remove(
                 "/api/private/bundles?bundle=" + encodeURIComponent(b.name),
                 `묶음 '${b.name}' 과 안의 파일 ${b.files.length}개를 모두 삭제할까요?`)));
 
