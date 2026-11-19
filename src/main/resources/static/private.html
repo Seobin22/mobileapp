@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>내 저장소</title>
+    <!-- 홈 화면에 추가하면 안드로이드 공유 메뉴에 "내 저장소"가 뜬다(share_target). -->
+    <link rel="manifest" href="/private.webmanifest">
+    <meta name="theme-color" content="#1c7ed6">
+    <link rel="icon" href="/icons/private-192.png">
 
     <style>
         body { max-width: 800px; margin: 30px auto; padding: 0 16px; font-family: sans-serif; }
@@ -26,6 +30,8 @@
         .bundle > .row > .actions { flex: 0 1 auto; }
         .bundle ul { margin: 6px 0 0 16px; }
         .bundle li { padding: 6px 0; }
+        #shareBox { border: 2px solid #1c7ed6; border-radius: 8px; padding: 12px; margin: 8px 0; background: #e7f5ff; }
+        #shareBox button { margin: 4px 4px 0 0; }
     </style>
 </head>
 
@@ -41,6 +47,7 @@
             <button type="submit">로그인</button>
         </form>
         <p class="error" id="loginError"></p>
+        <p class="ok hidden" id="sharePendingLogin"></p>
         <p class="hint">계정이 없으면 <a href="/account.html">회원가입</a></p>
     </section>
 
@@ -49,6 +56,16 @@
 
         <section>
             <h2>파일 올리기</h2>
+            <div id="shareBox" class="hidden">
+                <b id="shareTitle"></b>
+                <div class="hint" id="shareNames"></div>
+                <input id="shareBundleName" placeholder="묶음 이름 (묶어서 올릴 때, 비우면 묶음-날짜-시각)" maxlength="100">
+                <div>
+                    <button type="button" id="shareSingle">따로따로 올리기</button>
+                    <button type="button" id="shareBundle">묶어서 올리기</button>
+                    <button type="button" id="shareCancel">버리기</button>
+                </div>
+            </div>
             <form id="uploadForm">
                 <input id="fileInput" type="file" multiple required>
                 <button type="submit">업로드</button>
@@ -92,6 +109,7 @@
             const loggedIn = response.ok;
             loginBox.classList.toggle("hidden", loggedIn);
             driveBox.classList.toggle("hidden", !loggedIn);
+            showShared(loggedIn);
             if (loggedIn) {
                 document.getElementById("who").textContent = (await response.json()).username;
                 await loadFiles();
@@ -225,24 +243,103 @@
             return li;
         }
 
-        async function upload(files) {
-            if (!files.length) return;
+        /** bundleName 이 null 이면 따로따로, 문자열이면 묶음으로. 기본값은 화면의 "묶어서 올리기" 체크. 성공하면 true. */
+        async function upload(files, bundleName = document.getElementById("bundleCheck").checked
+            ? document.getElementById("bundleName").value : null) {
+            if (!files.length) return false;
             const form = new FormData();
             for (const f of files) form.append("files", f);
-            if (document.getElementById("bundleCheck").checked) {
+            if (bundleName !== null) {
                 form.append("bundle", "true");
-                form.append("bundleName", document.getElementById("bundleName").value);
+                form.append("bundleName", bundleName);
             }
             showResult("업로드 중...", true);
+            let ok = false;
             try {
                 const r = await fetch("/api/private/files", { method: "POST", body: form });
                 const text = await r.text();
-                showResult(r.ok ? text : (r.status === 413 && !text ? "파일이 너무 큽니다(파일 하나 50MB까지)." : text || "업로드 실패"), r.ok);
+                ok = r.ok;
+                showResult(r.ok ? text : (r.status === 413 && !text ? "파일이 너무 큽니다(한 번에 50MB까지)." : text || "업로드 실패"), r.ok);
             } catch (e) {
                 showResult("업로드 실패: " + e.message, false);
             }
             document.getElementById("fileInput").value = "";
             loadFiles();
+            return ok;
+        }
+
+        // ── 안드로이드 공유 메뉴로 받은 파일 ──
+        // private-sw.js 가 기기 안(IndexedDB)에 넣어 둔 파일을, 로그인된 상태에서 평소 업로드로 올린다.
+        function shareDb() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open("private-share", 1);
+                req.onupgradeneeded = () => req.result.createObjectStore("pending");
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function sharePending(files) {
+            const db = await shareDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("pending", files === undefined ? "readonly" : "readwrite");
+                const store = tx.objectStore("pending");
+                const req = files === undefined ? store.get("files") : store.put(files, "files");
+                tx.oncomplete = () => { db.close(); resolve(files === undefined ? (req.result || []) : files); };
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function showShared(loggedIn) {
+            let files = [];
+            try { files = "indexedDB" in window ? await sharePending() : []; } catch (e) { files = []; }
+            const box = document.getElementById("shareBox");
+            const waiting = document.getElementById("sharePendingLogin");
+            box.classList.toggle("hidden", !loggedIn || !files.length);
+            waiting.classList.toggle("hidden", loggedIn || !files.length);
+            waiting.textContent = `공유받은 파일 ${files.length}개가 기다리고 있어요. 로그인하면 바로 올릴 수 있어요.`;
+            if (!files.length) return;
+            const total = files.reduce((s, f) => s + f.size, 0);
+            document.getElementById("shareTitle").textContent = `📲 공유받은 파일 ${files.length}개 (${size(total)})`;
+            document.getElementById("shareNames").textContent =
+                files.slice(0, 5).map(f => f.name).join(", ") + (files.length > 5 ? ` 외 ${files.length - 5}개` : "");
+            document.getElementById("shareBundle").classList.toggle("hidden", files.length < 2);
+            document.getElementById("shareBundleName").classList.toggle("hidden", files.length < 2);
+        }
+
+        async function uploadShared(bundled) {
+            const files = await sharePending();
+            const buttons = document.querySelectorAll("#shareBox button");
+            buttons.forEach(b => b.disabled = true);
+            const ok = await upload(files, bundled ? document.getElementById("shareBundleName").value : null);
+            buttons.forEach(b => b.disabled = false);
+            if (ok) {
+                await sharePending([]);
+                showShared(true);
+            }
+        }
+
+        document.getElementById("shareSingle").onclick = () => uploadShared(false);
+        document.getElementById("shareBundle").onclick = () => uploadShared(true);
+        document.getElementById("shareCancel").onclick = async () => {
+            if (!confirm("공유받은 파일을 올리지 않고 버릴까요? (휴대폰의 원본은 그대로예요)")) return;
+            await sharePending([]);
+            showShared(true);
+        };
+
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/private-sw.js", { scope: "/private" }).catch(() => {});
+        }
+
+        // 공유 직후 주소의 표시(?share=…, 서버 대체 경로의 ?shared=…)는 한 번만 읽고 지운다.
+        const shareParams = new URLSearchParams(location.search);
+        if (shareParams.has("share") || shareParams.has("shared")) {
+            history.replaceState(null, "", "/private.html");
+            if (shareParams.get("share") === "failed") showResult("공유받은 파일을 읽지 못했어요. 다시 공유해 주세요.", false);
+            if (shareParams.get("share") === "login") {
+                document.getElementById("loginError").textContent = "로그인이 풀려 있어 공유한 파일을 받지 못했어요. 로그인한 뒤 다시 공유해 주세요.";
+            }
+            if (shareParams.has("shared")) showResult(`공유한 파일 ${shareParams.get("shared")}개를 내 저장소에 저장했습니다.`, true);
         }
 
         document.getElementById("loginForm").addEventListener("submit", async event => {

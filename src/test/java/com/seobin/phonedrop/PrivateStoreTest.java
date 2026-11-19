@@ -176,4 +176,20 @@ class PrivateStoreTest {
         assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("evil.txt");
         assertThat(Files.exists(dir.resolve("evil.txt"))).isFalse();
     }
+
+    @Test
+    void shareFallbackSavesWhenLoggedInAndRedirects() throws Exception {
+        PrivateFileController drive = new PrivateFileController(session, dir.toString());
+        com.seobin.phonedrop.privatestore.PrivateShareController share =
+                new com.seobin.phonedrop.privatestore.PrivateShareController(drive, session);
+        MockHttpServletRequest alice = new MockHttpServletRequest();
+        users.signup(new Credentials("alice", "password-1"), alice);
+
+        assertThat(share.share(file("사진.jpg", "x"), new MockHttpServletRequest()).getHeaders().getLocation())
+                .hasToString("/private.html?share=login");
+        assertThat(share.share(file("사진.jpg", "x"), alice).getHeaders().getLocation())
+                .hasToString("/private.html?shared=1");
+        assertThat(files(drive.list(alice))).extracting(PrivateFileController.FileInfo::name).containsExactly("사진.jpg");
+        assertThat(share.share(null, alice).getHeaders().getLocation()).hasToString("/private.html?share=failed");
+    }
 }

@@ -1,0 +1,23 @@
+{
+    "name": "내 저장소 (seobin.page)",
+    "short_name": "내 저장소",
+    "start_url": "/private.html",
+    "scope": "/private",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#1c7ed6",
+    "icons": [
+        { "src": "/icons/private-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+        { "src": "/icons/private-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    ],
+    "share_target": {
+        "action": "/private-share",
+        "method": "POST",
+        "enctype": "multipart/form-data",
+        "params": {
+            "files": [
+                { "name": "files", "accept": ["image/*", "video/*", "audio/*", "application/*", "text/*", "*/*"] }
+            ]
+        }
+    }
+}
