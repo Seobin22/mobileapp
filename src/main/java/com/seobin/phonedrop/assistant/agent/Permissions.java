@@ -160,6 +160,11 @@ public class Permissions {
                 }
                 return Decision.execute();
             }
+            case "set_voice_alarm" -> {
+                // 2026-11-19: 음성·알람 끄기/켜기는 사용자가 직접 말했을 때만(비서가 스스로 끄거나 켜지 않는다)
+                return fromUser ? Decision.execute()
+                        : Decision.reject("음성·알람은 사용자가 끄거나 켜 달라고 말했을 때만 바꿀 수 있습니다");
+            }
             case "create_work_product" -> {
                 // 사용자 요청(2026-11-02): 작업물은 허락받은 뒤에만 만든다. 허락은 사용자의 답(user_message)으로 온다.
                 return fromUser ? Decision.execute() : Decision.reject(WORK_PRODUCT_ASK_FIRST);

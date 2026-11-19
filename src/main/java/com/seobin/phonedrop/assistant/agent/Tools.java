@@ -216,6 +216,7 @@ public class Tools {
                 case "adjust_travel" -> adjustTravel(ctx, input);
                 case "link_document" -> linkDocument(ctx, input);
                 case "card_decide" -> cardDecide(ctx, input);
+                case "set_voice_alarm" -> setVoiceAlarm(ctx, input);
                 default -> com.seobin.phonedrop.assistant.insight.InsightTools.NAMES.contains(name)
                         ? insightTools.dispatch(name, input, Permissions.fromUser(ctx.trigger))
                         : error("알 수 없는 도구입니다: " + name);
@@ -848,6 +849,65 @@ public class Tools {
         ctx.savedLines.add(("approve".equals(decision) ? "음성으로 승인됨: " : "음성으로 거절됨: ") + card.text());
         ctx.voiceUndoCard = "approve".equals(decision) ? cardId : null;
         return r;
+    }
+
+    /**
+     * 2026-11-19(사용자 요청): 채팅으로 "음성 꺼줘"·"알람 그만"이라고 하면 실제로 끈다(예전에는 말로만 알겠다고 했다).
+     * scope=voice: 비서 목소리(먼저 거는 말·블록 알람 목소리·깨우기 질문)만 끔. scope=all: 적극 개입 시간대의 반복 알람·먼저 말 걸기까지 멈춤.
+     * minutes 가 없으면 지금 적극 개입 시간대가 끝날 때까지(시간대 밖이면 오늘 자정까지). 블록 개입(시작 알림)은 그대로.
+     */
+    private ObjectNode setVoiceAlarm(Context ctx, JsonNode in) {
+        String action = in.path("action").asString("mute");
+        boolean all = "all".equals(in.path("scope").asString("voice"));
+        Instant now = clock.now();
+        TimeWindowRunner runner = windowRunner == null ? null : windowRunner.getIfAvailable();
+        if ("unmute".equals(action)) {
+            settings.put("voice.muted_until", tools.jackson.databind.node.NullNode.getInstance());
+            if (all || timeWindows.paused(now)) {
+                settings.put(TimeWindows.PAUSED_UNTIL, tools.jackson.databind.node.NullNode.getInstance());
+            }
+            if (runner != null) {
+                runner.reschedule();
+            }
+            plan.bumpAndSync();
+            ctx.savedLines.add("저장됨: 음성 알림 다시 켬");
+            ObjectNode r = Json.object();
+            r.put("ok", true);
+            r.put("muted", false);
+            return r;
+        }
+        Instant until;
+        int minutes = in.path("minutes").asInt(0);
+        if (minutes > 0) {
+            until = now.plus(Duration.ofMinutes(Math.min(minutes, 24 * 60)));
+        } else {
+            until = timeWindows.at(now, "active").map(TimeWindows.Occ::end)
+                    .orElse(time.local(now).toLocalDate().plusDays(1).atStartOfDay(time.zone()).toInstant());
+        }
+        tools.jackson.databind.node.StringNode iso = tools.jackson.databind.node.JsonNodeFactory.instance.stringNode(time.iso(until));
+        settings.put("voice.muted_until", iso);
+        if (all) {
+            settings.put(TimeWindows.PAUSED_UNTIL, iso);
+            push.pushAll(Map.of("type", "active.alarm_end", "window_id", "0"));
+            if (runner != null) {
+                runner.reschedule();
+            }
+        }
+        plan.bumpAndSync();
+        ctx.savedLines.add("저장됨: " + (all ? "음성·적극 개입 알람" : "음성 알림") + " 끔 · " + time.dayText(until) + "까지");
+        ObjectNode r = Json.object();
+        r.put("ok", true);
+        r.put("muted", true);
+        r.put("scope", all ? "all" : "voice");
+        r.put("until", time.iso(until));
+        return r;
+    }
+
+    private org.springframework.beans.factory.ObjectProvider<TimeWindowRunner> windowRunner;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setWindowRunner(org.springframework.beans.factory.ObjectProvider<TimeWindowRunner> windowRunner) {
+        this.windowRunner = windowRunner;
     }
 
     private ObjectNode undoLast(Context ctx) {

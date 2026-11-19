@@ -79,6 +79,11 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getLong("voice_mute_until", 0)
         set(value) = prefs.edit().putLong("voice_mute_until", value).apply()
 
+    /** 2026-11-19: 서버(채팅으로 끈 음성)가 정한 끔 시각(ISO). 비면 꺼져 있지 않음. */
+    var serverVoiceMuteUntil: String
+        get() = prefs.getString("server_voice_mute_until", "") ?: ""
+        set(value) = prefs.edit().putString("server_voice_mute_until", value).apply()
+
     /** 마이크 민감도(0.7 낮게 · 1.0 보통 · 1.6 높게). 이 기기에만 저장. */
     var voiceSensitivity: Float
         get() = prefs.getFloat("voice_sensitivity", 1.3f)

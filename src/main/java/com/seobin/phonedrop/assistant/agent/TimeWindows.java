@@ -313,6 +313,23 @@ public class TimeWindows {
         return at(t, "active");
     }
 
+    /** 2026-11-19: 비서 목소리를 끈 시각(사용자가 채팅으로 요청). 지나면 다시 말한다. */
+    public Optional<Instant> voiceMutedUntil() {
+        JsonNode v = settings.get("voice.muted_until");
+        if (v == null || !v.isString() || v.asString().isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(TimeUtil.parse(v.asString()));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    public boolean voiceMuted(Instant t) {
+        return voiceMutedUntil().map(t::isBefore).orElse(false);
+    }
+
     public boolean paused(Instant t) {
         return pausedUntil().map(t::isBefore).orElse(false);
     }

@@ -120,6 +120,8 @@ public class PlanService {
         data.put("type", "plan.sync");
         data.put("time_windows", Json.write(windowList));
         data.put("active_paused_until", pausedUntil);
+        // 2026-11-19: 채팅으로 끈 음성(앱이 블록 알람·깨우기 목소리까지 이 값으로 끈다)
+        data.put("voice_muted_until", tw == null ? "" : tw.voiceMutedUntil().filter(now::isBefore).map(time::iso).orElse(""));
         data.put("active_auto_voice", String.valueOf(settings.getBoolean("active.auto_voice")));
         // v4 §5.1: 감시 창(앞으로 24시간)·딴짓 앱 규칙. 앱이 로컬 시간대·고정 일정과 함께 혼자 판단한다.
         com.seobin.phonedrop.assistant.distract.DistractionService ds = distractions == null ? null : distractions.getIfAvailable();

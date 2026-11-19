@@ -87,7 +87,13 @@ object WindowGuard {
      * §2.4 소리로 말하기 조건: 방해 금지·멈춤 아님 + 적극 개입 시간대, 무음·진동 모드가 아니거나 이어폰 연결, 통화 중 아님.
      */
     /** 설정 '음성 알림 끄기'(오늘만·계속). 적극 개입 시간대의 '목소리로 말하기'보다 우선한다. */
-    fun voiceMuted(context: Context): Boolean = System.currentTimeMillis() < Prefs.get(context).voiceMuteUntil
+    fun voiceMuted(context: Context): Boolean {
+        val p = Prefs.get(context)
+        if (System.currentTimeMillis() < p.voiceMuteUntil) return true // 설정에서 끔
+        val server = p.serverVoiceMuteUntil // 채팅으로 비서에게 끄라고 함
+        if (server.isBlank()) return false
+        return runCatching { Instant.now().isBefore(OffsetDateTime.parse(server).toInstant()) }.getOrDefault(false)
+    }
 
     fun canSpeak(context: Context): Boolean {
         if (block(context, "tts")) return false

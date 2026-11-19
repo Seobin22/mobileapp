@@ -341,6 +341,14 @@ public class ContextBuilder {
             sb.append("지금: 적극 개입 시간대 — 보내는 말은 모두 소리로 읽힌다. 사람 비서처럼 지금 필요한 것(곧 시작할 일정·준비·출발·마감·")
                     .append("바뀐 계획 등)을 그때그때 짧게 말해도 된다(메시지 예산 없음). 단 지금 맥락에 맞는 말만: 이미 지난 일·지금 못 하는 일·")
                     .append("방금 한 말은 말하지 않는다. 글 목록·기호 없이 말하듯 1~2문장.\n");
+        }
+        timeWindows.voiceMutedUntil().filter(now::isBefore).ifPresent(u ->
+                sb.append("지금: 사용자가 음성을 꺼 달라고 해서 ").append(time.hm(u)).append("까지 비서 목소리가 꺼져 있다(글로만 간다).\n"));
+        if (timeWindows.activeAt(now).isPresent() || timeWindows.paused(now)) {
+            sb.append("사용자가 음성·알람을 꺼 달라거나 켜 달라고 하면 set_voice_alarm 으로 실제로 바꾼다(말로만 알겠다고 하지 않는다).\n");
+        }
+        if (timeWindows.dndAt(now).isPresent() || timeWindows.activeAt(now).isPresent()) {
+            // 위에서 이미 '지금' 상태를 적었다
         } else if (timeWindows.paused(now)) {
             sb.append("지금: 적극 개입 시간대지만 사용자가 [10분만 조용히]를 눌러 ")
                     .append(timeWindows.pausedUntil().map(time::hm).orElse("")).append("까지 기본 동작.\n");

@@ -276,4 +276,45 @@ class V36FlowTest extends AssistantTestBase {
         assertThat(time.isQuiet(at("2026-11-03T05:00"))).isTrue();
         assertThat(windows.dndAt(at("2026-11-03T05:00"))).isPresent();
     }
+
+    @Test
+    void userCanMuteVoiceAndAlarmsByChat() {
+        // 2026-11-19 운영: 채팅으로 "음성 꺼줘"라고 해도 비서가 끌 방법이 없어 계속 울렸다
+        save(active("아침 몰입", "09:00", "12:00"));
+        advanceAndRun(1);
+        assertThat(push.ofType("active.alarm")).hasSize(1);
+        // 비서가 스스로는 못 끈다
+        assertThat(tool("active_window", "set_voice_alarm", "{\"action\":\"mute\"}").path("ok").asBoolean(true)).isFalse();
+        // 사용자가 말하면 끈다: 목소리 + 알람까지
+        ObjectNode r = tool("user_message", "set_voice_alarm", "{\"action\":\"mute\",\"scope\":\"all\"}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+        assertThat(r.path("until").asString()).isEqualTo(time.iso(at("2026-11-02T12:00")));
+        assertThat(plan.syncData().get("voice_muted_until")).isEqualTo(time.iso(at("2026-11-02T12:00")));
+        push.clear();
+        tool("active_window", "send_message", "{\"text\":\"영어 시작하자\",\"kind\":\"proactive\"}");
+        assertThat(chatPushes().getLast()).doesNotContainKey("speak");
+        advanceAndRun(30);
+        assertThat(push.ofType("active.alarm")).isEmpty();
+        // 다시 켠다
+        assertThat(tool("user_message", "set_voice_alarm", "{\"action\":\"unmute\",\"scope\":\"all\"}").path("ok").asBoolean()).isTrue();
+        assertThat(plan.syncData().get("voice_muted_until")).isEmpty();
+        push.clear();
+        tool("active_window", "send_message", "{\"text\":\"이제 하자\",\"kind\":\"proactive\"}");
+        assertThat(chatPushes().getLast().get("speak")).isEqualTo("true");
+    }
+
+    @Test
+    void muteVoiceOnlyForMinutesKeepsAlarm() {
+        save(active("아침 몰입", "09:00", "12:00"));
+        advanceAndRun(1);
+        ObjectNode r = tool("user_message", "set_voice_alarm", "{\"action\":\"mute\",\"scope\":\"voice\",\"minutes\":30}");
+        assertThat(r.path("until").asString()).isEqualTo(time.iso(at("2026-11-02T09:31")));
+        push.clear();
+        advanceAndRun(5);
+        assertThat(push.ofType("active.alarm")).isNotEmpty(); // 알람은 그대로(목소리만 끔)
+        runUntil("2026-11-02T09:32");
+        push.clear();
+        tool("active_window", "send_message", "{\"text\":\"다시 말해요\",\"kind\":\"proactive\"}");
+        assertThat(chatPushes().getLast().get("speak")).isEqualTo("true"); // 30분 지나면 다시 말한다
+    }
 }

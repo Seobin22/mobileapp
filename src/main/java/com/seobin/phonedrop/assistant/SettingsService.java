@@ -92,6 +92,8 @@ public class SettingsService {
         d.put("active.pause_min", "10");
         d.put("active.auto_voice", "false");
         d.put("active.paused_until", "null");
+        // 2026-11-19: 사용자가 채팅으로 "음성 꺼줘" 하면 비서가 set_voice_alarm 으로 정한다(앱도 이 값을 따른다)
+        d.put("voice.muted_until", "null");
         // v3.6 음성 탭. voice.model 이 비면 Haiku 계열
         d.put("voice.model", "\"\"");
         d.put("voice.stt_mode", "\"batch\"");
@@ -215,7 +217,7 @@ public class SettingsService {
                         }
                     }
                 }
-                case "active.paused_until" -> {
+                case "active.paused_until", "voice.muted_until" -> {
                     if (!value.isNull() && !value.isString()) {
                         throw new IllegalArgumentException();
                     }
