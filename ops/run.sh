@@ -41,9 +41,9 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'U' AS q, t.id, t.trigger, t.status, FORMATDATETIME(t.started_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS st, t.tool_names FROM turns t WHERE t.started_at >= DATEADD('HOUR', -12, CURRENT_TIMESTAMP) AND t.started_at < DATEADD('HOUR', -2, CURRENT_TIMESTAMP) AND t.trigger NOT IN ('memory_job') ORDER BY t.id;
-SELECT 'M' AS q, m.id, m.role, m.kind, m.silent, m.intervention_id AS iid, m.source, FORMATDATETIME(m.created_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS at FROM messages m WHERE m.created_at >= DATEADD('HOUR', -12, CURRENT_TIMESTAMP) AND m.created_at < DATEADD('HOUR', -2, CURRENT_TIMESTAMP) ORDER BY m.id;
-SELECT 'C' AS q, c.turn_id, c.entity, c.entity_id, FORMATDATETIME(c.created_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS at FROM changes c WHERE c.created_at >= DATEADD('HOUR', -12, CURRENT_TIMESTAMP) ORDER BY c.id;
+SELECT 'S' AS q, key, value FROM settings WHERE key IN ('life.wake','life.sleep','fullscreen.reshow_minutes','active.alarm_repeat_min','intervention.levels','intervention.start_level');
+SELECT 'SER' AS q, id, kind, interrupt_level, lead_minutes FROM fixed_series WHERE id = 9;
+SELECT 'W' AS q, id, kind, days, start_time, end_type, end_time, enabled FROM time_windows;
 SQL
 
 while IFS= read -r q; do
