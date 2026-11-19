@@ -84,6 +84,19 @@ class Prefs private constructor(private val prefs: SharedPreferences) {
         get() = prefs.getString("server_voice_mute_until", "") ?: ""
         set(value) = prefs.edit().putString("server_voice_mute_until", value).apply()
 
+    /**
+     * 2026-11-20: 사용자가 버튼([시작]·[이미 완료함]·[지금 할 수 없음] 등)으로 끝낸 개입 id 와 시각("id@ms" 줄들).
+     * 서버가 그 버튼을 아직 못 받아 같은 개입을 다시 보내도 앱이 다시 띄우지 않는다.
+     */
+    var handledInterventions: List<String>
+        get() = (prefs.getString("handled_interventions", "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("handled_interventions", value.joinToString("\n")).apply()
+
+    /** 2026-11-20: 한 번만 알리는(once) 개입 id. 닫아도 다시 띄우지 않는다. */
+    var onceInterventions: List<String>
+        get() = (prefs.getString("once_interventions", "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("once_interventions", value.joinToString("\n")).apply()
+
     /** 마이크 민감도(0.7 낮게 · 1.0 보통 · 1.6 높게). 이 기기에만 저장. */
     var voiceSensitivity: Float
         get() = prefs.getFloat("voice_sensitivity", 1.3f)

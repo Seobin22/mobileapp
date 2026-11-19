@@ -599,7 +599,7 @@ public class ContextBuilder {
                     case "fixed_block" -> {
                         int lead = ((Number) item.get("lead_minutes")).intValue();
                         int after = ((Number) item.get("buffer_after_min")).intValue();
-                        sb.append("- ").append(range).append(' ').append(fixedTag(item)).append(' ')
+                        sb.append("- ").append(range).append(' ').append(fixedTag(item)).append(nudgeTag(item)).append(' ')
                                 .append(nz(item.get("title")))
                                 .append(item.get("place_name") == null ? "" : "(" + item.get("place_name") + ")")
                                 .append(" 블록#").append(item.get("id"))
@@ -631,6 +631,7 @@ public class ContextBuilder {
                             .append(String.valueOf(item.get("goal_label")).isEmpty() ? "" : " [" + item.get("goal_label") + "]")
                             .append(" 블록#").append(item.get("id")).append(' ').append(nz(item.get("title")))
                             .append(" (할일#").append(item.get("task_id")).append(") ").append(item.get("status"))
+                            .append(nudgeTag(item))
                             .append(item.get("work_product_id") == null ? "" : " (작업물#" + item.get("work_product_id") + " 첨부)")
                             .append(item.get("linked_fixed_block_id") == null ? ""
                                     : " (→ 고정 블록#" + item.get("linked_fixed_block_id") + " 준비)")
@@ -644,6 +645,21 @@ public class ContextBuilder {
             }
             sb.append("- 빈 시간: ").append(free.isEmpty() ? "없음" : free).append('\n');
         }
+    }
+
+    /** 2026-11-20: 블록 알림 방식(비서가 set_nudge 로 정함). */
+    private static String nudgeTag(Map<String, Object> item) {
+        Object m = item.get("nudge_mode");
+        if (m == null || item.get("nudge_set_by") == null) {
+            return ""; // 기본값(고정 일정 한 번·할 일 보통)은 지시문에 있다. 정해 둔 것만 보인다
+        }
+        String label = switch (String.valueOf(m)) {
+            case "off" -> "알림없음";
+            case "once" -> "알림1번";
+            case "strong" -> "알림강하게";
+            default -> "알림보통";
+        };
+        return " [" + label + ("user".equals(item.get("nudge_set_by")) ? "(사용자)" : "") + "]";
     }
 
     /** v3.3 §1.4: [고정·방해금지] / [고정·조용히] / [고정·알림허용], 아직 안 정했으면 [고정](조용히로 동작). */

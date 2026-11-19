@@ -83,7 +83,7 @@ object ActionQueue {
     fun scheduleRetry(context: Context) {
         val request = OneTimeWorkRequestBuilder<ActionWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS) // 2026-11-20: 버튼이 몇십 분 늦게 닿지 않게
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("actions", ExistingWorkPolicy.KEEP, request)
     }

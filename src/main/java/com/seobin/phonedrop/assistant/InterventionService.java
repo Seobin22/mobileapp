@@ -234,6 +234,9 @@ public class InterventionService {
         if (suspendForCommitment(i)) {
             return true;
         }
+        if (applyNudgeChange(i)) {
+            return true;
+        }
         Integer next = nextLevel(i.level());
         if (next == null) {
             return false;
@@ -381,9 +384,19 @@ public class InterventionService {
         return begin(b, null, null);
     }
 
+    /** 2026-11-20: 같은 개입을 다시 띄우거나 단계를 올리는가(once·off 면 아니다). */
+    private boolean repeats(Store.Block b) {
+        String m = store.nudgeMode(b);
+        return !"once".equals(m) && !"off".equals(m);
+    }
+
     /** 블록 개입을 시작한다. 조용한 시간이거나 블록이 끝났으면 시작하지 않는다. */
     private Optional<Store.Intervention> begin(Store.Block b, Integer forcedLevel, String reason) {
         Instant now = clock.now();
+        String mode = b.travel() ? "normal" : store.nudgeMode(b);
+        if ("off".equals(mode)) {
+            return Optional.empty(); // 비서·사용자가 '알리지 않음'으로 정했다
+        }
         if (time.isQuiet(now) || !now.isBefore(b.end())) {
             return Optional.empty();
         }
@@ -427,7 +440,8 @@ public class InterventionService {
             }
         }
 
-        int level = forcedLevel != null ? capableAtLeast(forcedLevel) : startLevel(b);
+        int level = forcedLevel != null ? capableAtLeast(forcedLevel)
+                : "strong".equals(mode) ? capableAtLeast(LEVEL) : startLevel(b);
         long id = db.insert("""
                         INSERT INTO interventions(block_id, status, level, block_version, started_at, reason)
                         VALUES (?, 'running', ?, ?, ?, ?)""",
@@ -441,13 +455,17 @@ public class InterventionService {
         sendLevel(intervention);
         logs.add(b.id(), "intervention_shown", "system", "L" + level + " 표시");
 
-        if (level >= LEVEL) {
+        boolean once = "once".equals(mode);
+        if (level >= LEVEL && !once) {
             jobs.schedule(RESHOW, id, now.plus(Duration.ofMinutes(reshowMinutes())), null);
-        } else if (reason == null) {
+        } else if (level < LEVEL && reason == null) {
             postL1Message(b);
         }
-        scheduleEscalate(intervention);
-        Instant expireAt = expireAt(b);
+        if (!once) {
+            scheduleEscalate(intervention);
+        }
+        // once: 한 번 알린 뒤 reshow 분이 지나면 알림을 거둔다(블록은 그대로, 시각이 지나면 정리)
+        Instant expireAt = once ? now.plus(Duration.ofMinutes(reshowMinutes())) : expireAt(b);
         jobs.schedule(EXPIRE, id, expireAt, null);
         time.firstQuietStart(now, expireAt).ifPresent(at -> jobs.schedule(SUSPEND, id, at, null));
         scheduleCommitmentChecks(intervention, b, expireAt);
@@ -461,6 +479,9 @@ public class InterventionService {
         }
         if (suspendForCommitment(i)) {
             return true; // 그 사이 생긴 고정 일정·이동이 시작됐다
+        }
+        if (applyNudgeChange(i)) {
+            return true;
         }
         sendLevel(i);
         jobs.schedule(RESHOW, i.id(),
@@ -477,6 +498,9 @@ public class InterventionService {
         if (tb != null && tb.travel()) {
             finishTravel(tb, "자동 완료");
             return true;
+        }
+        if (tb != null && !repeats(tb) && clock.now().isBefore(tb.end())) {
+            return applyNudgeChange(i); // 한 번 알린 뒤: 놓침이 아니다
         }
         // v4 §2.5: 하트비트가 30분 넘게 끊겼으면 무시가 아니라 기기 연결 끊김
         boolean unreachable = lastHeartbeat().map(h -> h.isBefore(clock.now().minus(UNREACHABLE_AFTER))).orElse(false);
@@ -500,9 +524,29 @@ public class InterventionService {
         }
         boolean fixed = store.fixedInProgress(now).stream()
                 .anyMatch(f -> f.id() != own.id() && !f.travel() && (own.linkedFixedBlockId() == null || f.id() != own.linkedFixedBlockId()));
+        // 2026-11-20 버그 수정: 그 일정에 딸린 이동(수업 뒤 귀가 등)은 '다른 일정'이 아니다(수업이 놓침이 됐다)
         boolean travel = store.activeBlocksOverlapping(now, now.plusSeconds(1)).stream()
-                .anyMatch(t -> t.travel() && t.id() != own.id() && !now.isBefore(t.start()));
+                .anyMatch(t -> t.travel() && t.id() != own.id() && !now.isBefore(t.start())
+                        && !Long.valueOf(own.id()).equals(t.linkedFixedBlockId()));
         return fixed || travel;
+    }
+
+    /**
+     * 2026-11-20: 블록 알림 방식이 off·once 로 바뀌었으면 돌던 개입을 끝낸다(블록은 다시 planned). 끝냈으면 true.
+     * 비서가 판단해 바꾼 것이 다음 알림 직전에 반영된다.
+     */
+    public boolean applyNudgeChange(Store.Intervention i) {
+        Store.Block b = store.block(i.blockId()).orElse(null);
+        if (b == null || b.travel() || !i.active() || repeats(b)) {
+            return false;
+        }
+        String mode = store.nudgeMode(b);
+        end(i, "expired", "off".equals(mode) ? "nudge_off" : "notified", "expired");
+        if ("nudging".equals(b.status())) {
+            store.setBlockStatus(b.id(), "planned");
+        }
+        logs.add(b.id(), "note", "system", "off".equals(mode) ? "알림 끔(개입 종료)" : "한 번 알림 뒤 개입 종료");
+        return true;
     }
 
     /** 다른 일정 때문에 멈춘다: suspended(fixed_block), 블록 missed, 비서가 다시 배치. */
@@ -530,7 +574,7 @@ public class InterventionService {
             }
         }
         for (Store.Block t : store.activeBlocksOverlapping(now, until)) {
-            if (t.travel() && t.id() != b.id() && t.start().isAfter(now)) {
+            if (t.travel() && t.id() != b.id() && t.start().isAfter(now) && !Long.valueOf(b.id()).equals(t.linkedFixedBlockId())) {
                 jobs.schedule(SUSPEND, i.id(), t.start(), null);
             }
         }
@@ -598,6 +642,16 @@ public class InterventionService {
         }
         if (b.travel()) {
             finishTravel(b, "자동 완료");
+            return true;
+        }
+        if (b.fixed() && List.of("planned", "nudging").contains(b.status()) && !repeats(b)) {
+            // 2026-11-20: 수업처럼 '그 시각에 가는' 고정 일정은 [시작]을 안 눌렀다고 놓침이 아니다(참석으로 보고, 정리 카드에서 고친다)
+            store.runningForBlock(b.id()).ifPresent(i -> end(i, "expired", "notified", "expired"));
+            db.update("""
+                            UPDATE blocks SET status = 'done', actual_start = COALESCE(actual_start, start_at),
+                            actual_end = end_at, updated_at = CURRENT_TIMESTAMP WHERE id = ?""", b.id());
+            logs.add(b.id(), "ended", "system", "시각이 지나 끝남([시작] 없이, 참석으로 봄)");
+            coverage.onBlockClosed(b.id());
             return true;
         }
         switch (b.status()) {
@@ -672,6 +726,11 @@ public class InterventionService {
                 i.id());
         Store.Intervention back = store.intervention(i.id()).orElseThrow();
         sendLevel(back);
+        Store.Block backBlock = store.block(back.blockId()).orElse(null);
+        if (backBlock != null && !backBlock.travel() && !repeats(backBlock)) {
+            applyNudgeChange(back);
+            return true;
+        }
         if (back.level() >= LEVEL) {
             jobs.schedule(RESHOW, i.id(), clock.now().plus(Duration.ofMinutes(reshowMinutes())), null);
         }
@@ -779,6 +838,8 @@ public class InterventionService {
         data.put("level", String.valueOf(i.level()));
         // v4 §1: L4 = 풀스크린 + 딴짓 앱 잠금
         data.put("lock_apps", String.valueOf(i.level() >= 4));
+        data.put("nudge_mode", b.travel() ? "normal" : store.nudgeMode(b));
+        data.put("block_version", String.valueOf(b.version()));
         data.put("task_title", title);
         data.put("kind", b.kind());
         data.put("block_start", time.iso(b.start()));
@@ -1055,12 +1116,35 @@ public class InterventionService {
             end(i, "expired", "cannot_now", "expired");
             store.log(i.id(), i.blockId(), i.level(), now, "cannot_now");
         });
-        cancelBlockJobs(target);
         Long seriesId = db.jdbc().sql("SELECT series_id FROM blocks WHERE id = ?").param(target).query(Long.class)
                 .optional().orElse(null);
         ObjectNode ref = Json.object();
         ref.put("block_id", target);
-        java.util.Optional<Instant> slot = seriesId != null ? java.util.Optional.empty()
+        Optional<Instant> moved = deferToFreeSlot(b, "지금 할 수 없음", "user");
+        moved.ifPresent(start -> ref.put("moved_to", time.iso(start)));
+        if (moved.isEmpty()) {
+            ref.put("series", seriesId != null);
+        }
+        turns.enqueue("cannot_now", ref, TurnQueue.PRIORITY_DEFAULT);
+        plan.bumpAndSync();
+        return "ok";
+    }
+
+    /**
+     * 하루 이상 미루기([지금 할 수 없음]·비서의 defer_blocks 공용): 다음 날 활동 시작 이후, 이미 있는 블록·조용한 구간을 피한
+     * 첫 빈 시간(최대 14일)으로 옮긴다. 반복 일정 회차·빈 시간 없음이면 이번 회차만 놓침. 옮긴 시각(없으면 빈 값).
+     */
+    public Optional<Instant> deferToFreeSlot(Store.Block b, String why, String actor) {
+        long target = b.id();
+        Instant now = clock.now();
+        store.runningForBlock(target).ifPresent(i -> {
+            end(i, "expired", "cannot_now", "expired");
+            store.log(i.id(), i.blockId(), i.level(), now, "cannot_now");
+        });
+        cancelBlockJobs(target);
+        Long seriesId = db.jdbc().sql("SELECT series_id FROM blocks WHERE id = ?").param(target).query(Long.class)
+                .optional().orElse(null);
+        Optional<Instant> slot = seriesId != null ? Optional.empty()
                 : timeline.getObject().firstFreeSlot(time.activeWindow(time.logicalDay(now).plusDays(1)).start(),
                         (int) Math.max(5, Duration.between(b.start(), b.end()).toMinutes()), target);
         if (slot.isPresent()) {
@@ -1073,20 +1157,16 @@ public class InterventionService {
             ObjectNode d = Json.object();
             d.put("from_start", time.iso(b.start()));
             d.put("to_start", time.iso(start));
-            d.put("reason", "지금 할 수 없음");
-            logs.add(target, "moved", "user", time.hm(b.start()) + "→" + time.dayText(start) + " (지금 할 수 없음)", d);
+            d.put("reason", why);
+            logs.add(target, "moved", actor, time.hm(b.start()) + "→" + time.dayText(start) + " (" + why + ")", d);
             scheduleBlockJobs(store.block(target).orElseThrow());
-            ref.put("moved_to", time.iso(start));
-        } else {
-            store.setBlockStatus(target, "missed");
-            logs.add(target, "missed", "user", seriesId != null ? "지금 할 수 없음(반복 일정 — 이번 회차만 놓침)"
-                    : "지금 할 수 없음(14일 안에 빈 시간이 없어 놓침)");
-            coverage.onBlockClosed(target);
-            ref.put("series", seriesId != null);
+            return slot;
         }
-        turns.enqueue("cannot_now", ref, TurnQueue.PRIORITY_DEFAULT);
-        plan.bumpAndSync();
-        return "ok";
+        store.setBlockStatus(target, "missed");
+        logs.add(target, "missed", actor, seriesId != null ? why + "(반복 일정 — 이번 회차만 놓침)"
+                : why + "(14일 안에 빈 시간이 없어 놓침)");
+        coverage.onBlockClosed(target);
+        return Optional.empty();
     }
 
     private org.springframework.beans.factory.ObjectProvider<com.seobin.phonedrop.assistant.agent.Timeline> timeline;

@@ -217,6 +217,8 @@ public class Tools {
                 case "link_document" -> linkDocument(ctx, input);
                 case "card_decide" -> cardDecide(ctx, input);
                 case "set_voice_alarm" -> setVoiceAlarm(ctx, input);
+                case "set_nudge" -> setNudge(ctx, input);
+                case "defer_blocks" -> deferBlocks(ctx, input);
                 default -> com.seobin.phonedrop.assistant.insight.InsightTools.NAMES.contains(name)
                         ? insightTools.dispatch(name, input, Permissions.fromUser(ctx.trigger))
                         : error("알 수 없는 도구입니다: " + name);
@@ -900,6 +902,115 @@ public class Tools {
         r.put("muted", true);
         r.put("scope", all ? "all" : "voice");
         r.put("until", time.iso(until));
+        return r;
+    }
+
+    /**
+     * 2026-11-20 블록별 알림 방식: off(알리지 않음)·once(시작 때 한 번)·normal(단계 올리기)·strong(풀스크린부터).
+     * 지금 떠 있는 개입도 바로 반영(off·once 면 끝낸다). 사용자가 정한 방식은 비서가 스스로 바꾸지 않는다.
+     */
+    private ObjectNode setNudge(Context ctx, JsonNode in) {
+        String mode = in.path("mode").asString("");
+        if (!Store.NUDGE_MODES.contains(mode)) {
+            return error("mode 는 off·once·normal·strong 중 하나입니다");
+        }
+        boolean user = Permissions.fromUser(ctx.trigger) || ctx.bypassPermissions;
+        List<Long> ids = new ArrayList<>();
+        if (in.hasNonNull("block_id")) {
+            ids.add(in.get("block_id").asLong());
+        }
+        for (JsonNode n : in.path("block_ids")) {
+            ids.add(n.asLong());
+        }
+        long seriesId = in.path("series_id").asLong(0);
+        if (seriesId > 0) {
+            if (db.update("UPDATE fixed_series SET nudge_mode = ? WHERE id = ?", mode, seriesId) == 0) {
+                return error("반복 일정#" + seriesId + "이 없습니다");
+            }
+            ids.addAll(db.jdbc().sql("""
+                            SELECT id FROM blocks WHERE series_id = ? AND end_at > ? AND status IN ('planned', 'nudging', 'started')""")
+                    .param(seriesId).param(AssistantDb.ts(clock.now())).query(Long.class).list());
+        }
+        if (ids.isEmpty()) {
+            return error("block_id·block_ids·series_id 중 하나가 필요합니다");
+        }
+        List<Long> done = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        for (long id : ids) {
+            Store.Block b = store.block(id).orElse(null);
+            if (b == null || b.travel()) {
+                skipped.add(id + "(없음·이동 블록)");
+                continue;
+            }
+            if (!user && "user".equals(store.nudgeSetBy(id))) {
+                skipped.add(id + "(사용자가 정한 방식)");
+                continue;
+            }
+            JsonNode before = changes.snapshot("block", id);
+            db.update("UPDATE blocks SET nudge_mode = ?, nudge_set_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    mode, user ? "user" : "assistant", id);
+            changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+            store.runningForBlock(id).ifPresent(interventions::applyNudgeChange);
+            if ("strong".equals(mode)) {
+                store.runningForBlock(id).ifPresent(i -> interventions.raiseTo(i, InterventionService.LEVEL));
+            }
+            done.add(id);
+            if (user) {
+                ctx.savedLines.add("저장됨: 알림 방식 · " + store.blockTitle(b) + " → " + switch (mode) {
+                    case "off" -> "알리지 않음";
+                    case "once" -> "시작 때 한 번";
+                    case "strong" -> "강하게";
+                    default -> "보통";
+                });
+            }
+        }
+        plan.bumpAndSync();
+        ObjectNode r = Json.object();
+        r.put("ok", !done.isEmpty());
+        r.set("updated", Json.MAPPER.valueToTree(done));
+        if (!skipped.isEmpty()) {
+            r.set("skipped", Json.MAPPER.valueToTree(skipped));
+        }
+        return r;
+    }
+
+    /** 2026-11-20: "오늘은 못 해·그만" → 블록들을 내일 이후 빈 시간으로(이미 있는 일정은 밀지 않음). 떠 있는 개입도 끝낸다. */
+    private ObjectNode deferBlocks(Context ctx, JsonNode in) {
+        List<Long> ids = new ArrayList<>();
+        for (JsonNode n : in.path("block_ids")) {
+            ids.add(n.asLong());
+        }
+        if (in.hasNonNull("block_id")) {
+            ids.add(in.get("block_id").asLong());
+        }
+        if (ids.isEmpty()) {
+            return error("block_ids 가 필요합니다");
+        }
+        String why = in.path("reason").asString("").isBlank() ? "오늘은 못 함" : in.get("reason").asString().trim();
+        tools.jackson.databind.node.ArrayNode moved = Json.array();
+        List<String> skipped = new ArrayList<>();
+        for (long id : ids) {
+            Store.Block b = store.block(id).orElse(null);
+            if (b == null || b.travel() || b.fixed() || !List.of("planned", "nudging", "missed").contains(b.status())) {
+                skipped.add(id + "(할 일 블록·planned·nudging·missed 만)");
+                continue;
+            }
+            JsonNode before = changes.snapshot("block", id);
+            java.util.Optional<Instant> to = interventions.deferToFreeSlot(b, why, "assistant");
+            changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
+            ObjectNode o = moved.addObject();
+            o.put("block_id", id);
+            o.put("moved_to", to.map(time::iso).orElse(null));
+            ctx.savedLines.add("저장됨: 미룸 · " + store.blockTitle(b) + " → "
+                    + to.map(time::dayText).orElse("빈 시간 없음(놓침)"));
+        }
+        plan.bumpAndSync();
+        ObjectNode r = Json.object();
+        r.put("ok", !moved.isEmpty());
+        r.set("moved", moved);
+        if (!skipped.isEmpty()) {
+            r.set("skipped", Json.MAPPER.valueToTree(skipped));
+        }
         return r;
     }
 

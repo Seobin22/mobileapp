@@ -88,6 +88,7 @@ public class PlanService {
             o.put("alarm_at", time.iso(b.travel() ? b.start() : b.interventionAt()));
             o.put("version", b.version()); // 앱이 local_fired 에 함께 보낸다(옛 알람 걸러내기)
             o.put("kind", b.kind());
+            o.put("nudge_mode", b.travel() ? "normal" : store.nudgeMode(b));
             o.put("task_title", store.blockTitle(b));
             o.put("screen_text", b.screenText());
             o.put("lead_minutes", b.leadMinutes());

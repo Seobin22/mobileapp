@@ -119,6 +119,8 @@ abstract class AssistantTestBase {
         settings.seedDefaults();
         // v4: 예전(v1~v3.6) 테스트는 L3 하나만 쓰는 개입 경로를 그대로 검증한다. 단계 올리기는 V4FlowTest 가 [1,3,4] 로 켠다.
         settings.put("intervention.levels", Json.parse("[3]"));
+        // 2026-11-20: 고정 일정 기본 once 는 NudgeTest 가 켠다(예전 테스트는 createBlock 이 고정 블록이라 반복 개입을 검증)
+        settings.put("nudge.fixed_default", Json.parse("\"normal\""));
         deviceAlive = true;
         clock.set(START);
         ObjectNode device = Json.object();

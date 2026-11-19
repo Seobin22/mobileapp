@@ -146,9 +146,14 @@ public class TimeUtil {
             Instant rangeStart = first.atStartOfDay(z).toInstant();
             Instant rangeEnd = last.plusDays(1).atStartOfDay(z).toInstant();
             List<com.seobin.phonedrop.assistant.agent.TimeWindows.Occ> occs = tw.occurrences(rangeStart, rangeEnd);
+            // 2026-11-20: [멈춤](10분만 조용히·채팅으로 '알람 그만') 동안은 적극 개입이 없는 것으로 본다(수면 시간이 다시 조용해진다)
+            Instant pausedUntil = tw.pausedUntil().orElse(null);
             for (com.seobin.phonedrop.assistant.agent.TimeWindows.Occ o : occs) {
                 if (!o.dnd()) {
-                    merged = subtract(merged, o.start(), o.end());
+                    Instant s0 = pausedUntil != null && pausedUntil.isAfter(o.start()) ? pausedUntil : o.start();
+                    if (s0.isBefore(o.end())) {
+                        merged = subtract(merged, s0, o.end());
+                    }
                 }
             }
             List<Window> withDnd = new ArrayList<>(merged);

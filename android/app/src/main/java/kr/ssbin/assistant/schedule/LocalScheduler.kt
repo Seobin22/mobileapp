@@ -31,6 +31,7 @@ object LocalScheduler {
         val now = System.currentTimeMillis()
         val scheduled = mutableSetOf<String>()
         for (item in InterventionController.upcoming(plan)) {
+            if (item.nudge_mode == "off") continue // 2026-11-20: 알리지 않기로 한 블록은 백업 알람도 없음
             // v3.1: 개입 시각(alarm_at = start − lead)에 맞춘다
             val at = OffsetDateTime.parse(item.alarm_at ?: item.start).toInstant().toEpochMilli() + plan.graceSeconds * 1000L
             val end = OffsetDateTime.parse(item.end).toInstant().toEpochMilli()

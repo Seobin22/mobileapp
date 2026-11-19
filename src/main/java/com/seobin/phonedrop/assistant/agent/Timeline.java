@@ -113,6 +113,10 @@ public class Timeline {
                     item.put("memo", fullMemo(b));
                 }
                 item.put("linked_fixed_block_id", b.linkedFixedBlockId());
+                if (!b.travel()) {
+                    item.put("nudge_mode", store.nudgeMode(b));
+                    item.put("nudge_set_by", store.nudgeSetBy(b.id()));
+                }
                 if (b.travel()) {
                     item.put("link_role", "travel");
                     item.put("travel_direction", b.travelDirection());

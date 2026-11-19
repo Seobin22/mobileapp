@@ -1249,5 +1249,62 @@
         "action"
       ]
     }
+  },
+  {
+    "name": "set_nudge",
+    "description": "블록의 알림 방식(개입 강도)을 정한다. off=알리지 않음(사용자가 말했을 때만), once=시작 때 한 번만(단계 올리기·잠금·반복 없음), normal=기본(알림→풀스크린→잠금으로 올림), strong=풀스크린부터. 지금 떠 있는 개입에도 바로 반영된다(off·once 면 끝남). 고정 일정의 기본은 once, 할 일은 normal. 자꾸 미루는 할 일은 strong, 가볍거나 사용자가 알아서 하는 일은 once. series_id 를 주면 반복 일정 전체(앞으로의 회차). 사용자가 정한 방식은 비서가 스스로 바꾸지 않는다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "integer"
+        },
+        "block_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "series_id": {
+          "type": "integer"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "once",
+            "normal",
+            "strong"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    }
+  },
+  {
+    "name": "defer_blocks",
+    "description": "사용자가 '오늘은 못 해', '오늘 그만', '내일 할게'라고 하면 그 할 일 블록들(지금 떠 있는 것·오늘 남은 것)을 내일 이후의 빈 시간으로 옮긴다. 이미 있는 일정은 밀지 않고, 떠 있는 개입도 끝낸다. 할 일 블록만(고정 일정은 cancel 이나 set_nudge). 사용자가 말했을 때만. 옮긴 뒤 바뀐 시각을 짧게 알린다.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "block_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "block_ids"
+      ]
+    }
   }
 ]

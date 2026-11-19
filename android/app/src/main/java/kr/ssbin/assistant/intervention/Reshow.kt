@@ -41,6 +41,7 @@ class ReshowReceiver : BroadcastReceiver() {
                 if (entity?.status == "talking") {
                     InterventionController.onTalkCheck(context, entity)
                 } else if (entity != null && InterventionState.visibleId == null &&
+                    !InterventionController.isOnce(context, entity.id) &&
                     InterventionController.stillActive(context, entity)
                 ) {
                     Notifier.showFullScreen(context, entity)

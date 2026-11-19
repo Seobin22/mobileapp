@@ -160,6 +160,16 @@ public class Permissions {
                 }
                 return Decision.execute();
             }
+            case "set_nudge" -> {
+                // 2026-11-20: 알림 끄기(off)는 사용자가 말했을 때만. 사용자가 정한 방식은 비서가 바꾸지 않는다(도구에서 거절).
+                return "off".equals(args.path("mode").asString("")) && !fromUser
+                        ? Decision.reject("알림을 아예 끄는 것(off)은 사용자가 말했을 때만 할 수 있습니다. 대신 once 를 쓰세요")
+                        : Decision.execute();
+            }
+            case "defer_blocks" -> {
+                return fromUser ? Decision.execute()
+                        : Decision.reject("하루 이상 미루기는 사용자가 오늘은 못 한다·그만이라고 말했을 때만 합니다");
+            }
             case "set_voice_alarm" -> {
                 // 2026-11-19: 음성·알람 끄기/켜기는 사용자가 직접 말했을 때만(비서가 스스로 끄거나 켜지 않는다)
                 return fromUser ? Decision.execute()

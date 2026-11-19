@@ -78,6 +78,8 @@ data class UpcomingItem(
     val goal_color: String = "",
     /** 블록 version(2026-11-06). 백업 알람이 울릴 때 서버에 같이 보내 옛 알람을 걸러낸다. */
     val version: Int? = null,
+    /** 2026-11-20 알림 방식: off | once | normal | strong */
+    val nudge_mode: String = "normal",
 )
 
 /** plan.sync 의 quiet_windows 항목. */

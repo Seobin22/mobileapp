@@ -1,6 +1,7 @@
 package kr.ssbin.assistant.intervention
 
 import android.content.Context
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -26,10 +27,44 @@ object InterventionController {
 
     private const val DEFAULT_RESHOW_MINUTES = 3
 
+    // ------------------------------------------------------------------ 2026-11-20 버튼은 서버를 기다리지 않고 바로 반영
+
+    private const val HANDLED_KEEP_MS = 6 * 60 * 60_000L
+
+    /** 사용자가 버튼으로 끝낸 개입을 기억한다(로컬 백업 개입이면 그 블록도 15분 동안). */
+    fun markHandled(context: Context, entity: InterventionEntity) {
+        val p = Prefs.get(context)
+        val now = System.currentTimeMillis()
+        val keep = p.handledInterventions.filter { now - (it.substringAfterLast('@').toLongOrNull() ?: 0) < HANDLED_KEEP_MS }
+        // 로컬 백업으로 띄운 개입("local:…")이면 서버 개입 id 를 모르니 그 블록을 15분 동안 막는다(서버 개입이면 그 id 만)
+        val add = if (entity.id.startsWith("local:")) listOf("${entity.id}@$now", "block:${entity.blockId}@$now") else listOf("${entity.id}@$now")
+        p.handledInterventions = (keep + add).takeLast(60)
+    }
+
+    private fun handled(context: Context, interventionId: String, blockId: Long): Boolean {
+        val now = System.currentTimeMillis()
+        return Prefs.get(context).handledInterventions.any { line ->
+            val key = line.substringBeforeLast('@')
+            val at = line.substringAfterLast('@').toLongOrNull() ?: 0
+            key == interventionId && now - at < HANDLED_KEEP_MS || key == "block:$blockId" && now - at < 15 * 60_000L
+        }
+    }
+
+    fun isOnce(context: Context, interventionId: String): Boolean = interventionId in Prefs.get(context).onceInterventions
+
     /** FCM intervention.level */
     fun onLevel(context: Context, data: Map<String, String>) {
         val id = data["intervention_id"] ?: return
         val blockId = data["block_id"]?.toLongOrNull() ?: return
+        // 이미 버튼으로 끝낸 개입: 서버가 아직 버튼을 못 받아 다시 보낸 것 → 띄우지 않고 버튼을 다시 보낸다
+        if (handled(context, id, blockId)) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { ActionQueue.flush(context.applicationContext) }
+            return
+        }
+        if (data["nudge_mode"] == "once") {
+            val p = Prefs.get(context)
+            p.onceInterventions = (p.onceInterventions + id).distinct().takeLast(50)
+        }
         val dao = AppDatabase.dao(context)
         val entity = InterventionEntity(
             id = id,
@@ -113,6 +148,7 @@ object InterventionController {
         if (dao.serverInterventionForBlock(blockId) != null) return
         val plan = dao.plan() ?: return
         val item = upcoming(plan).firstOrNull { it.block_id == blockId } ?: return
+        if (item.nudge_mode == "off") return // 알리지 않기로 한 블록
         val now = Instant.now()
         if (!now.isBefore(OffsetDateTime.parse(item.end).toInstant())) return
         // 2026-11-06: 옛 알람은 띄우지 않는다(블록이 바뀌었거나 알람 시각보다 2분 넘게 이르면).
@@ -140,7 +176,12 @@ object InterventionController {
         )
         dao.upsertIntervention(entity)
         Notifier.showFullScreen(context, entity)
-        Reshow.schedule(context, entity.id, entity.reshowMinutes)
+        if (item.nudge_mode == "once") {
+            val p = Prefs.get(context)
+            p.onceInterventions = (p.onceInterventions + entity.id).distinct().takeLast(50)
+        } else {
+            Reshow.schedule(context, entity.id, entity.reshowMinutes)
+        }
         ActionQueue.enqueue(context, "local_fired", entity.id, blockId, item.version)
     }
 
@@ -156,6 +197,7 @@ object InterventionController {
 
     /** [시작] / [이미 하고 있음](already = 알림 전에 시작함) */
     fun onUserStart(context: Context, entity: InterventionEntity, already: Boolean = false) {
+        markHandled(context, entity)
         kr.ssbin.assistant.lock.Lock.off(context)
         Notifier.cancel(context)
         Reshow.cancel(context)
@@ -165,6 +207,7 @@ object InterventionController {
 
     /** [이미 완료함]·[지금 할 수 없음]: 모든 효과를 풀고 서버에 알린다(서버가 완료·옮기기를 한다). */
     fun onUserAction(context: Context, entity: InterventionEntity, type: String) {
+        markHandled(context, entity)
         kr.ssbin.assistant.lock.Lock.off(context)
         Notifier.cancel(context)
         Reshow.cancel(context)
@@ -174,6 +217,7 @@ object InterventionController {
 
     /** [이미 완료함]: 알림 전에 끝냈다. 모든 효과를 풀고 서버에 알린다. */
     fun onUserDone(context: Context, entity: InterventionEntity) {
+        markHandled(context, entity)
         kr.ssbin.assistant.lock.Lock.off(context)
         Notifier.cancel(context)
         Reshow.cancel(context)
@@ -183,6 +227,9 @@ object InterventionController {
 
     /** v4 §2.4 [비상 해제]: 확인 없이 바로 모든 효과를 풀고 서버에 알린다. */
     fun onEmergency(context: Context, interventionId: String, blockId: Long) {
+        val p = Prefs.get(context)
+        val now = System.currentTimeMillis()
+        p.handledInterventions = (p.handledInterventions + "$interventionId@$now" + "block:$blockId@$now").takeLast(60)
         kr.ssbin.assistant.lock.Lock.off(context)
         Notifier.cancel(context)
         Reshow.cancel(context)
@@ -244,7 +291,7 @@ object InterventionController {
     fun onUserLeft(context: Context, entity: InterventionEntity) {
         ActionQueue.enqueue(context, "dismiss", entity.id, entity.blockId)
         val current = AppDatabase.dao(context).intervention(entity.id)
-        if (current?.status == "running") {
+        if (current?.status == "running" && !isOnce(context, entity.id)) { // 한 번만 알리는 개입은 다시 띄우지 않는다
             Reshow.schedule(context, entity.id, entity.reshowMinutes)
         }
     }

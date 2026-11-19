@@ -214,6 +214,33 @@ public class Store {
                 .query(Store::block).list();
     }
 
+    public static final List<String> NUDGE_MODES = List.of("off", "once", "normal", "strong");
+
+    /** 2026-11-20: 블록에 정해 둔 알림 방식(없으면 null). */
+    public String nudgeModeRaw(long blockId) {
+        return db.jdbc().sql("SELECT nudge_mode FROM blocks WHERE id = ?").param(blockId).query(String.class)
+                .optional().orElse(null);
+    }
+
+    public String nudgeSetBy(long blockId) {
+        return db.jdbc().sql("SELECT nudge_set_by FROM blocks WHERE id = ?").param(blockId).query(String.class)
+                .optional().orElse(null);
+    }
+
+    /** 실제로 쓰는 알림 방식: 정해 둔 값, 없으면 고정 일정 = 설정 nudge.fixed_default(기본 once), 그 밖 = normal. */
+    public String nudgeMode(Block b) {
+        String raw = nudgeModeRaw(b.id());
+        if (raw != null && NUDGE_MODES.contains(raw)) {
+            return raw;
+        }
+        if (b.fixed() && !b.travel()) {
+            String d = db.jdbc().sql("SELECT value FROM settings WHERE key = 'nudge.fixed_default'").query(String.class)
+                    .optional().orElse("\"once\"").replace("\"", "");
+            return NUDGE_MODES.contains(d) ? d : "once";
+        }
+        return "normal";
+    }
+
     /** 진행 중(started) 블록. */
     public List<Block> startedBlocks() {
         return db.jdbc().sql("SELECT * FROM blocks WHERE status = 'started' ORDER BY start_at, id")

@@ -46,7 +46,8 @@ public class AssistantDb {
             "assistant/db/V11__travel_adjust.sql",
             "assistant/db/V12__v3_5_facts_memory.sql",
             "assistant/db/V13__v3_6.sql",
-            "assistant/db/V14__v4.sql"
+            "assistant/db/V14__v4.sql",
+            "assistant/db/V15__nudge_mode.sql"
     );
 
     private static final Logger log = LoggerFactory.getLogger(AssistantDb.class);

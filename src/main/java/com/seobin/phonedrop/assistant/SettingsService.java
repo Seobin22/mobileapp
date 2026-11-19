@@ -94,6 +94,8 @@ public class SettingsService {
         d.put("active.paused_until", "null");
         // 2026-11-19: 사용자가 채팅으로 "음성 꺼줘" 하면 비서가 set_voice_alarm 으로 정한다(앱도 이 값을 따른다)
         d.put("voice.muted_until", "null");
+        // 2026-11-20: 고정 일정(수업 등)의 기본 알림 방식. once = 시작 때 한 번만(단계 올리기·잠금·반복 없음)
+        d.put("nudge.fixed_default", "\"once\"");
         // v3.6 음성 탭. voice.model 이 비면 Haiku 계열
         d.put("voice.model", "\"\"");
         d.put("voice.stt_mode", "\"batch\"");
@@ -219,6 +221,11 @@ public class SettingsService {
                 }
                 case "active.paused_until", "voice.muted_until" -> {
                     if (!value.isNull() && !value.isString()) {
+                        throw new IllegalArgumentException();
+                    }
+                }
+                case "nudge.fixed_default" -> {
+                    if (!List.of("off", "once", "normal", "strong").contains(value.asString())) {
                         throw new IllegalArgumentException();
                     }
                 }
