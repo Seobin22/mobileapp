@@ -23,7 +23,7 @@ class InterventionFlowTest extends AssistantTestBase {
         assertThat(level.get("block_id")).isEqualTo(String.valueOf(ids[1]));
         assertThat(level.get("level")).isEqualTo("3");
         assertThat(level.get("screen_text")).isEqualTo("지금 할 건 하나예요. 보고서 초안 파일 열기");
-        assertThat(level.get("expire_at")).isEqualTo("2026-11-02T11:15:00+09:00");
+        assertThat(level.get("expire_at")).isEqualTo("2026-11-02T11:00:00+09:00"); // 2026-11-21: 블록 끝에서 멈춤(예전 +15분)
         assertThat(onlyIntervention().status()).isEqualTo("running");
         assertThat(block(ids[1]).status()).isEqualTo("nudging");
     }
@@ -69,21 +69,22 @@ class InterventionFlowTest extends AssistantTestBase {
         runUntil("2026-11-02T10:07");
         assertThat(push.ofType("intervention.level")).hasSize(3); // 10:00, 10:03, 10:06
 
-        runUntil("2026-11-02T11:14");
+        runUntil("2026-11-02T10:59");
         assertThat(onlyIntervention().status()).isEqualTo("running");
-        assertThat(push.ofType("intervention.level")).hasSize(25); // 10:00 ~ 11:12
+        assertThat(push.ofType("intervention.level")).hasSize(20); // 10:00 ~ 10:57
 
-        runUntil("2026-11-02T11:15");
+        // 2026-11-21: 블록 끝 시각에 알람이 멈춘다(예전엔 끝 + 15분까지)
+        runUntil("2026-11-02T11:00");
         Store.Intervention i = onlyIntervention();
         assertThat(i.status()).isEqualTo("expired");
         assertThat(i.endReason()).isEqualTo("no_response");
-        assertThat(i.endedAt()).isEqualTo(at("2026-11-02T11:15"));
+        assertThat(i.endedAt()).isEqualTo(at("2026-11-02T11:00"));
         assertThat(block(ids[1]).status()).isEqualTo("missed");
         assertThat(push.ofType("intervention.end")).singleElement()
                 .satisfies(d -> assertThat(d.get("reason")).isEqualTo("expired"));
 
         runUntil("2026-11-02T11:20");
-        assertThat(push.ofType("intervention.level")).hasSize(25);
+        assertThat(push.ofType("intervention.level")).hasSize(20); // 끝난 뒤에는 더 오지 않는다
     }
 
     @Test
@@ -108,10 +109,13 @@ class InterventionFlowTest extends AssistantTestBase {
     void t4b_dndSetBeforeStartSuspendsAtWindowStart() {
         putSetting("dnd.windows", "[{\"days\":[1],\"start\":\"10:30\",\"end\":\"11:30\"}]");
         long[] ids = createBlock("보고서 초안", "2026-11-02T10:00", 30);
-        // 10:30 에 끝나는 블록이라 방해 금지와 겹치지 않는다. 유예(15분) 안에 방해 금지가 시작된다.
-        runUntil("2026-11-02T10:30");
-        assertThat(onlyIntervention().status()).isEqualTo("suspended");
+        // 2026-11-21: 유예가 없어져 블록 끝(10:30)에 알람이 끝난다. 방해 금지 시간에는 울리지 않는다.
+        runUntil("2026-11-02T10:31");
+        assertThat(onlyIntervention().status()).isIn("expired", "suspended");
         assertThat(block(ids[1]).status()).isEqualTo("missed");
+        int pushes = push.ofType("intervention.level").size();
+        runUntil("2026-11-02T11:00");
+        assertThat(push.ofType("intervention.level")).hasSize(pushes);
     }
 
     @Test
@@ -270,7 +274,7 @@ class InterventionFlowTest extends AssistantTestBase {
         Map<String, String> sync = push.ofType("plan.sync").getLast();
         assertThat(sync.get("plan_version")).isEqualTo(String.valueOf(before + 1));
         assertThat(sync.get("upcoming")).contains("\"block_id\":" + ids[1]);
-        assertThat(sync.get("expire_grace_minutes")).isEqualTo("15");
+        assertThat(sync.get("expire_grace_minutes")).isEqualTo("0");
 
         ObjectNode patch = Json.object();
         patch.put("duration_min", 30);

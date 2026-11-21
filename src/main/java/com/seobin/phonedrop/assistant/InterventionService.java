@@ -823,8 +823,9 @@ public class InterventionService {
                 .ifPresent(b -> store.setBlockStatus(b.id(), "missed"));
     }
 
+    /** 2026-11-21(사용자 요청): 블록 끝 시각이 지나면 알람은 그만(예전: 끝 + intervention.expire_grace_minutes 15분까지 독촉). */
     private Instant expireAt(Store.Block b) {
-        return b.end().plus(Duration.ofMinutes(settings.getInt("intervention.expire_grace_minutes")));
+        return b.end();
     }
 
     private void sendLevel(Store.Intervention i) {

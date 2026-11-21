@@ -137,7 +137,7 @@ public class PlanService {
         data.put("upcoming", Json.write(upcoming));
         data.put("local_backup_grace_seconds", String.valueOf(settings.getInt("local_backup.grace_seconds")));
         data.put("reshow_minutes", String.valueOf(settings.getInt("fullscreen.reshow_minutes")));
-        data.put("expire_grace_minutes", String.valueOf(settings.getInt("intervention.expire_grace_minutes")));
+        data.put("expire_grace_minutes", "0"); // 2026-11-21: 앱 백업 알람도 블록 끝에서 멈춘다
         data.put("talk_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));
         // 3.0.x 앱 호환(협상 시간 = 대화 시간)
         data.put("negotiation_timeout_minutes", String.valueOf(settings.getInt("talk.timeout_minutes")));

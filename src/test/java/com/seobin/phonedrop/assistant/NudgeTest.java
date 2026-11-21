@@ -79,9 +79,9 @@ class NudgeTest extends AssistantTestBase {
                         linked_fixed_block_id) VALUES ('planned', '귀가', ?, ?, 'planned', '', 'travel', 'home', ?)""",
                 at("2026-11-02T11:00"), at("2026-11-02T11:20"), cls);
         runUntil("2026-11-02T11:01");
+        // 자기 귀가 이동 때문에 멈춘 게 아니라(fixed_block), 블록 끝에서 무응답으로 끝난다
         assertThat(db.jdbc().sql("SELECT end_reason FROM interventions WHERE block_id = ?").param(cls)
-                .query(String.class).optional().orElse(null)).isNotEqualTo("fixed_block");
-        assertThat(block(cls).status()).isNotEqualTo("missed");
+                .query(String.class).optional().orElse(null)).isEqualTo("no_response");
     }
 
     @Test
