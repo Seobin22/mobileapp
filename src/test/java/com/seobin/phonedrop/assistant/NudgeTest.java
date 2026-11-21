@@ -144,4 +144,105 @@ class NudgeTest extends AssistantTestBase {
         runUntil("2026-11-02T10:10");
         assertThat(levelPushes(b)).isZero();
     }
+
+    long taskOf(long blockId) {
+        return block(blockId).taskId();
+    }
+
+    @Test
+    void taskDoneEndsItsRingingBlock() {
+        // 2026-11-21: 할 일을 완료로 바꾸면 미래 블록만 취소되고 울리던 블록은 계속 울렸다
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:40");
+        assertThat(block(b).status()).isEqualTo("nudging");
+        push.clear();
+        ObjectNode r = tool("user_message", "upsert_task", "{\"id\":" + taskOf(b) + ",\"status\":\"done\"}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+        assertThat(block(b).status()).isEqualTo("done");
+        assertThat(block(b).actualStart()).isEqualTo(at("2026-11-02T09:30"));
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+        runUntil("2026-11-02T10:10");
+        assertThat(levelPushes(b)).isZero();
+    }
+
+    @Test
+    void taskDoneByAssistantAloneCancelsRingingBlockInsteadOfDone() {
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:40");
+        tool("pulse", "upsert_task", "{\"id\":" + taskOf(b) + ",\"status\":\"done\"}");
+        assertThat(block(b).status()).isEqualTo("cancelled");
+        assertThat(store.runningForBlock(b)).isEmpty();
+    }
+
+    @Test
+    void rescheduleMovesRingingBlockAndStopsItsAlarm() {
+        // 2026-11-21: 다시 짜기가 '예정'만 다뤄서 울리던 블록이 남아 계속 울렸다
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:40");
+        assertThat(block(b).status()).isEqualTo("nudging");
+        push.clear();
+        ObjectNode r = tool("user_message", "set_schedule", "{\"from\":\"" + iso("2026-11-02T09:40") + "\",\"to\":\""
+                + iso("2026-11-02T12:00") + "\",\"blocks\":[{\"task_id\":" + taskOf(b) + ",\"start\":\""
+                + iso("2026-11-02T11:00") + "\",\"end\":\"" + iso("2026-11-02T11:30") + "\"}]}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+        assertThat(block(b).status()).isEqualTo("planned");
+        assertThat(block(b).start()).isEqualTo(at("2026-11-02T11:00"));
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+        runUntil("2026-11-02T10:50");
+        assertThat(levelPushes(b)).isZero();
+        runUntil("2026-11-02T11:01");
+        assertThat(levelPushes(b)).isPositive(); // 새 시각에 다시 알린다
+    }
+
+    @Test
+    void rescheduleWithoutTheRingingTaskCancelsIt() {
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        long other = tool("user_message", "upsert_task", "{\"title\":\"운동\",\"first_action\":\"신발\",\"est_minutes\":30}")
+                .get("id").asLong();
+        runUntil("2026-11-02T09:40");
+        tool("user_message", "set_schedule", "{\"from\":\"" + iso("2026-11-02T09:40") + "\",\"to\":\""
+                + iso("2026-11-02T12:00") + "\",\"blocks\":[{\"task_id\":" + other + ",\"start\":\""
+                + iso("2026-11-02T10:00") + "\",\"end\":\"" + iso("2026-11-02T10:30") + "\"}]}");
+        assertThat(block(b).status()).isEqualTo("cancelled");
+        assertThat(store.runningForBlock(b)).isEmpty();
+    }
+
+    @Test
+    void assistantAloneReschedulingLeavesRingingBlock() {
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:40");
+        tool("pulse", "set_schedule", "{\"from\":\"" + iso("2026-11-02T09:40") + "\",\"to\":\""
+                + iso("2026-11-02T12:00") + "\",\"blocks\":[]}");
+        assertThat(block(b).status()).isEqualTo("nudging");
+        assertThat(store.runningForBlock(b)).isPresent();
+    }
+
+    @Test
+    void lateStartCancelsOverlappingRingingBlock() {
+        // 2026-11-21: 늦게 시작해 밀린 시간에 이미 울리던 블록은 취소되지 않고 계속 울렸다
+        long a = planned("보고서", "2026-11-02T09:00", 20);
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:35");
+        assertThat(block(a).status()).isEqualTo("missed");
+        assertThat(block(b).status()).isEqualTo("nudging");
+        push.clear();
+        action("start", null, a, "late-a");
+        assertThat(block(a).status()).isEqualTo("started");
+        assertThat(block(b).status()).isEqualTo("cancelled");
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+    }
+
+    @Test
+    void closedBlockNeverKeepsRinging() {
+        // 안전망: 어느 경로로든 블록이 끝난 상태가 되면 다음 반복 때 알림이 끝나고 '놓침'으로 덮어쓰지 않는다
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:31");
+        db.update("UPDATE blocks SET status = 'done' WHERE id = ?", b);
+        runUntil("2026-11-02T10:10");
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(block(b).status()).isEqualTo("done");
+    }
 }

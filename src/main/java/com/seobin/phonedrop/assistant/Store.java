@@ -247,6 +247,15 @@ public class Store {
                 .query(Store::block).list();
     }
 
+    /** 2026-11-21: 아직 시작 안 한 블록(예정 + 알림 중). 도구마다 '예정'만 보던 기준을 하나로. */
+    public static final List<String> NOT_STARTED = List.of("planned", "nudging");
+    /** 끝난 블록. 이 상태인데 개입이 돌고 있으면 안 된다. */
+    public static final List<String> CLOSED = List.of("done", "partial", "missed", "cancelled");
+
+    public static boolean notStarted(Block b) {
+        return NOT_STARTED.contains(b.status());
+    }
+
     public void setBlockStatus(long blockId, String status) {
         db.update("UPDATE blocks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, blockId);
     }

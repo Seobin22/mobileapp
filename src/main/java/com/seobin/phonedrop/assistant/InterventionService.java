@@ -231,6 +231,9 @@ public class InterventionService {
         if (i == null || !i.running() || job.expectedVersion() == null || i.version() != job.expectedVersion()) {
             return false;
         }
+        if (closeIfBlockClosed(i)) {
+            return true;
+        }
         if (suspendForCommitment(i)) {
             return true;
         }
@@ -477,6 +480,9 @@ public class InterventionService {
         if (i == null || !i.running()) {
             return false;
         }
+        if (closeIfBlockClosed(i)) {
+            return true;
+        }
         if (suspendForCommitment(i)) {
             return true; // 그 사이 생긴 고정 일정·이동이 시작됐다
         }
@@ -493,6 +499,9 @@ public class InterventionService {
         Store.Intervention i = store.intervention(job.targetId()).orElse(null);
         if (i == null || !i.active()) {
             return false;
+        }
+        if (closeIfBlockClosed(i)) {
+            return true; // 이미 끝난 블록을 '놓침'으로 덮어쓰지 않는다
         }
         Store.Block tb = store.block(i.blockId()).orElse(null);
         if (tb != null && tb.travel()) {
@@ -694,6 +703,28 @@ public class InterventionService {
         data.put("block_id", String.valueOf(i.blockId()));
         data.put("reason", pushReason);
         push.pushAll(data);
+    }
+
+    /**
+     * 2026-11-21 공통: 울리던(알림 중) 블록이 다른 상태로 바뀔 때 그 개입과 남은 예약을 함께 정리한다.
+     * 어느 도구로 블록·할 일의 상태를 바꾸든 이 한 곳을 거치게 한다.
+     */
+    public void closeRinging(long blockId, String endStatus, String endReason) {
+        store.runningForBlock(blockId).ifPresent(i -> {
+            end(i, endStatus, endReason, endStatus);
+            store.log(i.id(), i.blockId(), i.level(), clock.now(), endReason);
+        });
+        cancelBlockJobs(blockId);
+    }
+
+    /** 안전망: 개입이 도는데 블록은 이미 끝난 상태(완료·부분·놓침·취소)면, 어느 경로로 바뀌었든 개입만 끝낸다. */
+    private boolean closeIfBlockClosed(Store.Intervention i) {
+        Store.Block b = store.block(i.blockId()).orElse(null);
+        if (b == null || !Store.CLOSED.contains(b.status())) {
+            return false;
+        }
+        end(i, "cancelled", "block_closed", "cancelled");
+        return true;
     }
 
     /** 블록이 취소·이동될 때. 진행 중 개입을 cancelled 로 끝낸다. */
@@ -1035,9 +1066,10 @@ public class InterventionService {
             Instant end = now.plus(Duration.ofMinutes(Math.max(5, minutes)));
             List<Long> displaced = new java.util.ArrayList<>();
             for (Store.Block other : store.activeBlocksOverlapping(now, end)) {
-                if (other.id() != b.id() && "planned".equals(other.status())) {
+                if (other.id() != b.id() && Store.notStarted(other)) {
+                    // 2026-11-21: 이미 울리고 있던 블록도 예정 블록처럼 정리한다(예전에는 계속 울렸다)
+                    closeRinging(other.id(), "cancelled", "late_start_overlap");
                     store.setBlockStatus(other.id(), "cancelled");
-                    cancelBlockJobs(other.id());
                     if (other.travel()) {
                         continue; // 이동 블록은 기존대로(시스템이 다시 계산)
                     }

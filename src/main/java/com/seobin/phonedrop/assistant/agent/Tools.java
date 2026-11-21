@@ -582,9 +582,19 @@ public class Tools {
             db.update("UPDATE blocks SET title = ? WHERE task_id = ? AND kind = 'planned'", set.get("title"), id);
         }
         List<Long> cancelled = new ArrayList<>();
+        List<Long> finished = new ArrayList<>();
         if (done) {
+            // 2026-11-21: 할 일이 끝나면 딸린 블록도 따라간다. 지금 울리는(또는 지금 시간인) 블록은
+            // 사용자가 말했으면 완료, 비서 혼자면 취소. 예전에는 미래 예정 블록만 취소해 울리던 알림이 계속됐다.
+            Instant now = clock.now();
+            boolean user = Permissions.fromUser(ctx.trigger) || ctx.bypassPermissions;
             for (Store.Block b : store.blocksOfTask(id)) {
-                if ("planned".equals(b.status()) && b.start().isAfter(clock.now())) {
+                boolean current = "nudging".equals(b.status())
+                        || ("planned".equals(b.status()) && !now.isBefore(b.start()) && now.isBefore(b.end()));
+                if (current && user) {
+                    finishNotStarted(ctx, b, "할 일 완료");
+                    finished.add(b.id());
+                } else if ("nudging".equals(b.status()) || ("planned".equals(b.status()) && b.start().isAfter(now))) {
                     cancelBlock(ctx, b);
                     cancelled.add(b.id());
                 }
@@ -603,12 +613,15 @@ public class Tools {
         if (set.containsKey("deadline") && !java.util.Objects.equals(set.get("deadline"), t.deadline())) {
             savedDeadline(ctx, set.containsKey("title") ? (String) set.get("title") : t.title(), (Instant) set.get("deadline"));
         }
-        if (!cancelled.isEmpty()) {
+        if (!cancelled.isEmpty() || !finished.isEmpty()) {
             plan.bumpAndSync();
         }
         ObjectNode r = okWithId(id);
         if (!cancelled.isEmpty()) {
             r.set("cancelled_blocks", Json.MAPPER.valueToTree(cancelled));
+        }
+        if (!finished.isEmpty()) {
+            r.set("finished_blocks", Json.MAPPER.valueToTree(finished));
         }
         return r;
     }
@@ -766,10 +779,30 @@ public class Tools {
         cancelBlock(ctx, b, null);
     }
 
+    /** 2026-11-21: 시작 안 한(울리던) 블록을 완료로 끝낸다. 채팅 완료와 같은 기록(실제 시작 = 예정 시작, 끝 = 지금). */
+    private void finishNotStarted(Context ctx, Store.Block b, String why) {
+        JsonNode before = changes.snapshot("block", b.id());
+        boolean ringing = store.runningForBlock(b.id()).isPresent();
+        interventions.closeRinging(b.id(), "acked", "done_by_chat");
+        db.update("""
+                        UPDATE blocks SET status = 'done', actual_start = COALESCE(actual_start, LEAST(start_at, ?)),
+                        actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                AssistantDb.ts(clock.now()), clock.now(), b.id());
+        changes.record(ctx.turnId, "block", b.id(), before, changes.snapshot("block", b.id()));
+        logs.add(b.id(), "ended", "assistant", "완료(" + why + ")");
+        coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
+        blockFacts.refresh(b.id());
+        ctx.savedLines.add("저장됨: " + (ringing ? "울리던 " : "") + "'" + store.blockTitle(b) + "' → 완료"
+                + (ringing ? ", 알림 끔" : ""));
+    }
+
     /** data 가 있으면 기록에 남긴다(다시 계획: Replans.replannedData). */
     private void cancelBlock(Context ctx, Store.Block b, JsonNode data) {
         coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
         JsonNode before = changes.snapshot("block", b.id());
+        if (store.runningForBlock(b.id()).isPresent() && Permissions.fromUser(ctx.trigger)) {
+            ctx.savedLines.add("저장됨: 울리던 '" + store.blockTitle(b) + "' → 취소, 알림 끔");
+        }
         interventions.cancelRunningForBlock(b.id());
         store.setBlockStatus(b.id(), "cancelled");
         interventions.cancelBlockJobs(b.id());
@@ -1047,9 +1080,12 @@ public class Tools {
         }
         // v3.1 §3.3: 계획 블록만 다룬다. 고정 블록은 교체 대상이 아니며 유지되는 블록으로 취급한다.
         List<Store.Block> active = store.activeBlocks();
+        // 2026-11-21: 사용자가 다시 짜 달라고 했으면 그 시간대에 울리고 있는 블록도 다시 짤 대상이다(예전에는 남아서 계속 울렸다).
+        boolean userTurn = Permissions.fromUser(ctx.trigger) || ctx.bypassPermissions;
         List<Store.Block> replaced = active.stream()
-                .filter(b -> !b.fixed() && !b.travel() && "planned".equals(b.status()) && !b.start().isBefore(from)
+                .filter(b -> !b.fixed() && !b.travel() && (("planned".equals(b.status()) && !b.start().isBefore(from)
                         && b.start().isBefore(to))
+                        || (userTurn && "nudging".equals(b.status()) && b.end().isAfter(from) && b.start().isBefore(to))))
                 .toList();
         List<Store.Block> keep = active.stream().filter(b -> !replaced.contains(b)).toList();
 
@@ -1106,8 +1142,13 @@ public class Tools {
             }
             coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
             JsonNode before = changes.snapshot("block", b.id());
+            if ("nudging".equals(b.status())) {
+                // 울리던 블록을 새 시각으로: 지금 알림은 끄고(moved) 새 시각에 다시 알린다(move_block 과 같게)
+                interventions.snoozeForMove(b.id(), Duration.between(b.start(), p.start()).toMinutes());
+                ctx.savedLines.add("저장됨: 울리던 '" + store.blockTitle(b) + "' → " + time.hm(p.start()) + "로 옮김, 알림 끔");
+            }
             db.update("""
-                            UPDATE blocks SET start_at = ?, end_at = ?, screen_text = ?, version = version + 1,
+                            UPDATE blocks SET start_at = ?, end_at = ?, screen_text = ?, status = 'planned', version = version + 1,
                             updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
                     p.start(), p.end(), screen, b.id());
             interventions.scheduleBlockJobs(store.block(b.id()).orElseThrow());
@@ -1566,10 +1607,7 @@ public class Tools {
         String outcome = enumValue(in, "outcome", "done", "partial");
         JsonNode before = changes.snapshot("block", id);
         if (notStarted) {
-            store.runningForBlock(id).ifPresent(i -> {
-                interventions.end(i, "acked", "done_by_chat", "acked");
-                store.log(i.id(), i.blockId(), i.level(), clock.now(), "done_by_chat");
-            });
+            interventions.closeRinging(id, "acked", "done_by_chat");
             db.update("UPDATE blocks SET actual_start = COALESCE(actual_start, LEAST(start_at, ?)) WHERE id = ?",
                     AssistantDb.ts(clock.now()), id);
         }
