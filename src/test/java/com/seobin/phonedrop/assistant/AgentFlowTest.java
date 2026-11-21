@@ -365,4 +365,21 @@ class AgentFlowTest extends AssistantTestBase {
         runAgent();
         assertThat(assistantMessages()).anySatisfy(m -> assertThat(m).contains("처리 안 됨: 완료 처리"));
     }
+
+    @Test
+    void claimWithoutAnyChangeIsFlagged() {
+        // 2026-11-21: 도구를 부르지도 않고 "껐어요"라고 답하던 문제
+        llm.then(tools(call("send_message", "{\"text\":\"네, 알림 껐어요\",\"kind\":\"reply\"}")));
+        say("알림 꺼줘");
+        runAgent();
+        assertThat(assistantMessages()).anySatisfy(m -> assertThat(m).contains("실제로 바뀐 것은 없어요"));
+    }
+
+    @Test
+    void plainAnswerIsNotFlagged() {
+        llm.then(tools(call("send_message", "{\"text\":\"오늘은 세 개 남았어요\",\"kind\":\"reply\"}")));
+        say("오늘 뭐 남았어?");
+        runAgent();
+        assertThat(assistantMessages()).noneSatisfy(m -> assertThat(m).contains("실제로 바뀐 것은 없어요"));
+    }
 }

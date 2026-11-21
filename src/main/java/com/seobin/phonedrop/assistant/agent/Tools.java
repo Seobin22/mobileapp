@@ -62,6 +62,10 @@ public class Tools {
         public Long voiceUndoCard;
         /** 2026-11-21: 이 turn 에서 실패한 변경 도구(이름 → 이유). 같은 도구가 뒤에 성공하면 지운다. 사용자에게 그대로 보인다. */
         public final java.util.Map<String, String> failedTools = new java.util.LinkedHashMap<>();
+        /** 2026-11-21: 이 turn 에서 실제로 무언가 바꾼 도구가 성공했는가(코드가 센다). */
+        public boolean changedSomething;
+        /** 이 turn 에서 사용자에게 보낸 답 글(했다고 말했는지 확인용). */
+        public final StringBuilder replyText = new StringBuilder();
 
         public Context(long turnId, String trigger, boolean bypassPermissions) {
             this.turnId = turnId;
@@ -1271,6 +1275,7 @@ public class Tools {
             silent = true; // 음성 탭이 소리로 말한다. 알림은 띄우지 않는다.
         }
         long id = chat.sendAssistant(text, kind, importance, null, null, silent, interventionId, action);
+        ctx.replyText.append(text).append('\n');
         if (ctx.voiceSessionId != null) {
             db.update("UPDATE messages SET channel = 'voice' WHERE id = ?", id);
         }

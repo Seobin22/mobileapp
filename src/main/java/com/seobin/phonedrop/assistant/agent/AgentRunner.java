@@ -333,6 +333,7 @@ public class AgentRunner {
         boolean replyExpected = fromUser || "snooze_request".equals(trigger);
         boolean voice = ctx.voiceSessionId != null;
         if (replyExpected && !ctx.sentReply && !text.isBlank()) {
+            ctx.replyText.append(text.trim()).append('\n');
             long id = chat.sendAssistant(text.trim(), "reply", "normal", null, null, voice, ctx.interventionId);
             if (voice) {
                 db.update("UPDATE messages SET channel = 'voice' WHERE id = ?", id);
@@ -363,6 +364,10 @@ public class AgentRunner {
         // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
         if (fromUser) {
             ctx.failedTools.forEach((name, why) -> ctx.savedLines.add("처리 안 됨: " + toolLabel(name) + " — " + why));
+            // 2026-11-21: 아무것도 바꾸지 않았는데 "처리했어·껐어·옮겼어"라고 답했으면 그대로 알린다(말로만 처리한 척 막기)
+            if (!ctx.changedSomething && ctx.failedTools.isEmpty() && claimsAction(ctx.replyText.toString())) {
+                ctx.savedLines.add("확인: 이번 답에서 실제로 바뀐 것은 없어요(일정·알림 그대로)");
+            }
         }
         if (fromUser && !ctx.savedLines.isEmpty()) {
             long id = chat.sendAssistant(String.join("\n", ctx.savedLines), "system", "normal", null, null, true,
@@ -409,6 +414,7 @@ public class AgentRunner {
                     ctx.failedTools.put(call.name(), result.path("error").asString("실패"));
                 } else {
                     ctx.failedTools.remove(call.name());
+                    ctx.changedSomething = true;
                 }
             }
             return new LlmClient.ToolResult(call.id(), Json.write(result), isError);
@@ -421,6 +427,14 @@ public class AgentRunner {
     /** 실패해도 사용자에게 따로 알릴 필요가 없는 도구(조회·기억·말하기). */
     static final java.util.Set<String> QUIET_FAIL_TOOLS = java.util.Set.of("send_message", "ask_user", "read_document",
             "memory_search", "memory_save", "memory_forget", "save_memory", "profile_edit", "add_block_log", "card_decide");
+
+    /** "처리했어요·껐어요·옮겨 뒀어요"처럼 무언가 바꿨다고 말하는 답인가(과거·완료 표현만). */
+    static final java.util.regex.Pattern CLAIM = java.util.regex.Pattern.compile(
+            "(처리했|처리해 ?뒀|완료(했|로 (바꿨|처리))|껐|꺼 ?뒀|옮겼|옮겨 ?뒀|넣었|넣어 ?뒀|바꿨|바꿔 ?뒀|취소했|지웠|잡았|잡아 ?뒀|미뤘|미뤄 ?뒀|등록했|저장했|끝냈|멈췄|해제했)");
+
+    static boolean claimsAction(String reply) {
+        return reply != null && CLAIM.matcher(reply).find();
+    }
 
     static String toolLabel(String name) {
         return switch (name) {
