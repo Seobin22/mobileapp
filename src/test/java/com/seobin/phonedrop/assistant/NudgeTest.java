@@ -125,4 +125,23 @@ class NudgeTest extends AssistantTestBase {
         assertThat(time.isQuiet(at("2026-11-03T01:00"))).isTrue(); // 멈춘 동안은 다시 조용한 시간
         assertThat(time.isQuiet(at("2026-11-03T02:30"))).isFalse();
     }
+
+    @Test
+    void chatDoneEndsRingingBlockAndItsAlarm() {
+        // 2026-11-21 운영: 알림이 울리는 중 채팅으로 "완료했어" → end_block 이 started 만 받아 실패, 알림·잠금이 계속됐다
+        long b = planned("장부 정리", "2026-11-02T09:30", 30);
+        runUntil("2026-11-02T09:45");
+        assertThat(store.runningForBlock(b)).isPresent();
+        assertThat(block(b).status()).isEqualTo("nudging");
+        // 비서 혼자서는 시작 안 한 블록을 완료로 못 바꾼다
+        assertThat(tool("pulse", "end_block", "{\"block_id\":" + b + ",\"outcome\":\"done\"}").path("ok").asBoolean(true)).isFalse();
+        push.clear();
+        ObjectNode r = tool("user_message", "end_block", "{\"block_id\":" + b + ",\"outcome\":\"done\"}");
+        assertThat(r.path("ok").asBoolean()).as(r.toString()).isTrue();
+        assertThat(block(b).status()).isEqualTo("done");
+        assertThat(store.runningForBlock(b)).isEmpty();
+        assertThat(push.ofType("intervention.end")).isNotEmpty();
+        runUntil("2026-11-02T10:10");
+        assertThat(levelPushes(b)).isZero();
+    }
 }

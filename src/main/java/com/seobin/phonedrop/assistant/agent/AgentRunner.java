@@ -361,6 +361,9 @@ public class AgentRunner {
             memoryJobs.onUserTurn(); // §7.3 사실 뽑기 주기
         }
         // v3.2 P1.2: 사용자 말로 시작된 turn 에서 마감·고정 일정이 바뀌었으면 코드가 '저장됨' 한 줄을 덧붙인다.
+        if (fromUser) {
+            ctx.failedTools.forEach((name, why) -> ctx.savedLines.add("처리 안 됨: " + toolLabel(name) + " — " + why));
+        }
         if (fromUser && !ctx.savedLines.isEmpty()) {
             long id = chat.sendAssistant(String.join("\n", ctx.savedLines), "system", "normal", null, null, true,
                     ctx.interventionId, ctx.voiceUndoCard != null ? "undo_card:" + ctx.voiceUndoCard : null);
@@ -400,11 +403,40 @@ public class AgentRunner {
         try {
             ObjectNode result = tx.run(() -> tools.dispatch(ctx, call.name(), call.input()));
             boolean isError = !result.path("ok").asBoolean(false);
+            // 2026-11-21: 일정을 바꾸는 도구가 실패하면 기억해 두고 사용자에게 그대로 보인다(비서가 실패를 숨기고 "처리했다"고 하지 못하게)
+            if (!call.name().startsWith("get_") && !QUIET_FAIL_TOOLS.contains(call.name())) {
+                if (isError) {
+                    ctx.failedTools.put(call.name(), result.path("error").asString("실패"));
+                } else {
+                    ctx.failedTools.remove(call.name());
+                }
+            }
             return new LlmClient.ToolResult(call.id(), Json.write(result), isError);
         } catch (RuntimeException e) {
             log.error("tool {} failed in turn {}", call.name(), ctx.turnId, e);
             return new LlmClient.ToolResult(call.id(), Json.write(Tools.error("내부 오류")), true);
         }
+    }
+
+    /** 실패해도 사용자에게 따로 알릴 필요가 없는 도구(조회·기억·말하기). */
+    static final java.util.Set<String> QUIET_FAIL_TOOLS = java.util.Set.of("send_message", "ask_user", "read_document",
+            "memory_search", "memory_save", "memory_forget", "save_memory", "profile_edit", "add_block_log", "card_decide");
+
+    static String toolLabel(String name) {
+        return switch (name) {
+            case "end_block" -> "완료 처리";
+            case "move_block" -> "블록 옮기기";
+            case "set_schedule" -> "일정 잡기";
+            case "cancel" -> "취소";
+            case "start_now" -> "지금 시작";
+            case "extend_block" -> "블록 늘리기";
+            case "upsert_task" -> "할 일 저장";
+            case "upsert_fixed_block", "upsert_fixed_series" -> "고정 일정 저장";
+            case "set_nudge" -> "알림 방식";
+            case "defer_blocks" -> "미루기";
+            case "set_voice_alarm" -> "음성·알람";
+            default -> name;
+        };
     }
 
     private boolean otherTurnsWaiting() {

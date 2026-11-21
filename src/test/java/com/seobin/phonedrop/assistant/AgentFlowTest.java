@@ -355,4 +355,14 @@ class AgentFlowTest extends AssistantTestBase {
         tx.exec(() -> interventions.scheduleBlockJobs(store.block(id).orElseThrow()));
         return id;
     }
+
+    @Test
+    void failedChangeIsShownEvenIfAssistantClaimsSuccess() {
+        // 2026-11-21: 비서가 실패를 숨기고 "처리했어"라고 하지 못하게 실패를 채팅에 그대로 보인다
+        llm.then(tools(call("end_block", "{\"block_id\":999999,\"outcome\":\"done\"}"),
+                call("send_message", "{\"text\":\"완료 처리했어요\",\"kind\":\"reply\"}")));
+        say("완료했어");
+        runAgent();
+        assertThat(assistantMessages()).anySatisfy(m -> assertThat(m).contains("처리 안 됨: 완료 처리"));
+    }
 }

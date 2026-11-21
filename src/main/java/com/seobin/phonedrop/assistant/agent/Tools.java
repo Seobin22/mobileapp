@@ -60,6 +60,8 @@ public class Tools {
         public Long userMessageId;
         /** 음성으로 승인한 카드(저장됨 줄에 [되돌리기]). */
         public Long voiceUndoCard;
+        /** 2026-11-21: 이 turn 에서 실패한 변경 도구(이름 → 이유). 같은 도구가 뒤에 성공하면 지운다. 사용자에게 그대로 보인다. */
+        public final java.util.Map<String, String> failedTools = new java.util.LinkedHashMap<>();
 
         public Context(long turnId, String trigger, boolean bypassPermissions) {
             this.turnId = turnId;
@@ -1545,11 +1547,27 @@ public class Tools {
             ctx.savedLines.add("저장됨: 고정 · " + store.blockTitle(b) + " 지금 끝냄");
             return okWithId(id);
         }
-        if (!"started".equals(b.status())) {
-            return error("블록#" + id + "은 " + b.status() + " 상태라 끝낼 수 없습니다(started 만)");
+        boolean notStarted = !"started".equals(b.status());
+        if (notStarted) {
+            // 2026-11-21: 알림이 울리는 중(시작 전)인 블록도 사용자가 "했어·끝났어"라고 하면 끝낸다.
+            // 예전에는 started 만 받아서 실패했고, 비서는 실패를 숨긴 채 "처리했다"고 답해 알림·잠금이 계속됐다.
+            if (!List.of("planned", "nudging", "missed").contains(b.status())) {
+                return error("블록#" + id + "은 " + b.status() + " 상태라 끝낼 수 없습니다");
+            }
+            if (!Permissions.fromUser(ctx.trigger) && !ctx.bypassPermissions) {
+                return error("시작하지 않은 블록은 사용자가 했다고 말했을 때만 완료로 바꿀 수 있습니다");
+            }
         }
         String outcome = enumValue(in, "outcome", "done", "partial");
         JsonNode before = changes.snapshot("block", id);
+        if (notStarted) {
+            store.runningForBlock(id).ifPresent(i -> {
+                interventions.end(i, "acked", "done_by_chat", "acked");
+                store.log(i.id(), i.blockId(), i.level(), clock.now(), "done_by_chat");
+            });
+            db.update("UPDATE blocks SET actual_start = COALESCE(actual_start, LEAST(start_at, ?)) WHERE id = ?",
+                    AssistantDb.ts(clock.now()), id);
+        }
         db.update("UPDATE blocks SET status = ?, actual_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 outcome, clock.now(), id);
         interventions.cancelBlockJobs(id);
@@ -1559,6 +1577,9 @@ public class Tools {
         changes.record(ctx.turnId, "block", id, before, changes.snapshot("block", id));
         logs.add(id, "ended", "assistant", "done".equals(outcome) ? "완료"
                 : "부분 완료" + (in.hasNonNull("remaining_minutes") ? "(남은 " + in.get("remaining_minutes").asInt() + "분)" : ""));
+        if (Permissions.fromUser(ctx.trigger)) {
+            ctx.savedLines.add("저장됨: " + ("done".equals(outcome) ? "완료" : "부분 완료") + " · " + store.blockTitle(b));
+        }
         coverage.goalOf(b).ifPresent(ctx.touchedGoals::add);
         // v3.5: 사용자가 채팅에서 말한 집중·이유(비서가 뽑은 값 = text)
         if (Permissions.fromUser(ctx.trigger)) {
