@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 완료 처리 후 계속 오는 알림 조사(읽기 전용, 제목·내용 없음): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
+# 채팅 완료 처리 실패 조사(읽기 전용, 제목·내용 없음): DB 파일 복사본에서 블록 id·시각·상태만 읽는다(제목·메시지 내용은 출력하지 않음).
 # 운영 DB·서비스는 건드리지 않는다. 결과는 공개 API 로 읽을 수 있도록 ::notice 주석으로 출력한다(메시지 내용은 출력하지 않음).
 set -euo pipefail
 
@@ -41,9 +41,10 @@ else
 fi
 
 cat > "$WORK/queries.sql" <<'SQL'
-SELECT 'S' AS q, key, value FROM settings WHERE key IN ('life.wake','life.sleep','fullscreen.reshow_minutes','active.alarm_repeat_min','intervention.levels','intervention.start_level');
-SELECT 'SER' AS q, id, kind, interrupt_level, lead_minutes FROM fixed_series WHERE id = 9;
-SELECT 'W' AS q, id, kind, days, start_time, end_type, end_time, enabled FROM time_windows;
+SELECT 'NOW' AS q, FORMATDATETIME(CURRENT_TIMESTAMP,'MM-dd HH:mm','en','Asia/Seoul') AS now_kst FROM (VALUES 1);
+SELECT 'T' AS q, t.id, t.trigger, FORMATDATETIME(t.started_at,'MM-dd HH:mm:ss','en','Asia/Seoul') AS st, t.tool_names, (SELECT COUNT(*) FROM changes c WHERE c.turn_id = t.id AND c.entity = 'block') AS block_changes FROM turns t WHERE t.started_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) AND t.trigger IN ('user_message','intervention_talk','voice') ORDER BY t.id;
+SELECT 'I' AS q, i.id, i.block_id, i.status, i.level, i.end_reason, FORMATDATETIME(i.started_at,'MM-dd HH:mm','en','Asia/Seoul') AS st, FORMATDATETIME(i.ended_at,'HH:mm','en','Asia/Seoul') AS en FROM interventions i WHERE i.started_at >= DATEADD('HOUR', -30, CURRENT_TIMESTAMP) ORDER BY i.id;
+SELECT 'D' AS q, app_version, FORMATDATETIME(last_heartbeat,'MM-dd HH:mm','en','Asia/Seoul') AS hb FROM devices ORDER BY last_heartbeat DESC LIMIT 1;
 SQL
 
 while IFS= read -r q; do
